@@ -430,6 +430,17 @@ impl Store {
         Ok(())
     }
 
+    /// Stored articles for a feed, and how many of them are starred.
+    pub fn feed_article_counts(&self, id: i64) -> Result<(i64, i64)> {
+        Ok(self.conn.query_row(
+            "SELECT count(*), COALESCE(SUM(s.starred), 0)
+             FROM articles a JOIN article_state s ON s.article_id = a.id
+             WHERE a.feed_id = ?1",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?)
+    }
+
     pub fn delete_feed(&self, id: i64) -> Result<()> {
         self.conn.execute("DELETE FROM feeds WHERE id = ?1", [id])?;
         Ok(())

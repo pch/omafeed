@@ -85,6 +85,22 @@ Search looks through the current view, including nested folders. Summary-only fe
 
 Not yet supported: full-article extraction, podcast playback, sync between devices, and notifications.
 
+## Scripting and LLMs
+
+Every command below prints one line of JSON and exits non-zero with a message on stderr when something is wrong. Article IDs come from `articles`; feed and folder IDs come from `feeds`.
+
+```sh
+omafeed feeds                                   # folders, feeds, unread counts, feed errors
+omafeed articles --scope unread --limit 20      # unread, today, starred, all, feed:ID, folder:ID
+omafeed articles --scope all --search "rust"    # full-text search; --unread, --offset also work
+omafeed article 42                              # one article as plain text (--html for sanitized HTML)
+omafeed read 42 43                              # also: unread, star, unstar; a bad ID changes nothing
+omafeed subscribe https://example.org           # finds the feed; then run `omafeed refresh`
+omafeed unsubscribe 3 --yes                     # deletes the feed and its articles for good; without --yes it only explains
+```
+
+Feed content is written by strangers. A tool that hands article text to a model should treat it as untrusted data, never as instructions.
+
 ## Keyboard
 
 | Key | Action |
@@ -133,7 +149,7 @@ The native desktop smoke test (run headlessly in CI) also verifies WebKit render
 cargo test -p omafeed desktop_smoke -- --ignored --test-threads=1
 ```
 
-Tests use temporary SQLite databases and a localhost HTTP server; they do not depend on live blogs. Use `OMAFEED_HOME=/tmp/omafeed-test` to isolate data, settings, and cache during manual testing. CLI commands: `import FILE`, `export FILE`, `refresh`, `status`, `discover URL`, `--help`, `--version`.
+Tests use temporary SQLite databases and a localhost HTTP server; they do not depend on live blogs. Use `OMAFEED_HOME=/tmp/omafeed-test` to isolate data, settings, and cache during manual testing. CLI commands: `import FILE`, `export FILE`, `refresh`, `status`, `discover URL`, the JSON commands above, `--help`, `--version`.
 
 The workspace contains `omafeed-core` (database worker, migrations, OPML, fetch scheduling, sanitization) and `omafeed-app` (GTK interface and CLI). Database work runs on a dedicated worker; HTTP work runs on Tokio. The GTK thread receives results asynchronously.
 
