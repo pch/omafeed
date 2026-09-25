@@ -62,7 +62,7 @@ pub fn plain(html: &str) -> String {
 
 const STYLE: &str = "
 :root { color-scheme: {scheme} }
-body { margin: 0; background: {bg}; color: {fg}; font: {font}px/1.75 Georgia, serif; overflow-wrap: anywhere }
+body { margin: 0; background: {bg}; color: {fg}; font: {font}px/1.65 system-ui, sans-serif; overflow-wrap: anywhere }
 main { max-width: 720px; margin: auto; padding: 40px 40px 100px }
 h1 { font: 600 32px/1.2 system-ui; margin: 16px 0 }
 h2, h3, h4 { line-height: 1.35 }
