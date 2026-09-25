@@ -79,9 +79,11 @@ omafeed
 
 OPML contains subscriptions, not historical articles or read/star state. The first refresh downloads the items currently published by each feed, initially unread. Use the checkmark above the article list to mark the current view read; Ctrl+Z undoes that action.
 
-Click **Manage library** (Ctrl+L) to create folders and subscribe using a website or feed URL. Omafeed discovers RSS, Atom, and JSON feeds, lets you choose when several are available, and uses the feed title when the optional name is blank. Invalid pages are never saved as subscriptions. Select a feed or folder and choose **Edit / Move** to change its name or destination folder. Feed URLs can also be corrected without losing saved articles. Folder moves cannot create cycles. Removing a feed deletes its articles after confirmation; removing a folder keeps them.
+Click **Manage library** (Ctrl+L) to create folders and subscribe using a website or feed URL. Omafeed finds the site's RSS, Atom, or JSON feed, lets you choose when there are several, and uses the feed's title if you leave the name blank. Select a feed or folder and choose **Edit / Move** to rename it, move it, or correct its URL without losing saved articles. Removing a feed deletes its articles after confirmation; removing a folder keeps them.
 
-Searching searches the current view, including nested folders. Lists have 200 articles per page. The reader retains its article when its read state changes. Summary-only feeds display the supplied summary; open the original for the rest. Podcast attachments are links, with no built-in playback.
+Search looks through the current view, including nested folders. Summary-only feeds show the summary; open the original for the rest. Podcast episodes appear as download links.
+
+Not yet supported: full-article extraction, podcast playback, sync between devices, and notifications.
 
 ## Keyboard
 
@@ -104,11 +106,11 @@ Searching searches the current view, including nested folders. Lists have 200 ar
 
 ## Storage and privacy
 
-SQLite stores articles, subscriptions, read state, stars, and the search index in `$XDG_DATA_HOME/omafeed/omafeed.db` (default `~/.local/share/omafeed`). Settings live at `$XDG_CONFIG_HOME/omafeed/settings.toml`. Disposable favicons live under `$XDG_CACHE_HOME/omafeed`. Omafeed discovers icons from each website’s homepage, tries conventional favicon and touch-icon paths, caches icons for seven days and misses for one day, and caps the icon cache at 32 MiB. SVG, ICO, PNG, JPEG, GIF, and WebP icons are decoded into small PNGs so the sidebar can display them reliably. Refresh retries missing icons immediately; websites without a usable icon show the RSS fallback.
+Articles, subscriptions, read state, stars, and the search index live in `$XDG_DATA_HOME/omafeed/omafeed.db` (default `~/.local/share/omafeed`). Settings live in `$XDG_CONFIG_HOME/omafeed/settings.toml`, and website icons are cached under `$XDG_CACHE_HOME/omafeed`.
 
 No account, telemetry, cloud sync, or background daemon. Closing Omafeed stops scheduled refreshes. Requests go to your feed servers, their redirects, favicon URLs, and article image servers when enabled. Remote images can be disabled in Settings. Article JavaScript, frames, forms, and embedded media are disabled; links open in your browser.
 
-Article text works offline. Images that have not been fetched are not available offline; v1 does not promise a persistent offline image archive. Articles are not automatically pruned. Back up the data directory while Omafeed is closed; OPML export backs up subscriptions only.
+Article text works offline; images need a connection unless they were already loaded. Articles are never deleted automatically. To back up everything, copy the data directory while Omafeed is closed; OPML export saves subscriptions only.
 
 Theme following reads `$XDG_STATE_HOME/omarchy/current/theme/colors.toml`, with the older config location as fallback. Missing/invalid palettes use a built-in dark theme. The top bar, search field, menus, and reader update as soon as the theme files change. No Hyprland configuration is changed.
 
