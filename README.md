@@ -21,14 +21,15 @@ A native RSS reader for Linux and Omarchy, written in Rust. A three-pane library
 omarchy pkg add rust gtk4 libadwaita webkitgtk-6.0 pkgconf
 git clone https://github.com/pch/omafeed.git
 cd omafeed
+make
 make install
 ```
 
-`make install` installs the release binary, launcher entry, icon, and license under `~/.local`. Open **Omafeed** from your launcher or run `~/.local/bin/omafeed`. Ensure `~/.local/bin` is on your PATH. The desktop must have a session D-Bus.
+`make` builds the release binary; `make install` installs it with the launcher entry, AppStream metadata, icon, and license under `~/.local`. Use `make install PREFIX=/usr` (as root, after building as your user) for a system-wide install. Open **Omafeed** from your launcher or run `~/.local/bin/omafeed`. Ensure `~/.local/bin` is on your PATH. The desktop must have a session D-Bus.
 
-For an Arch package, copy `packaging/PKGBUILD` to a separate build directory and run `makepkg -si`. The package is a source recipe; it is not a published AUR entry.
+For an Arch package, download `PKGBUILD` from the latest [GitHub release](https://github.com/pch/omafeed/releases) (checksum included) and run `makepkg -si`. To track the development branch, use `packaging/omafeed-git/PKGBUILD` instead. Neither is published on the AUR.
 
-Uninstall a local installation with `make uninstall`. Your articles and settings remain. For a package installation, use `pacman -R omafeed-git`.
+Uninstall a local installation with `make uninstall`. Your articles and settings remain. For a package installation, use `pacman -R omafeed` (or `omafeed-git`).
 
 ## Get started
 
@@ -73,7 +74,7 @@ No account, telemetry, cloud sync, or background daemon. Closing Omafeed stops s
 
 Article text works offline. Images that have not been fetched are not available offline; v1 does not promise a persistent offline image archive. Articles are not automatically pruned. Back up the data directory while Omafeed is closed; OPML export backs up subscriptions only.
 
-Theme following reads `$XDG_STATE_HOME/omarchy/current/theme/colors.toml`, with the older config location as fallback. Missing/invalid palettes use a built-in dark theme. The top bar, search field, menus, and reader update within two seconds of a palette change. No Hyprland configuration is changed.
+Theme following reads `$XDG_STATE_HOME/omarchy/current/theme/colors.toml`, with the older config location as fallback. Missing/invalid palettes use a built-in dark theme. The top bar, search field, menus, and reader update as soon as the theme files change. No Hyprland configuration is changed.
 
 ## Development
 
@@ -88,15 +89,19 @@ GTK4, libadwaita, WebKitGTK 6.0, a C compiler, and pkg-config are required. The 
 cargo test -p omafeed-core
 ```
 
-The optional native desktop smoke test also verifies WebKit rendering, read/star state, folder creation, and moving a feed through the real dialogs:
+The native desktop smoke test (run headlessly in CI) also verifies WebKit rendering, read/star state, folder creation, and moving a feed through the real dialogs:
 
 ```sh
 cargo test -p omafeed desktop_smoke -- --ignored --test-threads=1
 ```
 
-Tests use temporary SQLite databases and a localhost HTTP server; they do not depend on live blogs. Use `OMAFEED_HOME=/tmp/omafeed-test` to isolate data, settings, and cache during manual testing. CLI commands: `import FILE`, `export FILE`, `refresh`, `status`, `--help`, `--version`.
+Tests use temporary SQLite databases and a localhost HTTP server; they do not depend on live blogs. Use `OMAFEED_HOME=/tmp/omafeed-test` to isolate data, settings, and cache during manual testing. CLI commands: `import FILE`, `export FILE`, `refresh`, `status`, `discover URL`, `--help`, `--version`.
 
 The workspace contains `omafeed-core` (database worker, migrations, OPML, fetch scheduling, sanitization) and `omafeed-app` (GTK interface and CLI). Database work runs on a dedicated worker; HTTP work runs on Tokio. The GTK thread receives results asynchronously.
+
+## Releases
+
+CI runs formatting, Clippy, tests, the headless desktop smoke test, an Arch package build, and `cargo deny`. To release, bump `version` in `Cargo.toml` and the `<releases>` entry in `data/io.github.pch.Omafeed.metainfo.xml`, commit, then push a matching tag (`git tag v0.2.0 && git push origin v0.2.0`). The release workflow reruns CI, builds a binary tarball and a checksummed `PKGBUILD`, and publishes them as a GitHub release.
 
 ## Inspiration
 

@@ -28,7 +28,7 @@ Live website discovery resolves `https://ptrchm.com/` to `https://ptrchm.com/ind
 
 The application was launched on the local Wayland/Hyprland session. The three-pane layout and actual article HTML were inspected; opening an article updates unread state. The native smoke test independently checks the reader and library dialogs without modifying the real subscription library.
 
-Omarchy's current palette is read from the state directory, including top-bar background/foreground, inactive header state, search controls, menus, sidebar, and reader. Palette changes are checked every two seconds. Light/dark fallbacks are available in Settings.
+Omarchy's current palette is read from the state directory, including top-bar background/foreground, inactive header state, search controls, menus, sidebar, and reader. Palette changes are detected by watching the theme directory, including when a theme switch replaces it. Light/dark fallbacks are available in Settings.
 
 ## Scope and limits
 
