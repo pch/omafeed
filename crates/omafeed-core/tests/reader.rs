@@ -442,3 +442,38 @@ fn edit_folder_is_atomic() {
     let lib = s.library().unwrap();
     assert_eq!(lib.folders.iter().find(|f| f.id == a).unwrap().name, "A");
 }
+#[test]
+fn upgrading_a_version_1_database_reextracts_article_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("old.db");
+    {
+        let mut s = Store::open(&path).unwrap();
+        let f = s
+            .add_feed("Test", "https://example.org/feed", None)
+            .unwrap();
+        s.commit_download(
+            f,
+            download(&rss(
+                "<item><guid>1</guid><title>A</title><description>&lt;p&gt;On &lt;a href=\"https://x.org\"&gt;Spotify&lt;/a&gt;, Apple&lt;/p&gt;</description></item>",
+            )),
+            30,
+        )
+        .unwrap();
+    }
+    // Simulate text written by the old extractor, then reopen as a version 1 database.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch("UPDATE articles SET text = 'On Spotify , Apple'; PRAGMA user_version = 1;")
+        .unwrap();
+    drop(conn);
+    let s = Store::open(&path).unwrap();
+    assert_eq!(s.articles(&all()).unwrap()[0].preview, "On Spotify, Apple");
+    assert!(
+        s.articles(&Query {
+            search: "Spotify".into(),
+            ..all()
+        })
+        .unwrap()
+        .len()
+            == 1
+    );
+}

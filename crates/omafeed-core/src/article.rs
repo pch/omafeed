@@ -11,15 +11,53 @@ pub fn sanitize(html: &str, base: &str) -> String {
     clean.clean(html).to_string()
 }
 
+/// Elements that separate words; inline elements (links, emphasis) do not.
+const BLOCKS: &[&str] = &[
+    "address",
+    "article",
+    "aside",
+    "blockquote",
+    "br",
+    "dd",
+    "div",
+    "dl",
+    "dt",
+    "figcaption",
+    "figure",
+    "footer",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "header",
+    "hr",
+    "li",
+    "ol",
+    "p",
+    "pre",
+    "section",
+    "table",
+    "td",
+    "th",
+    "tr",
+    "ul",
+];
+
 /// Plain text with collapsed whitespace, for titles, previews, and search.
 pub fn plain(html: &str) -> String {
     let safe = ammonia::clean(html);
-    scraper::Html::parse_fragment(&safe)
-        .root_element()
-        .text()
-        .flat_map(str::split_whitespace)
-        .collect::<Vec<_>>()
-        .join(" ")
+    let doc = scraper::Html::parse_fragment(&safe);
+    let mut text = String::new();
+    for node in doc.root_element().descendants() {
+        match node.value() {
+            scraper::Node::Text(t) => text.push_str(t),
+            scraper::Node::Element(e) if BLOCKS.contains(&e.name()) => text.push(' '),
+            _ => {}
+        }
+    }
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 const STYLE: &str = "
@@ -83,4 +121,19 @@ pub fn document(a: &Article, p: &Palette, font: u32, images: bool) -> String {
         byline = byline.join(" · "),
         body = a.html,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::plain;
+
+    #[test]
+    fn plain_text_spaces_blocks_but_not_inline_elements() {
+        assert_eq!(
+            plain(
+                "<p>Listen on <a href=\"#\">Spotify</a>, <em>Apple</em>.</p><p>Next<br>line</p><ul><li>a</li><li>b</li></ul>"
+            ),
+            "Listen on Spotify, Apple. Next line a b"
+        );
+    }
 }

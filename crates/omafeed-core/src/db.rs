@@ -110,8 +110,19 @@ pub struct Library {
     pub starred: i64,
 }
 
+enum Migration {
+    Sql(&'static str),
+    Rust(fn(&Connection) -> Result<()>),
+}
+
 /// Schema migrations; entry `n` upgrades `user_version` from `n` to `n + 1`.
-const MIGRATIONS: &[&str] = &[r#"
+const MIGRATIONS: &[Migration] = &[
+    Migration::Sql(SCHEMA_V1),
+    // Plain-text extraction no longer inserts spaces before punctuation after links.
+    Migration::Rust(reextract_text),
+];
+
+const SCHEMA_V1: &str = r#"
 CREATE TABLE folders(
     id INTEGER PRIMARY KEY,
     parent INTEGER REFERENCES folders(id) ON DELETE SET NULL,
@@ -168,7 +179,20 @@ CREATE TRIGGER article_update AFTER UPDATE ON articles BEGIN
     VALUES('delete', old.id, old.title, old.author, old.text);
     INSERT INTO article_fts(rowid, title, author, text) VALUES(new.id, new.title, new.author, new.text);
 END;
-"#];
+"#;
+
+/// Recompute search/preview text from stored HTML (the FTS index follows via trigger).
+fn reextract_text(conn: &Connection) -> Result<()> {
+    let articles = conn
+        .prepare("SELECT id, html FROM articles")?
+        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut update = conn.prepare("UPDATE articles SET text = ?1 WHERE id = ?2")?;
+    for (id, html) in articles {
+        update.execute(params![crate::article::plain(&html), id])?;
+    }
+    Ok(())
+}
 
 const LIBRARY_FEEDS: &str = "
 SELECT f.id, f.folder, f.title, f.url, f.site_url,
@@ -236,9 +260,12 @@ impl Store {
         if version > MIGRATIONS.len() {
             bail!("Database was created by a newer Omafeed version");
         }
-        for (index, sql) in MIGRATIONS.iter().enumerate().skip(version) {
+        for (index, migration) in MIGRATIONS.iter().enumerate().skip(version) {
             let tx = conn.transaction()?;
-            tx.execute_batch(sql)?;
+            match migration {
+                Migration::Sql(sql) => tx.execute_batch(sql)?,
+                Migration::Rust(run) => run(&tx)?,
+            }
             tx.pragma_update(None, "user_version", (index + 1) as i64)?;
             tx.commit()?;
         }
