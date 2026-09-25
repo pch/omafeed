@@ -1685,7 +1685,7 @@ dependencies = [
  "ammonia",
  "anyhow",
  "async-channel",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "feed-rs",
  "futures-util",
