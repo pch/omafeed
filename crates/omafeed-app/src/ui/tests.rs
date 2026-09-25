@@ -160,6 +160,19 @@ fn desktop_smoke() {
             .read,
         "Theme/reader reload must not mark an intentionally unread article read"
     );
+    // Choosing a different view closes the article instead of keeping it open.
+    let starred = u
+        .sidebar_rows
+        .borrow()
+        .iter()
+        .position(|r| r.scope == Scope::Starred)
+        .unwrap();
+    u.side
+        .list
+        .select_row(u.side.list.row_at_index(starred as i32).as_ref());
+    pump_until(|| u.list.heading.text() == "Starred");
+    assert!(u.selected.borrow().is_none());
+    assert!(u.settings.borrow().selected_article.is_none());
     crate::dialogs::library(u.clone());
     let window = Rc::new(RefCell::new(None::<gtk::Window>));
     pump_until(|| {

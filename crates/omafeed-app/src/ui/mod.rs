@@ -435,6 +435,8 @@ impl Ui {
                     u.query.borrow_mut().scope = scope.clone();
                     u.settings.borrow_mut().scope = scope;
                     u.page.set(0);
+                    // A different view starts with an empty reader, as in NetNewsWire.
+                    u.clear_article();
                     u.reload_articles();
                     u.save();
                 }
@@ -627,15 +629,22 @@ impl Ui {
     /// Show "All Articles" with nothing selected, e.g. after removing the current feed.
     pub fn reset_selection(self: &Rc<Self>) {
         self.query.borrow_mut().scope = Scope::All;
-        *self.selected.borrow_mut() = None;
-        {
-            let mut s = self.settings.borrow_mut();
-            s.scope = Scope::All;
-            s.selected_article = None;
-        }
-        self.render();
+        self.settings.borrow_mut().scope = Scope::All;
+        self.clear_article();
         self.save();
         self.reload();
+    }
+
+    /// Close the current article and show the reader's empty state.
+    fn clear_article(&self) {
+        // Discard any article load still in flight.
+        self.selection_generation
+            .set(self.selection_generation.get() + 1);
+        self.pending_mark.set(None);
+        *self.selected.borrow_mut() = None;
+        self.settings.borrow_mut().selected_article = None;
+        self.render();
+        self.show_reader(false);
     }
 
     pub fn reload(self: &Rc<Self>) {
