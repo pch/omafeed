@@ -17,6 +17,34 @@ A native RSS reader for Linux and Omarchy, written in Rust. A three-pane library
 
 ## Install on Arch / Omarchy
 
+Pick one of the options below. All of them keep your articles and settings when you update or uninstall.
+
+### Option 1: Arch package (recommended)
+
+Builds from the tagged source and installs a regular pacman package, so dependencies are handled for you:
+
+```sh
+mkdir omafeed && cd omafeed
+curl -LO https://github.com/pch/omafeed/releases/latest/download/PKGBUILD
+makepkg -si
+```
+
+To update, repeat these steps when a new release is out. To uninstall: `sudo pacman -R omafeed`.
+
+Before the first tagged release (or to follow the latest development code), build the development package instead:
+
+```sh
+git clone https://github.com/pch/omafeed.git
+cd omafeed/packaging/omafeed-git
+makepkg -si
+```
+
+Rerun `makepkg -si` in that folder to update. To uninstall: `sudo pacman -R omafeed-git`.
+
+### Option 2: Build into your home folder
+
+Installs to `~/.local` without pacman or root:
+
 ```sh
 omarchy pkg add rust gtk4 libadwaita webkitgtk-6.0 pkgconf
 git clone https://github.com/pch/omafeed.git
@@ -25,11 +53,19 @@ make
 make install
 ```
 
-`make` builds the release binary; `make install` installs it with the launcher entry, AppStream metadata, icon, and license under `~/.local`. Use `make install PREFIX=/usr` (as root, after building as your user) for a system-wide install. Open **Omafeed** from your launcher or run `~/.local/bin/omafeed`. Ensure `~/.local/bin` is on your PATH. The desktop must have a session D-Bus.
+Make sure `~/.local/bin` is on your `PATH`. To update: `git pull && make && make install`. To uninstall: `make uninstall`.
 
-For an Arch package, download `PKGBUILD` from the latest [GitHub release](https://github.com/pch/omafeed/releases) (checksum included) and run `makepkg -si`. To track the development branch, use `packaging/omafeed-git/PKGBUILD` instead. Neither is published on the AUR.
+For a system-wide install, build as your user and install with `sudo make install PREFIX=/usr` (uninstall with `sudo make uninstall PREFIX=/usr`).
 
-Uninstall a local installation with `make uninstall`. Your articles and settings remain. For a package installation, use `pacman -R omafeed` (or `omafeed-git`).
+### Option 3: Prebuilt binary
+
+Each [release](https://github.com/pch/omafeed/releases) includes `omafeed-VERSION-x86_64-linux.tar.gz`, built on Arch Linux. It needs `gtk4`, `libadwaita`, and `webkitgtk-6.0`, and is intended for up-to-date Arch-based systems. Extract it into `~/.local`:
+
+```sh
+tar -xzf omafeed-*-x86_64-linux.tar.gz -C ~/.local --strip-components=1
+```
+
+After installing, open **Omafeed** from your launcher or run `omafeed`.
 
 ## Get started
 
