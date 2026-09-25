@@ -4,12 +4,12 @@
 
 - `cargo fmt --all --check`
 - `cargo clippy --workspace --all-targets --locked -- -D warnings`
-- `cargo test --workspace --locked`: 14 core regression tests pass. The desktop test is explicitly ignored here because normal CI has no display.
-- `cargo test -p omafeed desktop_smoke -- --ignored --test-threads=1`: native GTK/WebKit smoke test against a temporary library. Exercises rendering, marking read/unread, starring, preserving intentionally unread state when rerendering, creating a folder, and renaming/moving a feed through the real dialogs.
+- `cargo test --workspace --locked`: 18 core regression tests pass. The desktop test is explicitly ignored here because normal CI has no display.
+- `cargo test -p omafeed desktop_smoke -- --ignored --test-threads=1`: native GTK/WebKit smoke test against a temporary library. Exercises rendering, marking read/unread, starring, preserving intentionally unread state when rerendering, creating a folder, renaming/moving a feed, expanding/collapsing folders, adding a homepage with the name blank, and cancelling in-flight feed discovery through the real dialogs.
 - `cargo build --release --locked`
 - Desktop-entry validation and PKGBUILD shell syntax check.
 
-Core tests cover nested OPML round trips and idempotent reimport, moves and cycle rejection, folder deletion with name collisions, SQLite restart persistence, stable article identity, updated search content, bulk mark/undo, RSS/Atom/JSON Feed parsing, unsafe HTML/URL removal, literal FTS queries, feed URL correction, 304 validators, failure preservation, redirects, oversized responses, and favicon discovery/caching.
+Core tests cover nested OPML round trips and idempotent reimport, moves and cycle rejection, folder deletion with name collisions, SQLite restart persistence, stable article identity, updated search content, bulk mark/undo, RSS/Atom/JSON Feed parsing, unsafe HTML/URL removal, literal FTS queries, feed URL correction, 304 validators, failure preservation, redirects, oversized responses, website feed discovery, relative/base URL resolution, invalid feed rejection, and favicon discovery/caching/normalization.
 
 ## Live subscription check
 
@@ -20,7 +20,9 @@ The supplied OPML imported 55 feeds in one folder, with no duplicates or invalid
 
 These are displayed as feed errors; neither blocks the rest of the library. Their subscription URLs have been preserved. Personal OPML and SQLite files are outside the repository.
 
-Favicon discovery cached 41 website icons across the 51 distinct website origins represented by the subscriptions; ten origins had no usable icon during this run and show the RSS fallback. Cached files include ICO, PNG, JPEG, GIF, and WebP. Icons use a seven-day lifetime; failed discovery uses a one-day lifetime. Individual downloads and total cache size are bounded.
+The updated favicon pipeline cached 44 validated PNGs across the 51 distinct website origins. All 44 decode successfully with GTK, including paolino.me (64×64). SVG, ICO, PNG, JPEG, GIF, and WebP sources are normalized before display. Seven origins still lack usable icons and use the RSS fallback. Manual refresh retries misses; automatic refresh retains the one-day miss cache. Successful icons have a seven-day lifetime, and downloads/cache size are bounded.
+
+Live website discovery resolves `https://ptrchm.com/` to `https://ptrchm.com/index.xml`, titled “ptrchm”. The empty homepage subscription created before discovery was implemented was corrected after backing up the SQLite database. Its articles now load. The original imported `/rss/` subscription redirects to `/posts/index.xml` and remains intact.
 
 ## Desktop checks
 

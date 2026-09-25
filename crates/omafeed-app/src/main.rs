@@ -24,9 +24,10 @@ fn run() -> Result<()> {
                 "import"=>{let text=std::fs::read_to_string(args.get(2).context("Usage: omafeed import FILE.opml")?)?;let r=db.call(move|s|s.import(&text)).await?;println!("Imported {}, skipped {}, invalid {}",r.added,r.skipped,r.invalid.len());for e in r.invalid{eprintln!("{e}");}}
                 "export"=>{let path=args.get(2).context("Usage: omafeed export FILE.opml")?;std::fs::write(path,db.call(|s|s.export()).await?)?;println!("Exported {path}");}
                 "refresh"=>{let (tx,rx)=async_channel::unbounded();let logger=tokio::spawn(async move{while let Ok(event)=rx.recv().await{match event{Progress::Started(n)=>println!("Refreshing {n} feeds"),Progress::Feed{title,error,done,total}=>println!("[{done}/{total}] {title}: {}",error.unwrap_or_else(||"OK".into())),Progress::Finished{total,failed}=>println!("Finished: {total} feeds, {failed} failed")}}});Refresher::new()?.with_cache(paths.cache.clone()).refresh(db.clone(),true,Settings::load(&paths)?.refresh_minutes,tx).await?;logger.await?;}
+                "discover"=>{let url=args.get(2).context("Usage: omafeed discover URL")?;for feed in Refresher::new()?.discover(url).await? {println!("{}\t{}",feed.title,feed.url);}}
                 "status"=>{let lib=db.call(|s|s.library()).await?;println!("{} feeds · {} folders · {} unread · {} starred",lib.feeds.len(),lib.folders.len(),lib.unread,lib.starred);for f in lib.feeds{if let Some(e)=f.error{println!("{}: {e}",f.title);}}}
                 "--version"=>println!("Omafeed {}",env!("CARGO_PKG_VERSION")),
-                "--help"|"-h"=>println!("Omafeed — a local RSS reader\n\n omafeed   Open reader\n omafeed import FILE.opml\n omafeed export FILE.opml\n omafeed refresh\n omafeed status\n\nOMAFEED_HOME overrides data/config/cache directories for testing."),
+                "--help"|"-h"=>println!("Omafeed — a local RSS reader\n\n omafeed   Open reader\n omafeed import FILE.opml\n omafeed export FILE.opml\n omafeed refresh\n omafeed status\n omafeed discover URL\n\nOMAFEED_HOME overrides data/config/cache directories for testing."),
                 _=>anyhow::bail!("Unknown command. Run omafeed --help"),
             } Ok(())
         });

@@ -42,9 +42,17 @@ popover > contents, messagedialog .message-area, dialog {
 }
 .section-title { font-size: 10px; font-weight: 700; letter-spacing: 2px; opacity: .55; }
 .sidebar { background: alpha(currentColor, .035); }
-.navigation-sidebar row { padding: 8px; border-radius: 7px; }
+.navigation-sidebar { font-size: 13px; }
+.navigation-sidebar row { min-height: 28px; padding: 4px 8px; margin: 1px 6px; border-radius: 6px; }
 .articles row { padding: 16px; border-bottom: 1px solid alpha(currentColor, .07); }
 .articles row:selected { background: alpha(@accent_color, .13); color: @window_fg_color; }
 .article-title { font-weight: 600; font-size: 14px; }
 .article-read { font-weight: 400; opacity: .7; }
 .preview { font-size: 12px; opacity: .55; }
+
+.list-heading { font-size: 18px; font-weight: 650; }
+.folder-name { font-weight: 600; }
+.folder-expander { min-width: 16px; min-height: 16px; padding: 0; margin: 0; border-radius: 4px; }
+.unread-count { font-size: 11px; font-weight: 500; opacity: .6; font-feature-settings: "tnum"; }
+.status-text { font-size: 11px; opacity: .65; }
+.pagination button { min-height: 30px; padding: 2px 10px; font-size: 12px; font-weight: 500; }

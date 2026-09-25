@@ -73,6 +73,14 @@ impl Refresher {
         self.cache = Some(path);
         self
     }
+    pub async fn discover(&self, input: &str) -> Result<Vec<crate::discovery::Candidate>> {
+        tokio::time::timeout(
+            Duration::from_secs(60),
+            crate::discovery::discover(&self.client, input),
+        )
+        .await
+        .context("Feed discovery timed out")?
+    }
     pub async fn refresh(
         &self,
         db: Db,
@@ -125,7 +133,7 @@ impl Refresher {
                         Some(if let Err(e)=result{format!("{message}; saving error: {e}")}else{message})
                     }
                 };
-                if let Some(cache)=cache {crate::icons::cache(&client,&cache,&site_url).await;}
+                if let Some(cache)=cache {crate::icons::cache(&client,&cache,&site_url,force).await;}
                 (title,error)
             }
         });

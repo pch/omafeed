@@ -24,6 +24,7 @@ pub struct Ui {
     pub sidebar: gtk::ListBox,
     pub list: gtk::ListBox,
     scopes: RefCell<Vec<Scope>>,
+    collapsed: RefCell<std::collections::HashSet<i64>>,
     articles: RefCell<Vec<Article>>,
     pub web: webkit6::WebView,
     pub status: gtk::Label,
@@ -48,6 +49,7 @@ pub struct Ui {
     css: gtk::CssProvider,
     undo: RefCell<Vec<i64>>,
     more: gtk::Button,
+    previous: gtk::Button,
     page: Cell<usize>,
     pub busy: Cell<bool>,
     responsive: Cell<i32>,
@@ -158,7 +160,8 @@ impl Ui {
         list_box.set_width_request(270);
         let list_header = gtk::Box::new(gtk::Orientation::Vertical, 8);
         padded(&list_header, 16);
-        let heading = label("All Unread", "title-2");
+        let heading = label("All Unread", "list-heading");
+        heading.set_ellipsize(gtk::pango::EllipsizeMode::End);
         list_header.append(&heading);
         let options = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let count = label("", "dim-label");
@@ -175,10 +178,16 @@ impl Ui {
         list.add_css_class("articles");
         list.set_activate_on_single_click(true);
         list_box.append(&scroll(&list));
-        let more = gtk::Button::with_label("Next page →");
-        more.set_visible(false);
-        let previous = gtk::Button::with_label("← Previous page");
+        let more = gtk::Button::with_label("Next");
+        more.set_sensitive(false);
+        more.set_tooltip_text(Some("Next page"));
+        let previous = gtk::Button::with_label("Previous");
+        previous.set_sensitive(false);
+        previous.set_tooltip_text(Some("Previous page"));
         let pages = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        padded(&pages, 12);
+        pages.set_homogeneous(true);
+        pages.add_css_class("pagination");
         pages.append(&previous);
         pages.append(&more);
         list_box.append(&pages);
@@ -188,8 +197,8 @@ impl Ui {
         padded(&toolbar, 10);
         let back = icon("go-previous-symbolic", "Show article list");
         toolbar.append(&back);
-        let read = gtk::Button::with_label("Mark unread");
-        let star = gtk::Button::with_label("☆ Star");
+        let read = icon("mail-mark-unread-symbolic", "Mark unread (M)");
+        let star = icon("non-starred-symbolic", "Star (S)");
         let open = icon("external-link-symbolic", "Open original (O)");
         let copy = icon("edit-copy-symbolic", "Copy article link");
         let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -225,7 +234,7 @@ impl Ui {
         inner.set_end_child(Some(&reader));
         outer.set_end_child(Some(&inner));
         root.append(&outer);
-        let status = label("Ready", "dim-label");
+        let status = label("Ready", "status-text");
         status.set_margin_start(16);
         status.set_margin_top(6);
         status.set_margin_bottom(6);
@@ -252,6 +261,7 @@ impl Ui {
             sidebar,
             list,
             scopes: RefCell::new(vec![]),
+            collapsed: RefCell::new(Default::default()),
             articles: RefCell::new(vec![]),
             web,
             status,
@@ -276,6 +286,7 @@ impl Ui {
             css: gtk::CssProvider::new(),
             undo: RefCell::new(vec![]),
             more,
+            previous: previous.clone(),
             page: Cell::new(0),
             busy: Cell::new(false),
             responsive: Cell::new(-1),
@@ -553,7 +564,24 @@ impl Ui {
             }
         });
     }
-    fn rebuild_sidebar(&self) {
+    pub async fn discover(
+        &self,
+        url: String,
+    ) -> anyhow::Result<Vec<omafeed_core::discovery::Candidate>> {
+        let refresher = self.refresher.clone();
+        let task = self
+            .runtime
+            .spawn(async move { refresher.discover(&url).await });
+        struct AbortOnDrop(tokio::task::AbortHandle);
+        impl Drop for AbortOnDrop {
+            fn drop(&mut self) {
+                self.0.abort();
+            }
+        }
+        let _cancel = AbortOnDrop(task.abort_handle());
+        task.await?
+    }
+    fn rebuild_sidebar(self: &Rc<Self>) {
         self.rebuilding.set(true);
         while let Some(child) = self.sidebar.first_child() {
             self.sidebar.remove(&child);
@@ -573,13 +601,7 @@ impl Ui {
         ) {
             for f in lib.folders.iter().filter(|f| f.parent == parent) {
                 let before = items.len();
-                items.push((
-                    Scope::Folder(f.id),
-                    format!("▾ {}", f.name),
-                    0,
-                    depth,
-                    false,
-                ));
+                items.push((Scope::Folder(f.id), f.name.clone(), 0, depth, false));
                 tree(lib, Some(f.id), depth + 1, items);
                 let count = items[before + 1..]
                     .iter()
@@ -601,12 +623,61 @@ impl Ui {
         tree(&lib, None, 0, &mut items);
         let selected = self.query.borrow().scope.clone();
         let mut scopes = vec![];
+        let mut hidden_below = None;
         for (scope, title, count, depth, error) in items {
+            if hidden_below.is_some_and(|parent_depth| depth > parent_depth) {
+                continue;
+            }
+            hidden_below = None;
+            if let Scope::Folder(id) = scope
+                && self.collapsed.borrow().contains(&id)
+            {
+                hidden_below = Some(depth);
+            }
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-            row.set_margin_start(depth * 12);
+            row.set_margin_start(depth * 14);
+            row.set_height_request(28);
             let text = label(&title, "");
             text.set_ellipsize(gtk::pango::EllipsizeMode::End);
             text.set_hexpand(true);
+            if let Scope::Folder(id) = scope {
+                let collapsed = self.collapsed.borrow().contains(&id);
+                let expander = icon(
+                    if collapsed {
+                        "pan-end-symbolic"
+                    } else {
+                        "pan-down-symbolic"
+                    },
+                    if collapsed {
+                        "Expand folder"
+                    } else {
+                        "Collapse folder"
+                    },
+                );
+                expander.add_css_class("flat");
+                expander.add_css_class("folder-expander");
+                let weak = Rc::downgrade(self);
+                expander.connect_clicked(move |_| {
+                    if let Some(u) = weak.upgrade() {
+                        if !u.collapsed.borrow_mut().remove(&id) {
+                            u.collapsed.borrow_mut().insert(id);
+                        }
+                        u.rebuild_sidebar();
+                    }
+                });
+                row.append(&expander);
+                text.add_css_class("folder-name");
+            } else if !matches!(scope, Scope::Feed(_)) {
+                let symbol = match scope {
+                    Scope::Unread => "mail-unread-symbolic",
+                    Scope::Today => "x-office-calendar-symbolic",
+                    Scope::Starred => "starred-symbolic",
+                    _ => "view-list-symbolic",
+                };
+                let image = gtk::Image::from_icon_name(symbol);
+                image.set_pixel_size(16);
+                row.append(&image);
+            }
             if let Scope::Feed(id) = scope
                 && let Some(feed) = lib.feeds.iter().find(|f| f.id == id)
             {
@@ -618,10 +689,9 @@ impl Ui {
                         &feed.site_url
                     },
                 );
-                let image = if path.exists() {
-                    gtk::Image::from_file(path)
-                } else {
-                    gtk::Image::from_icon_name("application-rss+xml-symbolic")
+                let image = match gdk::Texture::from_file(&gio::File::for_path(path)) {
+                    Ok(texture) => gtk::Image::from_paintable(Some(&texture)),
+                    Err(_) => gtk::Image::from_icon_name("application-rss+xml-symbolic"),
                 };
                 image.set_pixel_size(16);
                 row.append(&image);
@@ -631,7 +701,7 @@ impl Ui {
                 row.append(&gtk::Image::from_icon_name("dialog-warning-symbolic"));
             }
             if count > 0 {
-                row.append(&label(&count.to_string(), "dim-label"));
+                row.append(&label(&count.to_string(), "unread-count"));
             }
             let r = gtk::ListBoxRow::new();
             r.set_child(Some(&row));
@@ -671,7 +741,8 @@ impl Ui {
                     while let Some(child) = u.list.first_child() {
                         u.list.remove(&child);
                     }
-                    u.more.set_visible(articles.len() == 200);
+                    u.more.set_sensitive(articles.len() == 200);
+                    u.previous.set_sensitive(page > 0);
                     let selected = u
                         .selected
                         .borrow()
@@ -797,10 +868,23 @@ impl Ui {
         }
     }
     fn update_buttons(&self, a: &Article) {
+        self.star.set_icon_name(if a.starred {
+            "starred-symbolic"
+        } else {
+            "non-starred-symbolic"
+        });
         self.star
-            .set_label(if a.starred { "★ Starred" } else { "☆ Star" });
-        self.read
-            .set_label(if a.read { "Mark unread" } else { "Mark read" });
+            .set_tooltip_text(Some(if a.starred { "Unstar (S)" } else { "Star (S)" }));
+        self.read.set_icon_name(if a.read {
+            "mail-mark-unread-symbolic"
+        } else {
+            "mail-mark-read-symbolic"
+        });
+        self.read.set_tooltip_text(Some(if a.read {
+            "Mark unread (M)"
+        } else {
+            "Mark read (M)"
+        }));
     }
     fn mark_opened(self: &Rc<Self>) {
         let Some(loaded) = self.pending_mark.take() else {
@@ -1160,6 +1244,32 @@ mod tests {
             Refresher::new().unwrap(),
         );
         pump_until(|| !u.articles.borrow().is_empty());
+        assert!(!u.previous.is_sensitive());
+        assert!(!u.more.is_sensitive());
+        let expander = widgets(&u.sidebar.clone().upcast())
+            .into_iter()
+            .filter_map(|w| w.downcast::<gtk::Button>().ok())
+            .find(|b| b.tooltip_text().as_deref() == Some("Collapse folder"))
+            .unwrap();
+        expander.emit_clicked();
+        assert!(
+            !u.scopes
+                .borrow()
+                .iter()
+                .any(|s| matches!(s, Scope::Feed(_)))
+        );
+        let expander = widgets(&u.sidebar.clone().upcast())
+            .into_iter()
+            .filter_map(|w| w.downcast::<gtk::Button>().ok())
+            .find(|b| b.tooltip_text().as_deref() == Some("Expand folder"))
+            .unwrap();
+        expander.emit_clicked();
+        assert!(
+            u.scopes
+                .borrow()
+                .iter()
+                .any(|s| matches!(s, Scope::Feed(_)))
+        );
         u.select(id);
         pump_until(|| u.selected.borrow().as_ref().is_some_and(|a| a.read));
         u.toggle_star();
@@ -1218,6 +1328,12 @@ mod tests {
                 .unwrap()
         });
         pump_until(|| !all_widgets().iter().any(|w| w.is::<gtk::Entry>()));
+        pump_until(|| {
+            widgets(&root)
+                .into_iter()
+                .filter_map(|w| w.downcast::<gtk::Label>().ok())
+                .any(|l| l.text() == "Created through UI")
+        });
         let list = widgets(&root)
             .into_iter()
             .find_map(|w| w.downcast::<gtk::ListBox>().ok())
@@ -1258,6 +1374,80 @@ mod tests {
                 }))
                 .unwrap()
         });
+        pump_until(|| !all_widgets().iter().any(|w| w.is::<gtk::Entry>()));
+        let listener = runtime
+            .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
+            .unwrap();
+        let website = format!("http://{}/", listener.local_addr().unwrap());
+        let server = runtime.spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buffer = [0; 4096];
+                let n = socket.read(&mut buffer).await.unwrap();
+                let request = String::from_utf8_lossy(&buffer[..n]);
+                let body = if request.starts_with("GET /rss/ ") {
+                    r#"<rss version="2.0"><channel><title>Discovered feed</title><description>Fixture</description></channel></rss>"#
+                } else {
+                    r#"<html><head><link rel="alternate" type="application/rss+xml" href="/rss/"></head></html>"#
+                };
+                let response = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                let _ = socket.write_all(response.as_bytes()).await;
+            }
+        });
+        button(&root, "Add feed").emit_clicked();
+        pump_until(|| all_widgets().iter().any(|w| w.is::<gtk::Entry>()));
+        let fields = all_widgets()
+            .into_iter()
+            .filter_map(|w| w.downcast::<gtk::Entry>().ok())
+            .collect::<Vec<_>>();
+        assert!(fields[0].text().is_empty());
+        fields[1].set_text(&website);
+        form_button("Save").emit_clicked();
+        pump_until(|| {
+            runtime
+                .block_on(db.call(|s| {
+                    Ok(s.library()?
+                        .feeds
+                        .iter()
+                        .any(|f| f.title == "Discovered feed" && f.url.ends_with("/rss/")))
+                }))
+                .unwrap()
+        });
+        server.abort();
+        pump_until(|| {
+            widgets(&root)
+                .into_iter()
+                .filter_map(|w| w.downcast::<gtk::Label>().ok())
+                .any(|l| l.text().contains("Discovered feed"))
+        });
+        let listener = runtime
+            .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
+            .unwrap();
+        let slow_url = format!("http://{}/", listener.local_addr().unwrap());
+        let slow = runtime.spawn(async move {
+            let (_socket, _) = listener.accept().await.unwrap();
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        });
+        button(&root, "Add feed").emit_clicked();
+        pump_until(|| all_widgets().iter().any(|w| w.is::<gtk::Entry>()));
+        let fields = all_widgets()
+            .into_iter()
+            .filter_map(|w| w.downcast::<gtk::Entry>().ok())
+            .collect::<Vec<_>>();
+        fields[1].set_text(&slow_url);
+        form_button("Save").emit_clicked();
+        pump_until(|| all_widgets().iter().any(|w| w.is::<gtk::Spinner>()));
+        form_button("Cancel").emit_clicked();
+        pump_until(|| all_widgets().iter().any(|w| w.is::<gtk::Entry>()));
+        assert_eq!(
+            runtime
+                .block_on(db.call(|s| Ok(s.library()?.feeds.len())))
+                .unwrap(),
+            2
+        );
+        form_button("Cancel").emit_clicked();
+        slow.abort();
         library.close();
         pump_until(|| !library.is_visible());
         // Persisted state and actual WebKit rendering were verified above.

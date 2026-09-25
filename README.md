@@ -40,7 +40,7 @@ omafeed
 
 OPML contains subscriptions, not historical articles or read/star state. The first refresh downloads the items currently published by each feed, initially unread. Use the checkmark above the article list to mark the current view read; Ctrl+Z undoes that action.
 
-Click **Manage library** (Ctrl+L) to create folders and subscribe to feed URLs. Select a feed or folder and choose **Edit / Move** to change its name or destination folder. Feed URLs can also be corrected without losing saved articles. Folder moves cannot create cycles. Removing a feed deletes its articles after confirmation; removing a folder keeps them.
+Click **Manage library** (Ctrl+L) to create folders and subscribe using a website or feed URL. Omafeed discovers RSS, Atom, and JSON feeds, lets you choose when several are available, and uses the feed title when the optional name is blank. Invalid pages are never saved as subscriptions. Select a feed or folder and choose **Edit / Move** to change its name or destination folder. Feed URLs can also be corrected without losing saved articles. Folder moves cannot create cycles. Removing a feed deletes its articles after confirmation; removing a folder keeps them.
 
 Searching searches the current view, including nested folders. Lists have 200 articles per page. The reader retains its article when its read state changes. Summary-only feeds display the supplied summary; open the original for the rest. Podcast attachments are links, with no built-in playback.
 
@@ -65,7 +65,7 @@ Searching searches the current view, including nested folders. Lists have 200 ar
 
 ## Storage and privacy
 
-SQLite stores articles, subscriptions, read state, stars, and the search index in `$XDG_DATA_HOME/omafeed/omafeed.db` (default `~/.local/share/omafeed`). Settings live at `$XDG_CONFIG_HOME/omafeed/settings.toml`. Disposable favicons live under `$XDG_CACHE_HOME/omafeed`. Omafeed discovers icons from each website’s homepage, falls back to `/favicon.ico`, caches icons for seven days and misses for one day, and caps the icon cache at 32 MiB. Websites without a usable raster icon show the RSS fallback.
+SQLite stores articles, subscriptions, read state, stars, and the search index in `$XDG_DATA_HOME/omafeed/omafeed.db` (default `~/.local/share/omafeed`). Settings live at `$XDG_CONFIG_HOME/omafeed/settings.toml`. Disposable favicons live under `$XDG_CACHE_HOME/omafeed`. Omafeed discovers icons from each website’s homepage, tries conventional favicon and touch-icon paths, caches icons for seven days and misses for one day, and caps the icon cache at 32 MiB. SVG, ICO, PNG, JPEG, GIF, and WebP icons are decoded into small PNGs so the sidebar can display them reliably. Refresh retries missing icons immediately; websites without a usable icon show the RSS fallback.
 
 No account, telemetry, cloud sync, or background daemon. Closing Omafeed stops scheduled refreshes. Requests go to your feed servers, their redirects, favicon URLs, and article image servers when enabled. Remote images can be disabled in Settings. Article JavaScript, frames, forms, and embedded media are disabled; links open in your browser.
 

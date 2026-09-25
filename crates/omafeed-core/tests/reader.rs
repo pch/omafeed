@@ -348,30 +348,80 @@ fn favicon_discovery_resolves_relative_urls_and_rejects_unsafe_sources() {
         omafeed_core::icons::discover(html, "https://example.org/blog/"),
         vec![
             "https://example.org/brand.ico",
-            "https://example.org/blog/images/apple.png"
+            "https://example.org/blog/images/apple.png",
+            "https://example.org/blog/icon.svg"
         ]
     );
 }
 #[tokio::test]
 async fn favicon_is_discovered_cached_and_not_downloaded_again() {
-    // An ICO signature is sufficient to exercise discovery and caching; actual icons
-    // are decoded by GTK, independently of this network regression test.
     let html = r#"<html><head><link rel="icon" href="/brand.ico"></head></html>"#;
     let (url, handle) = server(vec![
         response("200 OK", "", html),
         response(
             "200 OK",
-            "Content-Type: image/x-icon\r\n",
-            "\0\0\u{1}\0icon",
+            "Content-Type: image/svg+xml\r\n",
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16" fill="red"/></svg>"#,
         ),
     ])
     .await;
     let dir = tempfile::tempdir().unwrap();
     let client = reqwest::Client::new();
-    omafeed_core::icons::cache(&client, dir.path(), &url).await;
+    omafeed_core::icons::cache(&client, dir.path(), &url, false).await;
     assert!(omafeed_core::icons::path(dir.path(), &url).exists());
-    omafeed_core::icons::cache(&client, dir.path(), &url).await;
+    omafeed_core::icons::cache(&client, dir.path(), &url, false).await;
     let requests = handle.await.unwrap();
     assert_eq!(requests.len(), 2);
     assert!(requests[1].starts_with("GET /brand.ico"));
+}
+
+#[test]
+fn feed_links_resolve_base_deduplicate_and_reject_unsafe_urls() {
+    let html = r#"<base href="/blog/"><link rel="alternate" type="application/rss+xml" href="rss.xml"><link rel="ALTERNATE" type="application/atom+xml; charset=utf-8" href="../atom.xml"><link rel="alternate" type="application/rss+xml" href="rss.xml"><link rel="alternate" type="application/rss+xml" href="file:///etc/passwd"><a href="feed.xml">RSS</a>"#;
+    assert_eq!(
+        omafeed_core::discovery::links(html, "https://example.org/start"),
+        vec![
+            "https://example.org/blog/rss.xml",
+            "https://example.org/atom.xml",
+            "https://example.org/blog/feed.xml"
+        ]
+    );
+}
+#[tokio::test]
+async fn website_discovery_validates_advertised_feed_and_uses_its_title() {
+    let html = r#"<html><head><link rel="alternate" type="application/rss+xml" href="/rss/"></head></html>"#;
+    let (url, server) = server(vec![
+        response("200 OK", "", html),
+        response("200 OK", "", &rss("")),
+    ])
+    .await;
+    let feeds = Refresher::new().unwrap().discover(&url).await.unwrap();
+    assert_eq!(feeds.len(), 1);
+    assert_eq!(feeds[0].title, "Test");
+    assert!(feeds[0].url.ends_with("/rss/"));
+    let requests = server.await.unwrap();
+    assert!(requests[1].starts_with("GET /rss/ "));
+}
+#[tokio::test]
+async fn direct_feed_discovery_and_invalid_advertisement() {
+    let (url, server) = server(vec![response("200 OK", "", &rss(""))]).await;
+    let feeds = Refresher::new().unwrap().discover(&url).await.unwrap();
+    assert_eq!(feeds[0].url, url);
+    server.await.unwrap();
+    let html = r#"<link rel="alternate" type="application/rss+xml" href="/bad">"#;
+    let (url, server) = self::server(vec![
+        response("200 OK", "", html),
+        response("200 OK", "", "<html>Not a feed</html>"),
+    ])
+    .await;
+    assert!(Refresher::new().unwrap().discover(&url).await.is_err());
+    server.await.unwrap();
+}
+#[test]
+fn icon_normalization_supports_svg_and_rejects_invalid_or_external_content() {
+    use omafeed_core::icons::normalize;
+    let png = normalize(br#"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"><rect width="20" height="10" fill="red"/></svg>"#).unwrap();
+    assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+    assert!(normalize(b"\x00\x00\x01\x00garbage").is_none());
+    assert!(normalize(br#"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><image href="file:///etc/passwd" width="20" height="20"/></svg>"#).is_none());
 }

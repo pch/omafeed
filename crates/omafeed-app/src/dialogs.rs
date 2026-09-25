@@ -14,7 +14,27 @@ impl Form {
         self.content.clone()
     }
     async fn run_future(&self) -> gtk::ResponseType {
-        if self.dialog.clone().choose_future(Some(&self.parent)).await == "save" {
+        // A fresh presentation avoids reparenting a previously closed AdwDialog.
+        let presentation = adw::AlertDialog::builder()
+            .heading(self.dialog.heading().unwrap_or_default())
+            .content_width(480)
+            .extra_child(&self.content)
+            .build();
+        presentation.add_responses(&[
+            ("cancel", "Cancel"),
+            ("save", self.dialog.response_label("save").as_str()),
+        ]);
+        presentation.set_default_response(Some("save"));
+        presentation.set_close_response("cancel");
+        presentation.set_response_appearance("save", adw::ResponseAppearance::Suggested);
+        let (closed, receiver) = async_channel::bounded(1);
+        presentation.connect_closed(move |_| {
+            let _ = closed.try_send(());
+        });
+        let response = presentation.clone().choose_future(Some(&self.parent)).await;
+        let _ = receiver.recv().await;
+        presentation.set_extra_child(None::<&gtk::Widget>);
+        if response == "save" {
             gtk::ResponseType::Accept
         } else {
             gtk::ResponseType::Cancel
@@ -26,7 +46,6 @@ fn dialog(parent: &impl IsA<gtk::Window>, title: &str) -> Form {
     let dialog = adw::AlertDialog::builder()
         .heading(title)
         .content_width(480)
-        .extra_child(&content)
         .build();
     dialog.add_responses(&[("cancel", "Cancel"), ("save", "Save")]);
     dialog.set_default_response(Some("save"));
@@ -216,7 +235,7 @@ pub fn library(u: Rc<Ui>) {
                 let lib = u.library.borrow();
                 for (folder, path) in folders(&lib) {
                     if let Some(id) = folder {
-                        let row = gtk::Label::new(Some(&format!("▾ {path}")));
+                        let row = gtk::Label::new(Some(&path.to_string()));
                         row.set_xalign(0.0);
                         row.set_margin_top(12);
                         row.set_margin_bottom(12);
@@ -323,9 +342,20 @@ pub fn library(u: Rc<Ui>) {
                     ),
                 }
             };
-            let name_entry = entry(&d, "Name", &name);
+            let name_entry = entry(
+                &d,
+                if editing_folder {
+                    "Name"
+                } else {
+                    "Name (optional)"
+                },
+                &name,
+            );
+            if !editing_folder {
+                name_entry.set_placeholder_text(Some("Use feed title"));
+            }
             let url_entry = if !editing_folder {
-                let e = entry(&d, "Feed URL (RSS, Atom, or JSON Feed)", &url);
+                let e = entry(&d, "Website or feed URL", &url);
                 Some(e)
             } else {
                 None
@@ -335,12 +365,98 @@ pub fn library(u: Rc<Ui>) {
                 if d.run_future().await != gtk::ResponseType::Accept {
                     break;
                 }
-                let name = name_entry.text().to_string();
+                let mut name = name_entry.text().to_string();
                 let parent = ids[picker.selected() as usize];
-                let url = url_entry
+                let mut url = url_entry
                     .as_ref()
                     .map(|e| e.text().to_string())
                     .unwrap_or_default();
+                if !editing_folder
+                    && (id.is_none()
+                        || url != {
+                            let lib = u.library.borrow();
+                            lib.feeds
+                                .iter()
+                                .find(|f| Some(f.id) == id)
+                                .map(|f| f.url.clone())
+                                .unwrap_or_default()
+                        })
+                {
+                    u.status.set_text("Looking for feeds…");
+                    let progress = adw::AlertDialog::builder()
+                        .heading("Looking for feeds…")
+                        .body("Checking the website for RSS, Atom, and JSON feeds.")
+                        .build();
+                    let spinner = gtk::Spinner::new();
+                    spinner.start();
+                    progress.set_extra_child(Some(&spinner));
+                    progress.add_response("cancel", "Cancel");
+                    progress.set_close_response("cancel");
+                    let (cancel, cancelled) = async_channel::bounded::<()>(1);
+                    progress.connect_response(None, move |_, _| {
+                        let _ = cancel.try_send(());
+                    });
+                    let (closed, receiver) = async_channel::bounded(1);
+                    progress.connect_closed(move |_| {
+                        let _ = closed.try_send(());
+                    });
+                    progress.present(Some(&window));
+                    let discovered = tokio::select! {
+                        result = u.discover(url.clone()) => Some(result),
+                        _ = cancelled.recv() => None,
+                    };
+                    if discovered.is_some() {
+                        progress.close();
+                    }
+                    let _ = receiver.recv().await;
+                    u.status.set_text("Ready");
+                    let Some(discovered) = discovered else {
+                        continue;
+                    };
+                    let mut feeds = match discovered {
+                        Ok(feeds) => feeds,
+                        Err(e) => {
+                            let msg = gtk::Label::new(Some(&format!("{e:#}")));
+                            msg.set_wrap(true);
+                            msg.add_css_class("error");
+                            d.content_area().append(&msg);
+                            continue;
+                        }
+                    };
+                    let choice = if feeds.len() > 1 {
+                        let choose = dialog(&window, "Choose a feed");
+                        let labels = feeds
+                            .iter()
+                            .map(|f| format!("{} — {}", f.title, f.url))
+                            .collect::<Vec<_>>();
+                        let names = labels.iter().map(String::as_str).collect::<Vec<_>>();
+                        let picker = gtk::DropDown::from_strings(&names);
+                        choose.content_area().append(&picker);
+                        choose.dialog.set_response_label("save", "Subscribe");
+                        if choose.run_future().await != gtk::ResponseType::Accept {
+                            continue;
+                        }
+                        picker.selected() as usize
+                    } else {
+                        0
+                    };
+                    let feed = feeds.remove(choice);
+                    url = feed.url;
+                    if name.trim().is_empty() {
+                        name = feed.title;
+                    }
+                    let duplicate = u
+                        .library
+                        .borrow()
+                        .feeds
+                        .iter()
+                        .find(|f| f.url == url && Some(f.id) != id)
+                        .map(|f| f.title.clone());
+                    if let Some(title) = duplicate {
+                        u.toast(&format!("Already subscribed to {title}"));
+                        break;
+                    }
+                }
                 let result =
                     u.db.call(move |s| {
                         if editing_folder {

@@ -7,3 +7,5 @@ pub use db::{Db, Store};
 pub use settings::{Paths, Settings};
 
 pub mod icons;
+
+pub mod discovery;
