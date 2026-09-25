@@ -1,0 +1,80 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    name: Build release artifacts
+    needs: ci
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    timeout-minutes: 45
+    steps:
+      - name: Install dependencies
+        run: pacman -Syu --noconfirm --needed rust git gtk4 libadwaita webkitgtk-6.0 pkgconf
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check tag matches Cargo version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match Cargo version $version"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Build and stage
+        run: |
+          make build
+          make install DESTDIR="$PWD/stage" PREFIX=/usr
+      - name: Package
+        run: |
+          mkdir dist
+          name="omafeed-$VERSION-$(uname -m)-linux"
+          tar -C stage -czf "dist/$name.tar.gz" usr
+          # Fill the source checksum into the release PKGBUILD.
+          curl -fsSL "https://github.com/$GITHUB_REPOSITORY/archive/refs/tags/$GITHUB_REF_NAME.tar.gz" -o source.tar.gz
+          sum=$(sha256sum source.tar.gz | cut -d' ' -f1)
+          sed -e "s/^pkgver=.*/pkgver=$VERSION/" -e "s/^sha256sums=.*/sha256sums=('$sum')/" \
+            packaging/omafeed/PKGBUILD > dist/PKGBUILD
+          cd dist && sha256sum -- * > SHA256SUMS
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "Omafeed ${GITHUB_REF_NAME#v}" \
+            --generate-notes \
+            --notes "Binaries are built on Arch Linux and need gtk4, libadwaita, and webkitgtk-6.0. For an Arch package, download PKGBUILD and run makepkg -si."

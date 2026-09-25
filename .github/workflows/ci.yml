@@ -1,15 +1,80 @@
-name: Rust
-on: [push, pull_request]
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
 permissions:
   contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   check:
+    name: Lint, test, and smoke test
     runs-on: ubuntu-latest
     container: archlinux:base-devel
+    timeout-minutes: 45
     steps:
-      - run: pacman -Syu --noconfirm rust git gtk4 libadwaita webkitgtk-6.0 pkgconf
-      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: >-
+          pacman -Syu --noconfirm --needed
+          rust git gtk4 libadwaita webkitgtk-6.0 pkgconf
+          xorg-server-xvfb dbus desktop-file-utils appstream
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Check minimum Rust version
+        run: |
+          msrv=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)
+          have=$(rustc --version | cut -d' ' -f2)
+          printf '%s\n%s\n' "$msrv" "$have" | sort -VC || { echo "rustc $have < MSRV $msrv"; exit 1; }
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
-      - run: cargo build --release --locked
+      - name: Desktop smoke test (headless GTK/WebKit)
+        env:
+          # Containers lack the namespaces WebKit's sandbox needs, and a GPU.
+          WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: "1"
+          WEBKIT_DISABLE_COMPOSITING_MODE: "1"
+          GSK_RENDERER: cairo
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: >-
+          dbus-run-session -- xvfb-run -a
+          cargo test -p omafeed --locked desktop_smoke -- --ignored --test-threads=1
+      - name: Validate desktop entry and AppStream metadata
+        run: |
+          desktop-file-validate data/io.github.pch.Omafeed.desktop
+          appstreamcli validate --no-net data/io.github.pch.Omafeed.metainfo.xml
+
+  package:
+    name: Build Arch package
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    timeout-minutes: 45
+    steps:
+      - name: Install dependencies
+        run: pacman -Syu --noconfirm --needed rust git gtk4 libadwaita webkitgtk-6.0 pkgconf namcap
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: makepkg (current checkout)
+        run: |
+          useradd -m builder
+          chown -R builder "$GITHUB_WORKSPACE"
+          # Build the -git recipe from this checkout rather than the published repository.
+          sed -i "s|git+https://github.com/pch/omafeed.git|git+file://$GITHUB_WORKSPACE|" packaging/omafeed-git/PKGBUILD
+          su builder -c "git config --global --add safe.directory '*' && cd packaging/omafeed-git && makepkg --noconfirm"
+          namcap packaging/omafeed-git/PKGBUILD packaging/omafeed-git/*.pkg.tar.zst
+
+  audit:
+    name: Dependency licenses and advisories
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1

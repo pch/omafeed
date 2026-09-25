@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.pch.Omafeed</id>
+  <name>Omafeed</name>
+  <summary>A quiet home for your feeds</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <developer id="io.github.pch">
+    <name>pch</name>
+  </developer>
+  <description>
+    <p>
+      Omafeed is a native RSS reader for Linux and Omarchy. A three-pane library, article list,
+      and reading view keeps your subscriptions and articles on your computer.
+    </p>
+    <ul>
+      <li>RSS, Atom, and JSON Feed with scheduled refresh while the app is open</li>
+      <li>Nested folders, OPML import and export, and full-text search</li>
+      <li>Sanitized, readable articles that work offline</li>
+      <li>Keyboard navigation and Omarchy theme following</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.pch.Omafeed.desktop</launchable>
+  <url type="homepage">https://github.com/pch/omafeed</url>
+  <url type="bugtracker">https://github.com/pch/omafeed/issues</url>
+  <content_rating type="oars-1.1"/>
+  <provides>
+    <binary>omafeed</binary>
+  </provides>
+  <releases>
+    <release version="0.1.0" date="2026-09-25"/>
+  </releases>
+</component>

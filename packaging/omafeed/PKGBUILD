@@ -1,46 +1,38 @@
 # Maintainer: pch <https://github.com/pch>
-pkgname=omafeed-git
+pkgname=omafeed
 pkgver=0.1.0
 pkgrel=1
-pkgdesc='A native Rust RSS reader for Linux and Omarchy (development version)'
+pkgdesc='A native Rust RSS reader for Linux and Omarchy'
 arch=('x86_64' 'aarch64')
 url='https://github.com/pch/omafeed'
 license=('MIT')
 depends=('gcc-libs' 'glibc' 'gtk4' 'libadwaita' 'webkitgtk-6.0')
-makedepends=('cargo' 'git' 'pkgconf')
-provides=('omafeed')
-conflicts=('omafeed')
-source=('omafeed::git+https://github.com/pch/omafeed.git')
+makedepends=('cargo' 'pkgconf')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/pch/omafeed/archive/refs/tags/v$pkgver.tar.gz")
+# The release workflow publishes this file with the real checksum filled in.
 sha256sums=('SKIP')
 
-pkgver() {
-  cd omafeed
-  local version
-  version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
-  printf '%s.r%s.%s' "$version" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
-}
-
 prepare() {
-  cd omafeed
+  cd "omafeed-$pkgver"
   export RUSTUP_TOOLCHAIN=stable
   cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
 }
 
 build() {
-  cd omafeed
+  cd "omafeed-$pkgver"
   export RUSTUP_TOOLCHAIN=stable
   export CARGO_TARGET_DIR=target
   cargo build --frozen --release
 }
 
 check() {
-  cd omafeed
+  cd "omafeed-$pkgver"
   export RUSTUP_TOOLCHAIN=stable
   export CARGO_TARGET_DIR=target
   cargo test --frozen --workspace
 }
 
 package() {
-  cd omafeed
+  cd "omafeed-$pkgver"
   make install DESTDIR="$pkgdir" PREFIX=/usr
 }
