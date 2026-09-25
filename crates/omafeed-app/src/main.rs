@@ -16,6 +16,7 @@ pub const DB_FILE: &str = "omafeed.db";
     name = "omafeed",
     version,
     about = "Omafeed — a local RSS reader. Run without a command to open the reader.",
+    help_template = "{name} {version}\n{about}\n\n{usage-heading} {usage}\n\n{all-args}{after-help}",
     after_help = "OMAFEED_HOME overrides the data, config, and cache directories for testing."
 )]
 struct Args {

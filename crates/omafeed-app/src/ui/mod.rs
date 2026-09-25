@@ -31,6 +31,8 @@ const NARROW_MAX_WIDTH: f64 = 849.0;
 const MEDIUM_MAX_WIDTH: f64 = 999.0;
 /// How often to look for feeds whose refresh interval has elapsed.
 const REFRESH_CHECK_SECONDS: u32 = 30;
+/// How often to check whether another program (such as the command line) changed the library.
+const OUTSIDE_CHANGE_SECONDS: u32 = 2;
 /// Delay before writing settings, so rapid changes (e.g. holding J) coalesce.
 const SAVE_DELAY: Duration = Duration::from_millis(500);
 
@@ -245,6 +247,8 @@ pub struct Ui {
     /// Suppresses selection signals while lists are repopulated.
     rebuilding: Cell<bool>,
     busy: Cell<bool>,
+    /// The database change counter last seen, to notice writes by other programs.
+    data_version: Cell<Option<i64>>,
     save_pending: Cell<bool>,
     theme_pending: Cell<bool>,
     theme_monitors: RefCell<Vec<gio::FileMonitor>>,
@@ -342,6 +346,7 @@ impl Ui {
             pending_mark: Cell::new(None),
             rebuilding: Cell::new(false),
             busy: Cell::new(false),
+            data_version: Cell::new(None),
             save_pending: Cell::new(false),
             theme_pending: Cell::new(false),
             theme_monitors: RefCell::default(),
@@ -352,6 +357,7 @@ impl Ui {
         ui.connect_signals();
         ui.listen_for_progress(events);
         ui.schedule_refreshes();
+        ui.watch_for_outside_changes();
         ui.apply_layout();
         ui.window.present();
         ui.reload();
@@ -537,6 +543,34 @@ impl Ui {
             };
             u.start_refresh(false);
             glib::ControlFlow::Continue
+        });
+    }
+
+    /// Reload when another program changes the library, so `omafeed star 2` in a terminal
+    /// shows up in an open window. The window's own writes never trigger this.
+    fn watch_for_outside_changes(self: &Rc<Self>) {
+        self.check_for_outside_changes();
+        let weak = Rc::downgrade(self);
+        glib::timeout_add_seconds_local(OUTSIDE_CHANGE_SECONDS, move || {
+            let Some(u) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            u.check_for_outside_changes();
+            glib::ControlFlow::Continue
+        });
+    }
+
+    fn check_for_outside_changes(self: &Rc<Self>) {
+        let u = self.clone();
+        glib::spawn_future_local(async move {
+            let Ok(version) = u.db.call(|s| s.data_version()).await else {
+                return;
+            };
+            // The first reading is only a baseline.
+            let previous = u.data_version.replace(Some(version));
+            if previous.is_some_and(|p| p != version) {
+                u.reload();
+            }
         });
     }
 
