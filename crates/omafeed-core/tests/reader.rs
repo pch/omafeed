@@ -1,7 +1,7 @@
 use omafeed_core::{
     Db, Store, article,
     db::{Query, Scope},
-    fetch::{self, Download, Refresher},
+    fetch::{self, Download, Refresher, Update},
 };
 fn rss(body: &str) -> String {
     format!(
@@ -9,13 +9,12 @@ fn rss(body: &str) -> String {
     )
 }
 fn download(body: &str) -> Download {
-    Download {
+    Download::Updated(Update {
         site_url: Some("https://example.org/".into()),
         entries: fetch::parse(body.as_bytes(), "https://example.org/feed").unwrap(),
         etag: Some("v1".into()),
         modified: None,
-        not_modified: false,
-    }
+    })
 }
 fn all() -> Query {
     Query {
@@ -92,18 +91,7 @@ fn repeated_downloads_preserve_state_and_content_updates_are_searchable() {
         .is_empty()
     );
     let original_date = articles[0].published;
-    s.commit_download(
-        f,
-        Download {
-            site_url: Some("https://example.org/".into()),
-            entries: vec![],
-            etag: None,
-            modified: None,
-            not_modified: true,
-        },
-        30,
-    )
-    .unwrap();
+    s.commit_download(f, Download::NotModified, 30).unwrap();
     assert_eq!(s.articles(&all()).unwrap()[0].published, original_date);
     assert_eq!(s.library().unwrap().feeds[0].etag.as_deref(), Some("v1"));
 }
@@ -138,10 +126,12 @@ fn state_survives_reopen_and_feed_moves() {
 fn fallback_identity_is_stable_on_body_edits() {
     let a = rss("<item><title>No ID</title><description>before</description></item>");
     let b = a.replace("before", "after");
-    assert_eq!(
-        download(&a).entries[0].identity,
-        download(&b).entries[0].identity
-    );
+    let identity = |body: &str| {
+        fetch::parse(body.as_bytes(), "https://example.org/feed").unwrap()[0]
+            .identity
+            .clone()
+    };
+    assert_eq!(identity(&a), identity(&b));
 }
 #[test]
 fn atom_json_and_sanitized_relative_links() {
@@ -314,7 +304,10 @@ async fn redirects_are_followed_and_oversized_feeds_are_rejected() {
     s.add_feed("Test", &url, None).unwrap();
     let f = s.library().unwrap().feeds.remove(0);
     let client = reqwest::Client::new();
-    assert_eq!(fetch::download(&client, &f).await.unwrap().entries.len(), 1);
+    let Download::Updated(update) = fetch::download(&client, &f).await.unwrap() else {
+        panic!("expected content");
+    };
+    assert_eq!(update.entries.len(), 1);
     assert!(
         fetch::download(&client, &f)
             .await
@@ -424,4 +417,28 @@ fn icon_normalization_supports_svg_and_rejects_invalid_or_external_content() {
     assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
     assert!(normalize(b"\x00\x00\x01\x00garbage").is_none());
     assert!(normalize(br#"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><image href="file:///etc/passwd" width="20" height="20"/></svg>"#).is_none());
+}
+
+#[test]
+fn rss_enclosures_become_attachment_links_and_unsafe_article_links_are_dropped() {
+    let body = rss(concat!(
+        r#"<item><guid>ep1</guid><title>Episode</title><link>javascript:alert(1)</link>"#,
+        r#"<enclosure url="https://cdn.example.org/ep1.mp3" length="1" type="audio/mpeg"/></item>"#,
+        r#"<item><guid>post</guid><title>Post</title><link>/posts/1#comments</link>"#,
+        r#"<media:content xmlns:media="http://search.yahoo.com/mrss/" url="https://cdn.example.org/cover.jpg" medium="image" type="image/jpeg"/></item>"#,
+    ));
+    let entries = fetch::parse(body.as_bytes(), "https://example.org/feed").unwrap();
+    assert!(entries[0].html.contains("https://cdn.example.org/ep1.mp3"));
+    assert!(entries[0].url.is_empty());
+    assert!(!entries[1].html.contains("cover.jpg"));
+    assert_eq!(entries[1].url, "https://example.org/posts/1#comments");
+}
+#[test]
+fn edit_folder_is_atomic() {
+    let s = Store::open(":memory:").unwrap();
+    let a = s.add_folder("A", None).unwrap();
+    let b = s.add_folder("B", Some(a)).unwrap();
+    assert!(s.edit_folder(a, "Renamed", Some(b)).is_err());
+    let lib = s.library().unwrap();
+    assert_eq!(lib.folders.iter().find(|f| f.id == a).unwrap().name, "A");
 }

@@ -4,10 +4,16 @@ use sha2::{Digest, Sha256};
 use std::{
     io::Cursor,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 const ICON_LIMIT: usize = 1024 * 1024;
 const HEAD_LIMIT: usize = 512 * 1024;
+const CACHE_LIMIT: u64 = 32 * 1024 * 1024;
+const ICON_MAX_AGE: u64 = 7 * 86400;
+const MISS_MAX_AGE: u64 = 86400;
+
+/// Cache file for a website's icon, keyed by origin.
 pub fn path(cache: &Path, site_url: &str) -> PathBuf {
     let origin = url::Url::parse(site_url)
         .map(|u| u.origin().ascii_serialization())
@@ -23,6 +29,7 @@ fn recent(path: &Path, seconds: u64) -> bool {
         .and_then(|t| t.elapsed().ok())
         .is_some_and(|age| age.as_secs() < seconds)
 }
+/// Fetch `url`. With `prefix`, stop after `</head>` or truncate at `limit` instead of failing.
 async fn get(
     client: &reqwest::Client,
     url: &str,
@@ -50,9 +57,15 @@ async fn get(
             bytes.extend_from_slice(&chunk[..limit - bytes.len()]);
             break;
         }
+        // Only search the new data (plus a tag-sized overlap) for the end of <head>.
+        let search_from = bytes.len().saturating_sub(6);
         bytes.extend_from_slice(&chunk);
         // A large homepage body must not invalidate usable declarations in its head.
-        if prefix && bytes.windows(7).any(|w| w.eq_ignore_ascii_case(b"</head>")) {
+        if prefix
+            && bytes[search_from..]
+                .windows(7)
+                .any(|w| w.eq_ignore_ascii_case(b"</head>"))
+        {
             break;
         }
     }
@@ -148,35 +161,26 @@ fn save(target: &Path, bytes: &[u8]) -> bool {
     if std::fs::create_dir_all(parent).is_err() {
         return false;
     }
-    let tmp = target.with_extension("tmp");
-    std::fs::write(&tmp, bytes).is_ok() && std::fs::rename(tmp, target).is_ok()
+    // A unique temporary name keeps concurrent writers from interleaving.
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let tmp = target.with_extension(format!(
+        "{}.{}.tmp",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    if std::fs::write(&tmp, bytes).is_ok() && std::fs::rename(&tmp, target).is_ok() {
+        return true;
+    }
+    let _ = std::fs::remove_file(tmp);
+    false
 }
+
+/// Download, normalize, and cache the icon for `site_url`. Fresh icons and recent
+/// misses are skipped unless `force` is set (which retries misses only).
 pub async fn cache(client: &reqwest::Client, root: &Path, site_url: &str, force: bool) {
     let target = path(root, site_url);
     let failed = target.with_extension("failed");
-    if recent(&target, 7 * 86400)
-        && std::fs::read(&target)
-            .ok()
-            .and_then(|b| normalize(&b))
-            .is_some()
-    {
-        return;
-    }
-    // Upgrade the previous raw-format cache, including Windows ICOs, without waiting a week.
-    if !target.exists() {
-        let legacy = root
-            .join("icons")
-            .join(target.file_name().unwrap())
-            .with_extension("ico");
-        if recent(&legacy, 7 * 86400)
-            && let Ok(bytes) = std::fs::read(legacy)
-            && let Some(png) = normalize(&bytes)
-            && save(&target, &png)
-        {
-            return;
-        }
-    }
-    if !force && recent(&failed, 86400) {
+    if recent(&target, ICON_MAX_AGE) || (!force && recent(&failed, MISS_MAX_AGE)) {
         return;
     }
     let Ok(mut site) = url::Url::parse(site_url) else {
@@ -213,18 +217,24 @@ pub async fn cache(client: &reqwest::Client, root: &Path, site_url: &str, force:
             candidates.push(url.to_string());
         }
     }
+    // Page markup must not point requests at the local network unless the site lives there.
+    candidates.retain(|c| {
+        url::Url::parse(c)
+            .is_ok_and(|u| u.host_str() == site.host_str() || !crate::util::is_local_host(&u))
+    });
     for url in candidates {
-        if let Some((_, bytes)) = get(client, &url, ICON_LIMIT, false).await {
-            let png = tokio::task::spawn_blocking(move || normalize(&bytes))
-                .await
-                .ok()
-                .flatten();
-            if let Some(png) = png
-                && save(&target, &png)
-            {
-                let _ = std::fs::remove_file(failed);
-                return;
-            }
+        let Some((_, bytes)) = get(client, &url, ICON_LIMIT, false).await else {
+            continue;
+        };
+        let target = target.clone();
+        let saved = tokio::task::spawn_blocking(move || {
+            normalize(&bytes).is_some_and(|png| save(&target, &png))
+        })
+        .await
+        .unwrap_or(false);
+        if saved {
+            let _ = std::fs::remove_file(failed);
+            return;
         }
     }
     if let Some(dir) = target.parent() {
@@ -232,7 +242,7 @@ pub async fn cache(client: &reqwest::Client, root: &Path, site_url: &str, force:
     }
     let _ = std::fs::write(failed, []);
 }
-/// Keep the most recently written 32 MiB of normalized icons.
+/// Keep the most recently written icons within the cache size limit.
 pub fn prune(root: &Path) {
     let Ok(entries) = std::fs::read_dir(root.join("icons-v2")) else {
         return;
@@ -252,7 +262,7 @@ pub fn prune(root: &Path) {
     let mut total = 0;
     for (path, size, _) in files {
         total += size;
-        if total > 32 * 1024 * 1024 {
+        if total > CACHE_LIMIT {
             let _ = std::fs::remove_file(path);
         }
     }

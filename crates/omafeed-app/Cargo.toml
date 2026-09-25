@@ -1,19 +1,24 @@
 [package]
 name = "omafeed"
+description = "A native RSS reader for Linux and Omarchy"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+publish = false
 
 [dependencies]
 omafeed-core = { path = "../omafeed-core" }
-anyhow = "1"
-async-channel = "2"
-gtk = { package = "gtk4", version = "0.10", features = ["v4_12"] }
+anyhow.workspace = true
+async-channel.workspace = true
+chrono.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "macros"] }
 adw = { package = "libadwaita", version = "0.8", features = ["v1_6"] }
+clap = { version = "4", features = ["derive"] }
+gtk = { package = "gtk4", version = "0.10", features = ["v4_12"] }
 webkit6 = { version = "0.5", features = ["v2_42"] }
-chrono = "0.4"
-serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile.workspace = true
+tokio = { workspace = true, features = ["net", "io-util"] }

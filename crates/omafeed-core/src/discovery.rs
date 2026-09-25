@@ -1,4 +1,8 @@
 //! Resolve website subscriptions before adding anything to the library.
+use crate::{
+    http::{BODY_LIMIT, read_limited},
+    util::validate_url,
+};
 use anyhow::{Context, Result, bail};
 use futures_util::{StreamExt, stream};
 use reqwest::Client;
@@ -14,16 +18,7 @@ pub struct Candidate {
 async fn get(client: &Client, url: &str) -> Result<(String, Vec<u8>)> {
     let response = client.get(url).send().await?.error_for_status()?;
     let base = response.url().to_string();
-    let mut chunks = response.bytes_stream();
-    let mut data = Vec::new();
-    while let Some(chunk) = chunks.next().await {
-        let chunk = chunk?;
-        if data.len() + chunk.len() > 10 * 1024 * 1024 {
-            bail!("Response exceeds 10 MB");
-        }
-        data.extend_from_slice(&chunk);
-    }
-    Ok((base, data))
+    Ok((base, read_limited(response, BODY_LIMIT).await?))
 }
 fn candidate(data: &[u8], url: &str) -> Result<Candidate> {
     let feed = feed_rs::parser::Builder::new()
@@ -46,7 +41,7 @@ pub fn links(html: &str, base: &str) -> Vec<String> {
     };
     let doc = Html::parse_document(html);
     if let Some(href) = doc
-        .select(&Selector::parse("base[href]").unwrap())
+        .select(&Selector::parse("base[href]").expect("constant selector"))
         .next()
         .and_then(|e| e.value().attr("href"))
         && let Ok(url) = base.join(href)
@@ -54,7 +49,8 @@ pub fn links(html: &str, base: &str) -> Vec<String> {
         base = url;
     }
     let mut urls = Vec::new();
-    for e in doc.select(&Selector::parse("link[href], a[href]").unwrap()) {
+    let selector = Selector::parse("link[href], a[href]").expect("constant selector");
+    for e in doc.select(&selector) {
         let v = e.value();
         let mime = v
             .attr("type")
@@ -84,7 +80,7 @@ pub fn links(html: &str, base: &str) -> Vec<String> {
                 || href.ends_with("feed.xml"));
         if (advertised || conventional)
             && let Ok(url) = base.join(href)
-            && let Ok(url) = crate::opml::validate_url(url.as_str())
+            && let Ok(url) = validate_url(url.as_str())
             && !urls.contains(&url)
         {
             urls.push(url);
@@ -94,8 +90,7 @@ pub fn links(html: &str, base: &str) -> Vec<String> {
     urls
 }
 pub async fn discover(client: &Client, input: &str) -> Result<Vec<Candidate>> {
-    let url = crate::opml::validate_url(input)
-        .context("Enter a website or feed URL starting with https://")?;
+    let url = validate_url(input).context("Enter a website or feed URL starting with https://")?;
     let (base, data) = get(client, &url).await.context("Could not open this URL")?;
     let fallback_base = base.clone();
     let (direct, mut urls) = tokio::task::spawn_blocking(move || {
