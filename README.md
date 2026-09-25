@@ -9,7 +9,7 @@ A native RSS reader for Linux and Omarchy, written in Rust. A three-pane library
 - RSS, Atom, and JSON Feed; manual refresh and scheduled refresh while the app is open.
 - Nested folders: create, rename, move, and remove. Move feeds between folders without losing article history or read state. Removing a folder promotes its feeds and children to its parent.
 - OPML import/export with duplicate detection and preserved folder hierarchy.
-- A command line with JSON output, so scripts and LLM agents can list, search, star, and subscribe without the window.
+- A command line to list, search, star, and subscribe without the window, with `--json` output for scripts and LLM agents.
 - All Unread, Today, Starred, All Articles, folder and feed views; full-text search and unread filtering.
 - Read/unread, stars, bulk mark read with undo, and offline article text.
 - Sanitized HTML articles with images, code blocks, adjustable typography, copy link, and open original.
@@ -93,9 +93,9 @@ Not yet supported: full-article extraction, podcast playback, sync between devic
 | Command | What it does |
 | --- | --- |
 | `import FILE` / `export FILE` | Import or export subscriptions as OPML |
-| `refresh [--json]` | Fetch every feed now |
+| `refresh` | Fetch every feed now |
 | `status` | One line of totals, then any feed errors |
-| `discover URL [--json]` | List the feeds a website advertises |
+| `discover URL` | List the feeds a website advertises |
 | `feeds` | Folders, feeds, unread counts and feed errors |
 | `articles [OPTIONS]` | List articles, newest first |
 | `article ID [--html]` | One article's text, or its sanitized HTML |
@@ -113,22 +113,41 @@ Not yet supported: full-article extraction, podcast playback, sync between devic
 | `--since 24h` | Published within `90m`, `24h`, `2d` or `1w`. `--scope today` means since local midnight; `--since` is a rolling window |
 | `--limit N`, `--offset N` | Page through results (default 50) |
 
-### Output for scripts and LLMs
+Failures print a message to stderr and exit 1; a mistyped option exits 2. Feed and folder IDs come from `feeds`, article IDs from `articles`.
 
-`feeds`, `articles`, `article`, `read`, `unread`, `star`, `unstar`, `subscribe`, `unsubscribe`, `refresh --json` and `discover --json` print one line of JSON. Failures print a message to stderr and exit 1; a mistyped option exits 2. Feed and folder IDs come from `feeds`, article IDs from `articles`.
+Output is plain text by default. `feeds` prints tables, `articles` prints one tab-separated line per article (ID, read state, starred, date, feed, title) so `cut`, `awk` and `grep` work on it, and `article` prints a short header and then the text:
 
 ```console
 $ omafeed feeds
-{"feeds":[{"error":null,"folder":null,"id":1,"site_url":"https://blog.rust-lang.org/","title":"Rust Blog","unread":9,"url":"https://blog.rust-lang.org/feed.xml"}],"folders":[],"starred":1,"unread":9}
+1 feeds · 0 folders · 9 unread · 1 starred
 
-$ omafeed articles --since 24h --limit 1
+ID	UNREAD	FEED	FOLDER	ERROR
+1	9	Rust Blog		
+
+$ omafeed articles --scope all --limit 2
+1	read	starred	2026-09-22	Rust Blog	Announcing a Maintainer in Residence: Scott Schafer for the Cargo team
+2	unread	-	2026-09-21	Rust Blog	GitHub Actions leaking secrets when Miri output is cached
+More articles match; raise --limit or use --offset.
+
+$ omafeed star 2
+Starred 1 article
+```
+
+The "More articles match" note goes to stderr, so it never lands in a pipe.
+
+### JSON output
+
+Add `--json` to `feeds`, `articles`, `article`, `read`, `unread`, `star`, `unstar`, `subscribe`, `unsubscribe`, `refresh` or `discover` to get one line of JSON instead, for scripts and LLM agents:
+
+```console
+$ omafeed articles --since 24h --limit 1 --json
 {"articles":[{"author":"Manish Goregaokar","feed":"Rust Blog","feed_id":1,"id":2,"preview":"The Rust Security Response Team was notified that Miri stores all environment variables…","published":"2026-09-21T00:00:00+00:00","read":false,"starred":false,"title":"GitHub Actions leaking secrets when Miri output is cached","url":"https://blog.rust-lang.org/2026/09/21/…"}],"count":1,"truncated":true}
 
 $ omafeed refresh --json
 {"failed":0,"feeds":[{"error":null,"title":"Rust Blog"}],"total":1}
 ```
 
-- `preview` is the first 220 characters. `article ID` returns the whole text in `text`, or the sanitized HTML in `html`.
+- `preview` is the first 220 characters. `article ID --json` returns the whole text in `text`, or the sanitized HTML in `html`.
 - `truncated` is `true` when more articles matched than `--limit` returned. Raise the limit or page with `--offset`.
 - `read`, `unread`, `star` and `unstar` check every ID first, so one wrong ID changes nothing.
 - `unsubscribe` without `--yes` deletes nothing and reports how many articles, and how many starred ones, it would remove.
@@ -136,10 +155,10 @@ $ omafeed refresh --json
 A daily digest, for example, is four commands:
 
 ```sh
-omafeed refresh --json                              # which feeds updated, which failed
-omafeed articles --since 24h --unread --limit 200   # titles, previews, IDs
-omafeed article 42                                  # full text of the ones worth reading
-omafeed read 42 43 44                               # mark what was covered
+omafeed refresh --json                                    # which feeds updated, which failed
+omafeed articles --since 24h --unread --limit 200 --json  # titles, previews, IDs
+omafeed article 42 --json                                 # full text of the ones worth reading
+omafeed read 42 43 44                                     # mark what was covered
 ```
 
 Feed content is written by strangers. A tool that hands article text to a model should treat it as untrusted data, never as instructions.

@@ -4,11 +4,21 @@ use anyhow::{Context, Result, bail};
 use omafeed_core::{
     Db, Paths, Settings, Store,
     article::plain,
-    db::{Article, PAGE_SIZE, Query, Scope},
+    db::{Article, Folder, PAGE_SIZE, Query, Scope},
     fetch::{Progress, Refresher},
 };
 use serde_json::{Value, json};
 use std::path::PathBuf;
+
+/// Article IDs from `articles`, for the commands that change many articles at once.
+#[derive(clap::Args)]
+pub struct Ids {
+    #[arg(required = true)]
+    ids: Vec<i64>,
+    /// Print JSON instead of text
+    #[arg(long)]
+    json: bool,
+}
 
 #[derive(clap::Subcommand)]
 pub enum Command {
@@ -31,9 +41,13 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Print folders, feeds, unread counts and feed errors as JSON
-    Feeds,
-    /// Print articles as JSON, newest first
+    /// List folders, feeds, unread counts and feed errors
+    Feeds {
+        /// Print JSON instead of text
+        #[arg(long)]
+        json: bool,
+    },
+    /// List articles, newest first
     Articles {
         /// unread, today, starred, all, feed:ID or folder:ID
         #[arg(long, default_value = "unread", value_parser = parse_scope)]
@@ -51,33 +65,27 @@ pub enum Command {
         limit: usize,
         #[arg(long, default_value_t = 0)]
         offset: usize,
+        /// Print JSON, with a preview of each article, instead of text
+        #[arg(long)]
+        json: bool,
     },
-    /// Print one article as JSON, with its text (or sanitized HTML with --html)
+    /// Print one article's text (or sanitized HTML with --html)
     Article {
         id: i64,
         #[arg(long)]
         html: bool,
+        /// Print JSON instead of text
+        #[arg(long)]
+        json: bool,
     },
     /// Mark articles read
-    Read {
-        #[arg(required = true)]
-        ids: Vec<i64>,
-    },
+    Read(Ids),
     /// Mark articles unread
-    Unread {
-        #[arg(required = true)]
-        ids: Vec<i64>,
-    },
+    Unread(Ids),
     /// Star articles
-    Star {
-        #[arg(required = true)]
-        ids: Vec<i64>,
-    },
+    Star(Ids),
     /// Remove the star from articles
-    Unstar {
-        #[arg(required = true)]
-        ids: Vec<i64>,
-    },
+    Unstar(Ids),
     /// Subscribe to a website or feed URL; run `refresh` afterwards to fetch articles
     Subscribe {
         url: String,
@@ -87,6 +95,9 @@ pub enum Command {
         /// Name to use instead of the feed's own title
         #[arg(long)]
         title: Option<String>,
+        /// Print JSON instead of text
+        #[arg(long)]
+        json: bool,
     },
     /// Delete a feed and all its articles, starred ones included (requires --yes)
     Unsubscribe {
@@ -94,6 +105,9 @@ pub enum Command {
         /// Confirm the permanent deletion
         #[arg(long)]
         yes: bool,
+        /// Print JSON instead of text
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -108,7 +122,7 @@ pub fn run(command: Command) -> Result<()> {
             Command::Refresh { json } => refresh(&db, &paths, json).await,
             Command::Status => status(&db).await,
             Command::Discover { url, json } => discover(&url, json).await,
-            Command::Feeds => feeds(&db).await,
+            Command::Feeds { json } => feeds(&db, json).await,
             Command::Articles {
                 scope,
                 search,
@@ -116,6 +130,7 @@ pub fn run(command: Command) -> Result<()> {
                 since,
                 limit,
                 offset,
+                json,
             } => {
                 let query = Query {
                     scope,
@@ -124,15 +139,28 @@ pub fn run(command: Command) -> Result<()> {
                     offset,
                 };
                 let cutoff = since.map(|seconds| chrono::Utc::now().timestamp() - seconds);
-                articles(&db, query, limit, cutoff).await
+                articles(&db, query, limit, cutoff, json).await
             }
-            Command::Article { id, html } => article(&db, id, html).await,
-            Command::Read { ids } => set_state(&db, ids, |s, id| s.set_read(id, true)).await,
-            Command::Unread { ids } => set_state(&db, ids, |s, id| s.set_read(id, false)).await,
-            Command::Star { ids } => set_state(&db, ids, |s, id| s.set_starred(id, true)).await,
-            Command::Unstar { ids } => set_state(&db, ids, |s, id| s.set_starred(id, false)).await,
-            Command::Subscribe { url, folder, title } => subscribe(&db, &url, folder, title).await,
-            Command::Unsubscribe { id, yes } => unsubscribe(&db, id, yes).await,
+            Command::Article { id, html, json } => article(&db, id, html, json).await,
+            Command::Read(i) => {
+                set_state(&db, i, "Marked {} read", |s, id| s.set_read(id, true)).await
+            }
+            Command::Unread(i) => {
+                set_state(&db, i, "Marked {} unread", |s, id| s.set_read(id, false)).await
+            }
+            Command::Star(i) => {
+                set_state(&db, i, "Starred {}", |s, id| s.set_starred(id, true)).await
+            }
+            Command::Unstar(i) => {
+                set_state(&db, i, "Unstarred {}", |s, id| s.set_starred(id, false)).await
+            }
+            Command::Subscribe {
+                url,
+                folder,
+                title,
+                json,
+            } => subscribe(&db, &url, folder, title, json).await,
+            Command::Unsubscribe { id, yes, json } => unsubscribe(&db, id, yes, json).await,
         }
     })
 }
@@ -287,6 +315,39 @@ fn iso(timestamp: i64) -> Option<String> {
     chrono::DateTime::from_timestamp(timestamp, 0).map(|d| d.to_rfc3339())
 }
 
+/// Feed content on one line, so tabs and newlines cannot break tab-separated output.
+fn line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn day(timestamp: i64) -> String {
+    chrono::DateTime::from_timestamp(timestamp, 0)
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        .unwrap_or_default()
+}
+
+/// A folder's name with its parents, such as `Work/Blogs`; empty for no folder.
+fn folder_path(folders: &[Folder], id: Option<i64>) -> String {
+    let mut names = Vec::new();
+    let mut next = id;
+    while let Some(id) = next {
+        let Some(folder) = folders.iter().find(|f| f.id == id) else {
+            break;
+        };
+        names.push(line(&folder.name));
+        next = folder.parent;
+        if names.len() > folders.len() {
+            break;
+        }
+    }
+    names.reverse();
+    names.join("/")
+}
+
+fn plural(count: usize, noun: &str) -> String {
+    format!("{count} {noun}{}", if count == 1 { "" } else { "s" })
+}
+
 fn summary(a: &Article) -> Value {
     json!({
         "id": a.id,
@@ -301,8 +362,44 @@ fn summary(a: &Article) -> Value {
     })
 }
 
-async fn feeds(db: &Db) -> Result<()> {
+async fn feeds(db: &Db, json: bool) -> Result<()> {
     let lib = db.call(|s| s.library()).await?;
+    if !json {
+        println!(
+            "{} feeds · {} folders · {} unread · {} starred",
+            lib.feeds.len(),
+            lib.folders.len(),
+            lib.unread,
+            lib.starred
+        );
+        if !lib.folders.is_empty() {
+            // Sorted by full path, so a folder comes right before its subfolders.
+            let mut paths: Vec<_> = lib
+                .folders
+                .iter()
+                .map(|f| (folder_path(&lib.folders, Some(f.id)), f.id))
+                .collect();
+            paths.sort_by_key(|(path, id)| (path.to_lowercase(), *id));
+            println!("\nID\tFOLDER");
+            for (path, id) in paths {
+                println!("{id}\t{path}");
+            }
+        }
+        if !lib.feeds.is_empty() {
+            println!("\nID\tUNREAD\tFEED\tFOLDER\tERROR");
+            for f in &lib.feeds {
+                println!(
+                    "{}\t{}\t{}\t{}\t{}",
+                    f.id,
+                    f.unread,
+                    line(&f.title),
+                    folder_path(&lib.folders, f.folder),
+                    f.error.as_deref().map(line).unwrap_or_default()
+                );
+            }
+        }
+        return Ok(());
+    }
     let folders: Vec<_> = lib
         .folders
         .iter()
@@ -332,7 +429,13 @@ async fn feeds(db: &Db) -> Result<()> {
 }
 
 /// Newest-first articles, reading past one page when `limit` or `since` asks for more.
-async fn articles(db: &Db, query: Query, limit: usize, since: Option<i64>) -> Result<()> {
+async fn articles(
+    db: &Db,
+    query: Query,
+    limit: usize,
+    since: Option<i64>,
+    json: bool,
+) -> Result<()> {
     let mut found = Vec::new();
     let mut offset = query.offset;
     loop {
@@ -355,9 +458,26 @@ async fn articles(db: &Db, query: Query, limit: usize, since: Option<i64>) -> Re
         }
     }
     let truncated = found.len() > limit;
+    found.truncate(limit);
+    if !json {
+        for a in &found {
+            println!(
+                "{}\t{}\t{}\t{}\t{}\t{}",
+                a.id,
+                if a.read { "read" } else { "unread" },
+                if a.starred { "starred" } else { "-" },
+                day(a.published),
+                line(&a.feed_title),
+                line(&a.title)
+            );
+        }
+        if truncated {
+            eprintln!("More articles match; raise --limit or use --offset.");
+        }
+        return Ok(());
+    }
     let items: Vec<_> = found
         .iter()
-        .take(limit)
         .map(|a| {
             let mut item = summary(a);
             item["preview"] = json!(a.preview);
@@ -367,22 +487,47 @@ async fn articles(db: &Db, query: Query, limit: usize, since: Option<i64>) -> Re
     print_json(&json!({ "count": items.len(), "truncated": truncated, "articles": items }))
 }
 
-async fn article(db: &Db, id: i64, html: bool) -> Result<()> {
+async fn article(db: &Db, id: i64, html: bool, json: bool) -> Result<()> {
     let a = db
         .call(move |s| s.article(id))
         .await
         .map_err(|_| anyhow::anyhow!("No article with id {id}"))?;
-    let mut item = summary(&a);
-    if html {
-        item["html"] = json!(a.html);
-    } else {
-        item["text"] = json!(plain(&a.html));
+    if json {
+        let mut item = summary(&a);
+        if html {
+            item["html"] = json!(a.html);
+        } else {
+            item["text"] = json!(plain(&a.html));
+        }
+        return print_json(&item);
     }
-    print_json(&item)
+    let mut details = vec![line(&a.feed_title)];
+    if !a.author.is_empty() {
+        details.push(line(&a.author));
+    }
+    details.push(day(a.published));
+    details.push(if a.read { "read" } else { "unread" }.into());
+    if a.starred {
+        details.push("starred".into());
+    }
+    println!("{}\n{}", line(&a.title), details.join(" · "));
+    if !a.url.is_empty() {
+        println!("{}", a.url);
+    }
+    println!("\n{}", if html { a.html } else { plain(&a.html) });
+    Ok(())
 }
 
-/// Apply `change` to every article, or to none if any ID does not exist.
-async fn set_state(db: &Db, ids: Vec<i64>, change: fn(&Store, i64) -> Result<()>) -> Result<()> {
+/// Apply `change` to every article, or to none if any ID does not exist. `message` says
+/// what happened, with `{}` standing for the count, such as "Starred 2 articles".
+async fn set_state(
+    db: &Db,
+    Ids { mut ids, json }: Ids,
+    message: &str,
+    change: fn(&Store, i64) -> Result<()>,
+) -> Result<()> {
+    ids.sort_unstable();
+    ids.dedup();
     let count = ids.len();
     db.call(move |s| {
         for &id in &ids {
@@ -396,10 +541,20 @@ async fn set_state(db: &Db, ids: Vec<i64>, change: fn(&Store, i64) -> Result<()>
         Ok(())
     })
     .await?;
-    print_json(&json!({ "updated": count }))
+    if json {
+        return print_json(&json!({ "updated": count }));
+    }
+    println!("{}", message.replace("{}", &plural(count, "article")));
+    Ok(())
 }
 
-async fn subscribe(db: &Db, url: &str, folder: Option<i64>, title: Option<String>) -> Result<()> {
+async fn subscribe(
+    db: &Db,
+    url: &str,
+    folder: Option<i64>,
+    title: Option<String>,
+    json: bool,
+) -> Result<()> {
     let found = Refresher::new()?.discover(url).await?;
     let Some(pick) = found.first() else {
         bail!("No feed found at {url}");
@@ -410,6 +565,16 @@ async fn subscribe(db: &Db, url: &str, folder: Option<i64>, title: Option<String
     let id = db
         .call(move |s| s.add_feed(&add_name, &add_url, folder))
         .await?;
+    if !json {
+        println!(
+            "Subscribed to \"{}\" (feed {id}). Run omafeed refresh to fetch its articles.",
+            line(&name)
+        );
+        for other in &found[1..] {
+            println!("Also found: {}\t{}", line(&other.title), other.url);
+        }
+        return Ok(());
+    }
     let others: Vec<_> = found[1..]
         .iter()
         .map(|c| json!({ "title": c.title, "url": c.url }))
@@ -417,7 +582,7 @@ async fn subscribe(db: &Db, url: &str, folder: Option<i64>, title: Option<String
     print_json(&json!({ "id": id, "title": name, "url": feed_url, "other_feeds_found": others }))
 }
 
-async fn unsubscribe(db: &Db, id: i64, yes: bool) -> Result<()> {
+async fn unsubscribe(db: &Db, id: i64, yes: bool, json: bool) -> Result<()> {
     let (title, url, total, starred) = db
         .call(move |s| {
             let Some(feed) = s.library()?.feeds.into_iter().find(|f| f.id == id) else {
@@ -433,6 +598,13 @@ async fn unsubscribe(db: &Db, id: i64, yes: bool) -> Result<()> {
         );
     }
     db.call(move |s| s.delete_feed(id)).await?;
+    if !json {
+        println!(
+            "Removed \"{}\" and its {total} articles ({starred} starred)",
+            line(&title)
+        );
+        return Ok(());
+    }
     print_json(&json!({
         "removed": { "id": id, "title": title, "url": url, "articles": total, "starred": starred }
     }))
@@ -504,5 +676,41 @@ mod tests {
                 .contains("expected a number")
         );
         assert!(parse_scope("bogus").unwrap_err().contains("unknown scope"));
+    }
+
+    fn folder(id: i64, parent: Option<i64>, name: &str) -> Folder {
+        Folder {
+            id,
+            parent,
+            name: name.into(),
+        }
+    }
+
+    #[test]
+    fn folder_paths_join_parents_and_survive_bad_data() {
+        let folders = [
+            folder(1, None, "Work"),
+            folder(2, Some(1), "Blogs"),
+            folder(3, Some(99), "Orphan"),
+            folder(4, Some(5), "Loop A"),
+            folder(5, Some(4), "Loop B"),
+        ];
+        assert_eq!(folder_path(&folders, None), "");
+        assert_eq!(folder_path(&folders, Some(1)), "Work");
+        assert_eq!(folder_path(&folders, Some(2)), "Work/Blogs");
+        assert_eq!(folder_path(&folders, Some(3)), "Orphan");
+        assert_eq!(folder_path(&folders, Some(404)), "");
+        // A cycle cannot happen in a real library, but must not hang the command.
+        assert!(!folder_path(&folders, Some(4)).is_empty());
+    }
+
+    #[test]
+    fn feed_content_is_flattened_to_one_line() {
+        assert_eq!(line("a\tb\n  c\r\nd"), "a b c d");
+        assert_eq!(line("  "), "");
+        assert_eq!(day(0), "1970-01-01");
+        assert_eq!(plural(1, "article"), "1 article");
+        assert_eq!(plural(0, "article"), "0 articles");
+        assert_eq!(plural(2, "article"), "2 articles");
     }
 }

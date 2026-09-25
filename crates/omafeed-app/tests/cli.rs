@@ -100,7 +100,13 @@ impl Cli {
         }
     }
 
+    /// Run `args --json` (unless it already says so) and parse the one line it prints.
     fn json(&self, args: &[&str]) -> Value {
+        let mut args = args.to_vec();
+        if !args.contains(&"--json") {
+            args.push("--json");
+        }
+        let args = &args[..];
         let run = self.run(args);
         assert_eq!(run.code, 0, "{args:?} failed: {}", run.stderr);
         assert_eq!(run.stdout.lines().count(), 1, "{args:?} is not one line");
@@ -500,4 +506,137 @@ fn refresh_json_reports_which_feeds_failed() {
         .unwrap();
     assert!(dead["error"].is_string());
     assert_eq!(feeds["unread"], 2);
+}
+
+#[test]
+fn text_is_the_default_and_json_must_be_asked_for() {
+    let cli = Cli::new();
+    let local = serve(old_feed());
+    let other = serve(channel(
+        "Other Feed",
+        &item("Today's post", "9", &hours_ago(0), "News"),
+    ));
+    let opml = cli.0.path().join("subscriptions.opml");
+    std::fs::write(
+        &opml,
+        format!(
+            r#"<opml version="2.0"><body><outline text="Work"><outline text="Sub"><outline text="Local Feed" xmlUrl="{local}"/></outline></outline><outline text="Other Feed" xmlUrl="{other}"/></body></opml>"#
+        ),
+    )
+    .unwrap();
+    assert_eq!(cli.run(&["import", opml.to_str().unwrap()]).code, 0);
+    cli.json(&["refresh"]);
+
+    // Every command prints text unless --json is given: no line starts like JSON.
+    let text = |args: &[&str]| {
+        let run = cli.run(args);
+        assert_eq!(run.code, 0, "{args:?}: {}", run.stderr);
+        assert!(
+            !run.stdout.starts_with(['{', '[']),
+            "{args:?}: {}",
+            run.stdout
+        );
+        run.stdout
+    };
+
+    let feeds = cli.json(&["feeds"]);
+    let id_of = |title: &str| {
+        feeds["feeds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["title"] == title)
+            .unwrap()["id"]
+            .to_string()
+    };
+    let folder_of = |name: &str| {
+        feeds["folders"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["name"] == name)
+            .unwrap()["id"]
+            .to_string()
+    };
+    let (local_id, other_id) = (id_of("Local Feed"), id_of("Other Feed"));
+    let (work_id, sub_id) = (folder_of("Work"), folder_of("Sub"));
+    assert_eq!(
+        text(&["feeds"]),
+        format!(
+            "2 feeds · 2 folders · 3 unread · 0 starred\n\
+             \nID\tFOLDER\n{work_id}\tWork\n{sub_id}\tWork/Sub\n\
+             \nID\tUNREAD\tFEED\tFOLDER\tERROR\n\
+             {local_id}\t2\tLocal Feed\tWork/Sub\t\n{other_id}\t1\tOther Feed\t\t\n"
+        )
+    );
+
+    let all = cli.json(&["articles", "--scope", "all"]);
+    let ids: Vec<String> = all["articles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["id"].to_string())
+        .collect();
+    let today = all["articles"][0]["published"].as_str().unwrap()[..10].to_string();
+    assert_eq!(
+        text(&["articles", "--scope", "all"]),
+        format!(
+            "{}\tunread\t-\t{today}\tOther Feed\tToday's post\n\
+             {}\tunread\t-\t2024-01-02\tLocal Feed\tSecond\n\
+             {}\tunread\t-\t2024-01-01\tLocal Feed\tFirst\n",
+            ids[0], ids[1], ids[2]
+        )
+    );
+    assert_eq!(text(&["articles", "--scope", "feed:999"]), "");
+
+    // A list cut short says so on stderr, keeping stdout clean for pipes.
+    let cut = cli.run(&["articles", "--scope", "all", "--limit", "1"]);
+    assert_eq!(cut.stdout.lines().count(), 1);
+    assert!(cut.stderr.contains("More articles match"), "{}", cut.stderr);
+    assert!(cli.run(&["articles", "--scope", "all"]).stderr.is_empty());
+
+    let second = &ids[1];
+    assert_eq!(
+        text(&["article", second]),
+        "Second\nLocal Feed · 2024-01-02 · unread\nhttp://localhost/2\n\nGoodbye\n"
+    );
+    assert!(text(&["article", second, "--html"]).contains("<p>Goodbye</p>"));
+
+    assert_eq!(text(&["star", second]), "Starred 1 article\n");
+    assert!(text(&["article", second]).contains("Local Feed · 2024-01-02 · unread · starred"));
+    assert!(text(&["articles", "--scope", "starred"]).contains("\tunread\tstarred\t2024-01-02"));
+    assert_eq!(text(&["unstar", second]), "Unstarred 1 article\n");
+    assert_eq!(
+        text(&["read", &ids[0], &ids[1]]),
+        "Marked 2 articles read\n"
+    );
+    assert_eq!(text(&["unread", second]), "Marked 1 article unread\n");
+    // Naming an article twice counts it once.
+    assert_eq!(text(&["read", second, second]), "Marked 1 article read\n");
+    assert_eq!(cli.json(&["read", second, second])["updated"], 1);
+
+    let extra = serve(channel(
+        "Extra",
+        &item("Extra post", "e", &hours_ago(1), "x"),
+    ));
+    let subscribed = text(&["subscribe", &extra, "--folder", &sub_id]);
+    assert!(
+        subscribed.starts_with(r#"Subscribed to "Extra" (feed "#)
+            && subscribed.ends_with("). Run omafeed refresh to fetch its articles.\n"),
+        "{subscribed}"
+    );
+    let feeds = text(&["feeds"]);
+    assert!(feeds.contains("\tExtra\tWork/Sub\t\n"), "{feeds}");
+    let extra_id = feeds
+        .lines()
+        .find(|l| l.contains("\tExtra\t"))
+        .unwrap()
+        .split('\t')
+        .next()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        text(&["unsubscribe", &extra_id, "--yes"]),
+        "Removed \"Extra\" and its 0 articles (0 starred)\n"
+    );
 }
