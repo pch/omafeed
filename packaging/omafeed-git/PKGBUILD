@@ -6,8 +6,11 @@ pkgdesc='A native Rust RSS reader for Linux and Omarchy (development version)'
 arch=('x86_64' 'aarch64')
 url='https://github.com/pch/omafeed'
 license=('MIT')
-depends=('gcc-libs' 'glibc' 'gtk4' 'libadwaita' 'webkitgtk-6.0')
+depends=('glib2' 'glibc' 'gtk4' 'hicolor-icon-theme' 'libadwaita' 'libgcc' 'webkitgtk-6.0')
 makedepends=('cargo' 'git' 'pkgconf')
+# makepkg's LTO flags turn bundled C code (SQLite, ring) into GCC bytecode rustc
+# cannot link; the release profile already strips, so a debug package would be empty.
+options=('!lto' '!debug')
 provides=('omafeed')
 conflicts=('omafeed')
 source=('omafeed::git+https://github.com/pch/omafeed.git')
@@ -42,5 +45,5 @@ check() {
 
 package() {
   cd omafeed
-  make install DESTDIR="$pkgdir" PREFIX=/usr
+  make install DESTDIR="$pkgdir" PREFIX=/usr PKGNAME="$pkgname"
 }

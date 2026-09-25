@@ -1,4 +1,6 @@
 PREFIX ?= $(HOME)/.local
+# Package name for the license directory (Arch packages pass their pkgname).
+PKGNAME ?= omafeed
 APP_ID := io.github.pch.Omafeed
 BIN := target/release/omafeed
 
@@ -15,14 +17,14 @@ install:
 	install -Dm644 data/$(APP_ID).desktop $(DESTDIR)$(PREFIX)/share/applications/$(APP_ID).desktop
 	install -Dm644 data/$(APP_ID).metainfo.xml $(DESTDIR)$(PREFIX)/share/metainfo/$(APP_ID).metainfo.xml
 	install -Dm644 data/$(APP_ID).svg $(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps/$(APP_ID).svg
-	install -Dm644 LICENSE $(DESTDIR)$(PREFIX)/share/licenses/omafeed/LICENSE
+	install -Dm644 LICENSE $(DESTDIR)$(PREFIX)/share/licenses/$(PKGNAME)/LICENSE
 
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/omafeed
 	rm -f $(DESTDIR)$(PREFIX)/share/applications/$(APP_ID).desktop
 	rm -f $(DESTDIR)$(PREFIX)/share/metainfo/$(APP_ID).metainfo.xml
 	rm -f $(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps/$(APP_ID).svg
-	rm -rf $(DESTDIR)$(PREFIX)/share/licenses/omafeed
+	rm -rf $(DESTDIR)$(PREFIX)/share/licenses/$(PKGNAME)
 
 check:
 	cargo fmt --all --check

@@ -6,8 +6,11 @@ pkgdesc='A native Rust RSS reader for Linux and Omarchy'
 arch=('x86_64' 'aarch64')
 url='https://github.com/pch/omafeed'
 license=('MIT')
-depends=('gcc-libs' 'glibc' 'gtk4' 'libadwaita' 'webkitgtk-6.0')
+depends=('glib2' 'glibc' 'gtk4' 'hicolor-icon-theme' 'libadwaita' 'libgcc' 'webkitgtk-6.0')
 makedepends=('cargo' 'pkgconf')
+# makepkg's LTO flags turn bundled C code (SQLite, ring) into GCC bytecode rustc
+# cannot link; the release profile already strips, so a debug package would be empty.
+options=('!lto' '!debug')
 source=("$pkgname-$pkgver.tar.gz::https://github.com/pch/omafeed/archive/refs/tags/v$pkgver.tar.gz")
 # The release workflow publishes this file with the real checksum filled in.
 sha256sums=('SKIP')
@@ -34,5 +37,5 @@ check() {
 
 package() {
   cd "omafeed-$pkgver"
-  make install DESTDIR="$pkgdir" PREFIX=/usr
+  make install DESTDIR="$pkgdir" PREFIX=/usr PKGNAME="$pkgname"
 }
