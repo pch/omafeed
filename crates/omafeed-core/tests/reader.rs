@@ -477,3 +477,312 @@ fn upgrading_a_version_1_database_reextracts_article_text() {
             == 1
     );
 }
+
+fn article(guid: &str, title: &str, body: &str) -> String {
+    format!(
+        "<item><guid>{guid}</guid><title>{title}</title><description>{body}</description></item>"
+    )
+}
+
+/// A store with one feed holding the given (title, body) articles.
+fn library(articles: &[(&str, &str)]) -> Store {
+    let mut s = Store::open(":memory:").unwrap();
+    let feed = s
+        .add_feed("Test", "https://example.org/feed", None)
+        .unwrap();
+    add(&mut s, feed, articles);
+    s
+}
+
+fn add(s: &mut Store, feed: i64, articles: &[(&str, &str)]) {
+    let items: String = articles
+        .iter()
+        .map(|(title, body)| article(&format!("{title}-{body}"), title, body))
+        .collect();
+    s.commit_download(feed, download(&rss(&items)), 30).unwrap();
+}
+
+fn titles(s: &Store, search: &str, exact: bool) -> Vec<String> {
+    let mut titles: Vec<String> = s
+        .articles(&Query {
+            scope: Scope::All,
+            search: search.into(),
+            exact,
+            ..Default::default()
+        })
+        .unwrap()
+        .into_iter()
+        .map(|a| a.title)
+        .collect();
+    titles.sort();
+    titles
+}
+
+fn found(s: &Store, search: &str) -> Vec<String> {
+    titles(s, search, false)
+}
+
+#[test]
+fn search_forgives_typos_and_swapped_letters() {
+    let s = library(&[
+        ("Agentic", "Agentic engineering and prompts"),
+        ("Other", "Nothing relevant here"),
+    ]);
+    for typed in ["agentc", "agentik", "agnetic", "aagentic", "AGENTC"] {
+        assert_eq!(found(&s, typed), ["Agentic"], "{typed}");
+    }
+    assert_eq!(found(&s, "enginering"), ["Agentic"], "long words allow two");
+    assert_eq!(found(&s, "engneerng"), ["Agentic"], "two missing letters");
+    // Every word must still match, and words too far off match nothing.
+    assert_eq!(found(&s, "agentc engneering"), ["Agentic"]);
+    assert!(found(&s, "agentc zebra").is_empty());
+    assert!(found(&s, "xylophone").is_empty());
+    assert!(
+        found(&s, "engnring").is_empty(),
+        "three mistakes is too many"
+    );
+}
+
+#[test]
+fn search_finds_plurals_and_the_word_being_typed() {
+    let s = library(&[
+        ("One", "a single prompt"),
+        ("Many", "several prompts"),
+        ("Boxes", "wooden boxes"),
+        ("Box", "a wooden box"),
+    ]);
+    assert_eq!(found(&s, "prompt"), ["Many", "One"]);
+    assert_eq!(found(&s, "prompts"), ["Many", "One"]);
+    assert_eq!(found(&s, "box"), ["Box", "Boxes"]);
+    assert_eq!(found(&s, "boxes"), ["Box", "Boxes"]);
+    // The last word matches by prefix; earlier words do not.
+    assert_eq!(found(&s, "sever"), ["Many"]);
+    assert!(
+        found(&s, "wooden sing").is_empty(),
+        "`sing` finds `single`, which is not wooden"
+    );
+    assert_eq!(found(&s, "single pro"), ["One"]);
+    assert!(
+        found(&s, "sing prompt").is_empty(),
+        "`sing` is not the last word"
+    );
+}
+
+#[test]
+fn search_leaves_known_short_and_numeric_words_alone() {
+    let s = library(&[
+        ("Car", "the car from 2025"),
+        ("Clarity", "clarity of thought"),
+        ("Charity", "charity begins at home"),
+    ]);
+    assert!(found(&s, "cat").is_empty(), "short words are not corrected");
+    assert!(found(&s, "2026").is_empty(), "numbers are not corrected");
+    assert_eq!(found(&s, "2025"), ["Car"]);
+    // A word the library knows is not swapped for a similar real word.
+    assert_eq!(found(&s, "clarity"), ["Clarity"]);
+    assert_eq!(found(&s, "charity"), ["Charity"]);
+    // An unknown word near two real ones finds both.
+    assert_eq!(found(&s, "clarity charty"), Vec::<String>::new());
+    assert_eq!(found(&s, "cxarity"), ["Charity", "Clarity"]);
+    assert_eq!(
+        found(&s, "chority"),
+        ["Charity"],
+        "`clarity` is two mistakes away"
+    );
+}
+
+#[test]
+fn exact_search_matches_words_as_typed() {
+    let s = library(&[
+        ("Agentic", "agentic engineering"),
+        ("Prompt", "one prompt"),
+        ("Prompts", "many prompts"),
+    ]);
+    assert!(titles(&s, "agentc", true).is_empty());
+    assert!(titles(&s, "agen", true).is_empty(), "no prefix matching");
+    assert_eq!(titles(&s, "agentic", true), ["Agentic"]);
+    assert_eq!(titles(&s, "prompt", true), ["Prompt"]);
+    assert_eq!(
+        titles(&s, "PROMPTS", true),
+        ["Prompts"],
+        "case never matters"
+    );
+    // The same words forgiving:
+    assert_eq!(found(&s, "agentc"), ["Agentic"]);
+    assert_eq!(found(&s, "prompt"), ["Prompt", "Prompts"]);
+}
+
+#[test]
+fn search_sees_words_added_by_this_connection_and_by_other_programs() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("library.db");
+    let mut mine = Store::open(&path).unwrap();
+    let feed = mine
+        .add_feed("Test", "https://example.org/feed", None)
+        .unwrap();
+    add(&mut mine, feed, &[("Base", "ordinary words")]);
+    assert!(
+        found(&mine, "zebrafisch").is_empty(),
+        "primes the cached word list"
+    );
+
+    // A word this connection just stored is found by a typo of it.
+    add(&mut mine, feed, &[("Fish", "a zebrafish swims")]);
+    assert_eq!(found(&mine, "zebrafisch"), ["Fish"]);
+
+    // So is a word another program (the command line) stored in the meantime.
+    let mut other = Store::open(&path).unwrap();
+    add(&mut other, feed, &[("Marsupial", "the quokka smiles")]);
+    assert_eq!(found(&mine, "quokkaa"), ["Marsupial"]);
+
+    // Deleting articles removes their words from the corrections too.
+    other.delete_feed(feed).unwrap();
+    assert!(found(&mine, "quokkaa").is_empty());
+    assert!(found(&mine, "zebrafisch").is_empty());
+}
+
+#[test]
+fn marking_read_follows_the_same_forgiving_search() {
+    let s = library(&[
+        ("Agentic", "agentic engineering"),
+        ("Agents", "software agents"),
+        ("Other", "unrelated"),
+    ]);
+    let ids = s
+        .mark_read(&Query {
+            scope: Scope::Unread,
+            search: "agentc".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(ids.len(), 2, "both articles the search shows are marked");
+    let unread = s
+        .articles(&Query {
+            scope: Scope::Unread,
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(unread.len(), 1);
+    assert_eq!(unread[0].title, "Other");
+    // Exact mode marks only what matches exactly.
+    let s = library(&[("Agentic", "agentic engineering"), ("Other", "unrelated")]);
+    let none = s
+        .mark_read(&Query {
+            scope: Scope::Unread,
+            search: "agentc".into(),
+            exact: true,
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(none.is_empty());
+}
+
+#[test]
+fn search_copes_with_odd_words_and_huge_neighbourhoods() {
+    // 26 words, each one letter away from `w0xyz`: more than the search will try.
+    let many: String = ('a'..='z').map(|c| format!("w{c}xyz ")).collect();
+    let long = "x".repeat(300);
+    let s = library(&[
+        ("Café", "café naïve 日本語 emoji 🎉 done"),
+        ("Many", &many),
+        ("Long", &long),
+    ]);
+    for odd in [
+        "AND OR NOT",
+        "\"",
+        "\"\"\"",
+        "(*)",
+        "title:Café",
+        "^cafe",
+        "-cafe",
+        "NEAR(a b)",
+        "日本",
+        "🎉",
+        "'; DROP TABLE articles; --",
+        &"y".repeat(1000),
+        &long,
+    ] {
+        // Any answer is fine; failing or panicking is not.
+        titles(&s, odd, false);
+        titles(&s, odd, true);
+    }
+    assert_eq!(found(&s, "café"), ["Café"]);
+    assert_eq!(
+        found(&s, "cafe"),
+        ["Café"],
+        "the index already ignores accents"
+    );
+    assert_eq!(found(&s, "日本語"), ["Café"]);
+    assert_eq!(
+        found(&s, "w0xyz"),
+        ["Many"],
+        "many neighbours are capped, not fatal"
+    );
+    assert_eq!(found(&s, &long), ["Long"]);
+    // A typo of a term too long to compare finds nothing but does not fail.
+    assert!(found(&s, &format!("{}y", "x".repeat(299))).is_empty());
+}
+
+#[test]
+fn the_word_list_is_read_again_only_when_articles_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("library.db");
+    let mut s = Store::open(&path).unwrap();
+    let feed = s
+        .add_feed("Test", "https://example.org/feed", None)
+        .unwrap();
+    add(
+        &mut s,
+        feed,
+        &[("One", "first article"), ("Two", "second one")],
+    );
+    assert_eq!(s.vocabulary_loads(), 0, "not read until a search needs it");
+    let id = s.articles(&all()).unwrap()[0].id;
+
+    // Exact searches and empty searches never need the word list.
+    titles(&s, "first", true);
+    found(&s, "");
+    assert_eq!(s.vocabulary_loads(), 0);
+    // Repeated searches share one reading, whatever they look for.
+    for typed in ["first", "frist", "sec", "zebra"] {
+        found(&s, typed);
+    }
+    assert_eq!(s.vocabulary_loads(), 1);
+
+    // Reading, starring, marking and moving feeds change no words.
+    s.set_read(id, true).unwrap();
+    s.set_starred(id, true).unwrap();
+    s.set_starred(id, false).unwrap();
+    s.edit_feed(feed, "Renamed", None).unwrap();
+    s.add_folder("Folder", None).unwrap();
+    s.mark_read(&all()).unwrap();
+    s.undo_read(&[id]).unwrap();
+    found(&s, "frist");
+    assert_eq!(s.vocabulary_loads(), 1, "no reason to read the words again");
+
+    // A download with new articles does, and so does removing a feed.
+    add(&mut s, feed, &[("Three", "third article")]);
+    assert_eq!(found(&s, "thrid"), ["Three"]);
+    assert_eq!(s.vocabulary_loads(), 2);
+    let notmodified = fetch::Download::NotModified;
+    s.commit_download(feed, notmodified, 30).unwrap();
+    found(&s, "thrid");
+    assert_eq!(
+        s.vocabulary_loads(),
+        2,
+        "a download with nothing new changes no words"
+    );
+    s.delete_feed(feed).unwrap();
+    assert!(found(&s, "thrid").is_empty());
+    assert_eq!(s.vocabulary_loads(), 3);
+
+    // Another program's write is noticed too, once.
+    let mut other = Store::open(&path).unwrap();
+    let elsewhere = other
+        .add_feed("Elsewhere", "https://example.org/other", None)
+        .unwrap();
+    add(&mut other, elsewhere, &[("Four", "fourth article")]);
+    assert_eq!(found(&s, "fourht"), ["Four"]);
+    found(&s, "fourht");
+    assert_eq!(s.vocabulary_loads(), 4);
+}

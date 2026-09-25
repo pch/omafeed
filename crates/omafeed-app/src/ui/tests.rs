@@ -106,6 +106,25 @@ fn desktop_smoke() {
         Refresher::new().unwrap(),
     );
     pump_until(|| !u.articles.borrow().is_empty());
+    // The search box forgives typos. Changing the text first clears the box, which GTK reports
+    // at once, so wait until the new text has been applied, then until the database has
+    // answered, before looking at the list.
+    let search = |text: &str| {
+        u.header.search.set_text(text);
+        pump_until(|| *u.query.borrow().search == *text);
+        runtime.block_on(db.call(|_| Ok(()))).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        pump_until(|| true);
+    };
+    search("zzzzzzzz");
+    assert!(u.articles.borrow().is_empty());
+    search("fixtre contnt");
+    assert!(
+        u.articles.borrow().iter().any(|a| a.id == id),
+        "a misspelled search should still find the article"
+    );
+    search("");
+    assert!(u.articles.borrow().iter().any(|a| a.id == id));
     assert!(!u.list.previous.is_sensitive());
     assert!(!u.list.next.is_sensitive());
     let expander = widgets(&u.side.list.clone().upcast())

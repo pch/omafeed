@@ -1,8 +1,16 @@
-use crate::{fetch::Download, opml, util::validate_url};
+use crate::{
+    fetch::Download,
+    fuzzy::{self, Vocabulary},
+    opml,
+    util::validate_url,
+};
 use anyhow::{Result, bail};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::{
+    cell::{Cell, RefCell},
+    path::Path,
+};
 
 /// Number of articles per list page.
 pub const PAGE_SIZE: usize = 200;
@@ -91,6 +99,9 @@ impl Scope {
 pub struct Query {
     pub scope: Scope,
     pub search: String,
+    /// Match the search words exactly as typed. By default a search forgives typos, finds
+    /// plurals, and matches the start of the last word.
+    pub exact: bool,
     pub unread_only: bool,
     pub offset: usize,
 }
@@ -243,6 +254,14 @@ SELECT EXISTS(SELECT 1 FROM descendants WHERE id = ?2)";
 
 pub struct Store {
     conn: Connection,
+    /// The library's words for forgiving search, and the state they were read at.
+    vocabulary: RefCell<Option<((i64, u64), Vocabulary)>>,
+    /// Counts writes through this connection that add, change or remove article text, which
+    /// is what makes `vocabulary` stale. Anything new that does so must call
+    /// `articles_changed`; starring, reading and moving feeds do not change any words.
+    article_writes: Cell<u64>,
+    /// How many times the word list was read from the index, for tests and benchmarks.
+    vocabulary_loads: Cell<u64>,
 }
 
 impl Store {
@@ -251,7 +270,29 @@ impl Store {
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;")?;
         Self::migrate(&mut conn)?;
-        Ok(Self { conn })
+        // A view of the words in the search index, private to this connection: nothing is
+        // written to the library file.
+        conn.execute_batch(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS temp.article_vocab
+             USING fts5vocab(main, article_fts, 'row')",
+        )?;
+        Ok(Self {
+            conn,
+            vocabulary: RefCell::default(),
+            article_writes: Cell::default(),
+            vocabulary_loads: Cell::default(),
+        })
+    }
+
+    /// How many times forgiving search has read the library's word list. It is kept between
+    /// searches and read again only after articles change.
+    #[doc(hidden)]
+    pub fn vocabulary_loads(&self) -> u64 {
+        self.vocabulary_loads.get()
+    }
+
+    fn articles_changed(&self) {
+        self.article_writes.set(self.article_writes.get() + 1);
     }
 
     fn migrate(conn: &mut Connection) -> Result<()> {
@@ -432,6 +473,7 @@ impl Store {
 
     pub fn delete_feed(&self, id: i64) -> Result<()> {
         self.conn.execute("DELETE FROM feeds WHERE id = ?1", [id])?;
+        self.articles_changed();
         Ok(())
     }
 
@@ -452,6 +494,7 @@ impl Store {
         if !exists {
             return Ok(());
         }
+        let changes_articles = matches!(download, Download::Updated(_));
         if let Download::Updated(update) = download {
             let mut upsert = tx.prepare(UPSERT_ARTICLE)?;
             for e in update.entries {
@@ -479,6 +522,9 @@ impl Store {
             params![now, now + i64::from(minutes) * 60, feed_id],
         )?;
         tx.commit()?;
+        if changes_articles {
+            self.articles_changed();
+        }
         Ok(())
     }
 
@@ -582,7 +628,35 @@ impl Store {
         Ok(opml::export(&self.library()?))
     }
 
-    fn predicate(q: &Query) -> (String, Vec<rusqlite::types::Value>) {
+    /// The index query for a search: forgiving unless the query asks for exact matching.
+    fn match_expression(&self, q: &Query) -> Result<Option<String>> {
+        if q.exact || q.search.trim().is_empty() {
+            return Ok(fuzzy::expression(&q.search, None));
+        }
+        // The word list goes stale when articles change here, or when another program
+        // writes anything (`data_version` only moves for other connections' commits).
+        let version: (i64, u64) = (
+            self.conn
+                .query_row("PRAGMA data_version", [], |r| r.get(0))?,
+            self.article_writes.get(),
+        );
+        let mut cache = self.vocabulary.borrow_mut();
+        if cache.as_ref().is_none_or(|(seen, _)| *seen != version) {
+            let words = self
+                .conn
+                .prepare("SELECT term, doc FROM temp.article_vocab")?
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
+            *cache = Some((version, Vocabulary::new(words)));
+            self.vocabulary_loads.set(self.vocabulary_loads.get() + 1);
+        }
+        Ok(fuzzy::expression(
+            &q.search,
+            cache.as_ref().map(|(_, words)| words),
+        ))
+    }
+
+    fn predicate(&self, q: &Query) -> Result<(String, Vec<rusqlite::types::Value>)> {
         let mut terms: Vec<&str> = Vec::new();
         let mut values = Vec::new();
         match q.scope {
@@ -617,22 +691,17 @@ impl Store {
         if q.unread_only {
             terms.push("s.read = 0");
         }
-        // Quote every token so user input is matched literally, never as FTS syntax.
-        let tokens: Vec<_> = q
-            .search
-            .split_whitespace()
-            .map(|s| format!("\"{}\"", s.replace('"', "\"\"")))
-            .collect();
-        if !tokens.is_empty() {
+        // Every typed word is quoted, so user input is matched literally, never as FTS syntax.
+        if let Some(expression) = self.match_expression(q)? {
             terms.push("a.id IN (SELECT rowid FROM article_fts WHERE article_fts MATCH ?)");
-            values.push(tokens.join(" AND ").into());
+            values.push(expression.into());
         }
         let predicate = if terms.is_empty() {
             "1".into()
         } else {
             terms.join(" AND ")
         };
-        (predicate, values)
+        Ok((predicate, values))
     }
 
     fn article_columns(html: bool) -> String {
@@ -643,7 +712,7 @@ impl Store {
     }
 
     pub fn articles(&self, q: &Query) -> Result<Vec<Article>> {
-        let (predicate, mut values) = Self::predicate(q);
+        let (predicate, mut values) = self.predicate(q)?;
         values.push((q.offset as i64).into());
         let sql = format!(
             "SELECT {} {ARTICLE_JOINS} WHERE {predicate}
@@ -699,7 +768,7 @@ impl Store {
 
     /// Mark every unread article matching `q` read, returning the changed IDs for undo.
     pub fn mark_read(&self, q: &Query) -> Result<Vec<i64>> {
-        let (predicate, values) = Self::predicate(q);
+        let (predicate, values) = self.predicate(q)?;
         let sql = format!(
             "UPDATE article_state SET read = 1
              WHERE read = 0 AND article_id IN (SELECT a.id {ARTICLE_JOINS} WHERE {predicate})

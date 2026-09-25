@@ -81,7 +81,7 @@ OPML contains subscriptions, not historical articles or read/star state. The fir
 
 Click **Manage library** (Ctrl+L) to create folders and subscribe using a website or feed URL. Omafeed finds the site's RSS, Atom, or JSON feed, lets you choose when there are several, and uses the feed's title if you leave the name blank. Select a feed or folder and choose **Edit / Move** to rename it, move it, or correct its URL without losing saved articles. Removing a feed deletes its articles after confirmation; removing a folder keeps them.
 
-Search looks through the current view, including nested folders. Summary-only feeds show the summary; open the original for the rest. Podcast episodes appear as download links.
+Search looks through the current view, including nested folders. It forgives typos (`agentc` finds `agentic`), treats plural and singular forms alike, and matches the start of the last word you type, so results appear as you go. Words shorter than five letters and numbers are matched exactly, and a word that appears in your articles is never swapped for a similar one. Summary-only feeds show the summary; open the original for the rest. Podcast episodes appear as download links.
 
 Not yet supported: full-article extraction, podcast playback, sync between devices, and notifications.
 
