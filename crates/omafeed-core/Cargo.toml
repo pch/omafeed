@@ -19,7 +19,7 @@ feed-rs = "2"
 futures-util = "0.3"
 httpdate = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "ico", "gif", "webp"] }
-quick-xml = { version = "0.41", features = ["serialize"] }
+quick-xml = { version = "0.42", features = ["serialize"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "brotli", "stream"] }
 resvg = { version = "0.48", default-features = false }
 rusqlite = { version = "0.40", features = ["bundled"] }
