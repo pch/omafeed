@@ -1,0 +1,19 @@
+[package]
+name = "omafeed"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+omafeed-core = { path = "../omafeed-core" }
+anyhow = "1"
+async-channel = "2"
+gtk = { package = "gtk4", version = "0.10", features = ["v4_12"] }
+adw = { package = "libadwaita", version = "0.8", features = ["v1_6"] }
+webkit6 = { version = "0.5", features = ["v2_42"] }
+chrono = "0.4"
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,16 @@
+[workspace]
+members = ["crates/omafeed-core", "crates/omafeed-app"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/pch/omafeed"
+
+[profile.release]
+lto = "thin"
+strip = true
+
+[profile.dev]
+debug = 0

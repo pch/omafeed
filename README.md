@@ -1,0 +1,103 @@
+# Omafeed
+
+A native RSS reader for Linux and Omarchy, written in Rust. A three-pane library, article list, and reading view keeps your subscriptions and articles on your computer.
+
+## Features
+
+- RSS, Atom, and JSON Feed; manual refresh and scheduled refresh while the app is open.
+- Nested folders: create, rename, move, and remove. Move feeds between folders without losing article history or read state. Removing a folder promotes its feeds and children to its parent.
+- OPML import/export with duplicate detection and preserved folder hierarchy.
+- All Unread, Today, Starred, All Articles, folder and feed views; full-text search and unread filtering.
+- Read/unread, stars, bulk mark read with undo, and offline article text.
+- Sanitized HTML articles with images, code blocks, adjustable typography, copy link, and open original.
+- Omarchy palette following across the top bar, menus, sidebar, and reader; light/dark modes, persisted window/pane sizes, keyboard navigation, and favicon caching.
+- Conditional HTTP requests, bounded concurrency, timeouts, retry backoff, and visible per-feed errors.
+
+## Install on Arch / Omarchy
+
+```sh
+omarchy pkg add rust gtk4 libadwaita webkitgtk-6.0 pkgconf
+git clone https://github.com/pch/omafeed.git
+cd omafeed
+make install
+```
+
+`make install` installs the release binary, launcher entry, icon, and license under `~/.local`. Open **Omafeed** from your launcher or run `~/.local/bin/omafeed`. Ensure `~/.local/bin` is on your PATH. The desktop must have a session D-Bus.
+
+For an Arch package, copy `packaging/PKGBUILD` to a separate build directory and run `makepkg -si`. The package is a source recipe; it is not a published AUR entry.
+
+Uninstall a local installation with `make uninstall`. Your articles and settings remain. For a package installation, use `pacman -R omafeed-git`.
+
+## Get started
+
+Use the menu → **Import OPML**, or:
+
+```sh
+omafeed import /path/to/subscriptions.opml
+omafeed refresh
+omafeed
+```
+
+OPML contains subscriptions, not historical articles or read/star state. The first refresh downloads the items currently published by each feed, initially unread. Use the checkmark above the article list to mark the current view read; Ctrl+Z undoes that action.
+
+Click **Manage library** (Ctrl+L) to create folders and subscribe to feed URLs. Select a feed or folder and choose **Edit / Move** to change its name or destination folder. Feed URLs can also be corrected without losing saved articles. Folder moves cannot create cycles. Removing a feed deletes its articles after confirmation; removing a folder keeps them.
+
+Searching searches the current view, including nested folders. Lists have 200 articles per page. The reader retains its article when its read state changes. Summary-only feeds display the supplied summary; open the original for the rest. Podcast attachments are links, with no built-in playback.
+
+## Keyboard
+
+| Key | Action |
+| --- | --- |
+| J/K or ↓/↑ | Next/previous article |
+| N | Next unread on the current page |
+| Space | Scroll article; next unread at the end |
+| Shift+Space | Scroll back |
+| M | Toggle read |
+| S | Toggle star |
+| O | Open original in browser |
+| Ctrl+R | Refresh |
+| Ctrl+F | Search |
+| Ctrl+L | Manage library |
+| Ctrl+Shift+A | Mark current view read |
+| Ctrl+Z | Undo bulk mark read |
+| Ctrl+Q | Quit |
+| ? | Shortcuts |
+
+## Storage and privacy
+
+SQLite stores articles, subscriptions, read state, stars, and the search index in `$XDG_DATA_HOME/omafeed/omafeed.db` (default `~/.local/share/omafeed`). Settings live at `$XDG_CONFIG_HOME/omafeed/settings.toml`. Disposable favicons live under `$XDG_CACHE_HOME/omafeed`. Omafeed discovers icons from each website’s homepage, falls back to `/favicon.ico`, caches icons for seven days and misses for one day, and caps the icon cache at 32 MiB. Websites without a usable raster icon show the RSS fallback.
+
+No account, telemetry, cloud sync, or background daemon. Closing Omafeed stops scheduled refreshes. Requests go to your feed servers, their redirects, favicon URLs, and article image servers when enabled. Remote images can be disabled in Settings. Article JavaScript, frames, forms, and embedded media are disabled; links open in your browser.
+
+Article text works offline. Images that have not been fetched are not available offline; v1 does not promise a persistent offline image archive. Articles are not automatically pruned. Back up the data directory while Omafeed is closed; OPML export backs up subscriptions only.
+
+Theme following reads `$XDG_STATE_HOME/omarchy/current/theme/colors.toml`, with the older config location as fallback. Missing/invalid palettes use a built-in dark theme. The top bar, search field, menus, and reader update within two seconds of a palette change. No Hyprland configuration is changed.
+
+## Development
+
+```sh
+cargo run -p omafeed
+make check
+```
+
+GTK4, libadwaita, WebKitGTK 6.0, a C compiler, and pkg-config are required. The Rust core is independent of GTK:
+
+```sh
+cargo test -p omafeed-core
+```
+
+The optional native desktop smoke test also verifies WebKit rendering, read/star state, folder creation, and moving a feed through the real dialogs:
+
+```sh
+cargo test -p omafeed desktop_smoke -- --ignored --test-threads=1
+```
+
+Tests use temporary SQLite databases and a localhost HTTP server; they do not depend on live blogs. Use `OMAFEED_HOME=/tmp/omafeed-test` to isolate data, settings, and cache during manual testing. CLI commands: `import FILE`, `export FILE`, `refresh`, `status`, `--help`, `--version`.
+
+The workspace contains `omafeed-core` (database worker, migrations, OPML, fetch scheduling, sanitization) and `omafeed-app` (GTK interface and CLI). Database work runs on a dedicated worker; HTTP work runs on Tokio. The GTK thread receives results asynchronously.
+
+## Inspiration
+
+[NetNewsWire](https://github.com/Ranchero-Software/NetNewsWire), [Omarchy Meeting Recorder](https://github.com/jankeesvw/omarchy-meeting-recorder), and [Spotifast](https://github.com/crmne/spotifast). Omafeed is an independent Rust implementation; no source or visual assets were copied from those projects.
+
+MIT licensed.

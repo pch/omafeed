@@ -1,0 +1,37 @@
+# Maintainer: pch <https://github.com/pch>
+pkgname=omafeed-git
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='A native Rust RSS reader for Linux and Omarchy'
+arch=('x86_64' 'aarch64')
+url='https://github.com/pch/omafeed'
+license=('MIT')
+depends=('gtk4' 'libadwaita' 'webkitgtk-6.0')
+makedepends=('cargo' 'git' 'pkgconf')
+provides=('omafeed')
+conflicts=('omafeed')
+source=('omafeed::git+https://github.com/pch/omafeed.git')
+sha256sums=('SKIP')
+pkgver() {
+  cd "$srcdir/omafeed"
+  printf '0.1.0.r%s.%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+prepare() {
+  cd "$srcdir/omafeed"
+  cargo fetch --locked
+}
+build() {
+  cd "$srcdir/omafeed"
+  cargo build --release --locked --offline
+}
+check() {
+  cd "$srcdir/omafeed"
+  cargo test --workspace --locked --offline
+}
+package() {
+  cd "$srcdir/omafeed"
+  install -Dm755 target/release/omafeed "$pkgdir/usr/bin/omafeed"
+  install -Dm644 data/io.github.pch.Omafeed.desktop "$pkgdir/usr/share/applications/io.github.pch.Omafeed.desktop"
+  install -Dm644 data/io.github.pch.Omafeed.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/io.github.pch.Omafeed.svg"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/omafeed/LICENSE"
+}

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Omafeed
+GenericName=RSS Reader
+Comment=A quiet home for your feeds
+Exec=omafeed
+Icon=io.github.pch.Omafeed
+Terminal=false
+Categories=Network;News;
+Keywords=RSS;Atom;Feed;Reader;News;Omarchy;
+StartupNotify=true
+StartupWMClass=io.github.pch.Omafeed
