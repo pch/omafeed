@@ -2,6 +2,8 @@
 
 A native RSS reader for Linux and Omarchy, written in Rust. A three-pane library, article list, and reading view keeps your subscriptions and articles on your computer.
 
+![Omafeed on Omarchy, showing the feed library, article list, and reading pane](docs/images/omafeed.png)
+
 ## Features
 
 - RSS, Atom, and JSON Feed; manual refresh and scheduled refresh while the app is open.
