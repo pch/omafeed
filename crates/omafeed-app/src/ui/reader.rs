@@ -27,10 +27,10 @@ impl ReaderPane {
         let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         spacer.set_hexpand(true);
         toolbar.append(&spacer);
-        let read = icon("mail-mark-unread-symbolic", "Mark unread (M)");
+        let read = icon("mail-unread-symbolic", "Mark unread (M)");
         let star = icon("non-starred-symbolic", "Star (S)");
         let copy = icon("edit-copy-symbolic", "Copy article link");
-        let open = icon("external-link-symbolic", "Open original (O)");
+        let open = icon("adw-external-link-symbolic", "Open original (O)");
         for b in [&read, &star, &copy, &open] {
             toolbar.append(b);
         }
@@ -193,9 +193,9 @@ impl Ui {
         r.star.set_icon_name(star_icon);
         r.star.set_tooltip_text(Some(star_tip));
         let (read_icon, read_tip) = if a.read {
-            ("mail-mark-unread-symbolic", "Mark unread (M)")
+            ("mail-unread-symbolic", "Mark unread (M)")
         } else {
-            ("mail-mark-read-symbolic", "Mark read (M)")
+            ("mail-read-symbolic", "Mark read (M)")
         };
         r.read.set_icon_name(read_icon);
         r.read.set_tooltip_text(Some(read_tip));
