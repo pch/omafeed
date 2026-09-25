@@ -93,9 +93,11 @@ Every command below prints one line of JSON and exits non-zero with a message on
 omafeed feeds                                   # folders, feeds, unread counts, feed errors
 omafeed articles --scope unread --limit 20      # unread, today, starred, all, feed:ID, folder:ID
 omafeed articles --scope all --search "rust"    # full-text search; --unread, --offset also work
+omafeed articles --since 24h                    # published within 90m, 24h, 2d, 1w...; "truncated" says if --limit cut the list
 omafeed article 42                              # one article as plain text (--html for sanitized HTML)
 omafeed read 42 43                              # also: unread, star, unstar; a bad ID changes nothing
 omafeed subscribe https://example.org           # finds the feed; then run `omafeed refresh`
+omafeed refresh --json                          # per-feed results; discover URL --json also works
 omafeed unsubscribe 3 --yes                     # deletes the feed and its articles for good; without --yes it only explains
 ```
 

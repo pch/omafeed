@@ -70,13 +70,30 @@ fn json_commands_read_and_change_the_library() {
 
     let list = cli.json(&["articles"]);
     assert_eq!(list["count"], 2);
+    assert_eq!(list["truncated"], false);
+    let refreshed = cli.json(&["refresh", "--json"]);
+    assert_eq!(refreshed["total"], 1);
+    assert_eq!(refreshed["failed"], 0);
+    assert_eq!(refreshed["feeds"][0]["title"], "Local Feed");
+    let found = cli.json(&["discover", &url, "--json"]);
+    assert_eq!(found["feeds"][0]["title"], "Local Feed");
     let newest = &list["articles"][0];
     assert_eq!(newest["title"], "Second");
     let id = newest["id"].to_string();
 
     let found = cli.json(&["articles", "--scope", "all", "--search", "Hello"]);
     assert_eq!(found["count"], 1);
-    assert_eq!(cli.json(&["articles", "--limit", "1"])["count"], 1);
+    let cut = cli.json(&["articles", "--limit", "1"]);
+    assert_eq!(
+        (cut["count"].clone(), cut["truncated"].clone()),
+        (1.into(), true.into())
+    );
+
+    // The fixture's articles are from January 2024, so only a very long window finds them.
+    assert_eq!(cli.json(&["articles", "--since", "24h"])["count"], 0);
+    assert_eq!(cli.json(&["articles", "--since", "36500d"])["count"], 2);
+    let (ok, err) = cli.run(&["articles", "--since", "soon"]);
+    assert!(!ok && err.contains("expected a duration"), "{err}");
 
     let full = cli.json(&["article", &id]);
     assert_eq!(full["text"], "Goodbye");

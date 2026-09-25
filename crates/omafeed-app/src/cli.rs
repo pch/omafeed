@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use omafeed_core::{
     Db, Paths, Settings, Store,
     article::plain,
-    db::{Article, Query, Scope},
+    db::{Article, PAGE_SIZE, Query, Scope},
     fetch::{Progress, Refresher},
 };
 use serde_json::{Value, json};
@@ -17,14 +17,23 @@ pub enum Command {
     /// Export subscriptions to an OPML file
     Export { file: PathBuf },
     /// Refresh every feed now
-    Refresh,
+    Refresh {
+        /// Print one line of JSON when done instead of progress text
+        #[arg(long)]
+        json: bool,
+    },
     /// Show library totals and feed errors
     Status,
     /// List the feeds a website advertises
-    Discover { url: String },
+    Discover {
+        url: String,
+        /// Print JSON instead of tab-separated text
+        #[arg(long)]
+        json: bool,
+    },
     /// Print folders, feeds, unread counts and feed errors as JSON
     Feeds,
-    /// Print articles as JSON, newest first (at most 200 per call)
+    /// Print articles as JSON, newest first
     Articles {
         /// unread, today, starred, all, feed:ID or folder:ID
         #[arg(long, default_value = "unread", value_parser = parse_scope)]
@@ -35,6 +44,9 @@ pub enum Command {
         /// Only unread articles
         #[arg(long)]
         unread: bool,
+        /// Only articles published this recently, e.g. 90m, 24h, 2d or 1w
+        #[arg(long, value_parser = parse_duration)]
+        since: Option<i64>,
         #[arg(long, default_value_t = 50)]
         limit: usize,
         #[arg(long, default_value_t = 0)]
@@ -93,14 +105,15 @@ pub fn run(command: Command) -> Result<()> {
         match command {
             Command::Import { file } => import(&db, &file).await,
             Command::Export { file } => export(&db, &file).await,
-            Command::Refresh => refresh(&db, &paths).await,
+            Command::Refresh { json } => refresh(&db, &paths, json).await,
             Command::Status => status(&db).await,
-            Command::Discover { url } => discover(&url).await,
+            Command::Discover { url, json } => discover(&url, json).await,
             Command::Feeds => feeds(&db).await,
             Command::Articles {
                 scope,
                 search,
                 unread,
+                since,
                 limit,
                 offset,
             } => {
@@ -110,7 +123,8 @@ pub fn run(command: Command) -> Result<()> {
                     unread_only: unread,
                     offset,
                 };
-                articles(&db, query, limit).await
+                let cutoff = since.map(|seconds| chrono::Utc::now().timestamp() - seconds);
+                articles(&db, query, limit, cutoff).await
             }
             Command::Article { id, html } => article(&db, id, html).await,
             Command::Read { ids } => set_state(&db, ids, |s, id| s.set_read(id, true)).await,
@@ -145,33 +159,49 @@ async fn export(db: &Db, file: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-async fn refresh(db: &Db, paths: &Paths) -> Result<()> {
+async fn refresh(db: &Db, paths: &Paths, json: bool) -> Result<()> {
     let (tx, rx) = async_channel::unbounded();
     let logger = tokio::spawn(async move {
+        let mut feeds = Vec::new();
+        let mut totals = None;
         while let Ok(event) = rx.recv().await {
             match event {
-                Progress::Started(n) => println!("Refreshing {n} feeds"),
+                Progress::Started(n) if !json => println!("Refreshing {n} feeds"),
                 Progress::Feed {
                     title,
                     error,
                     done,
                     total,
-                } => println!(
-                    "[{done}/{total}] {title}: {}",
-                    error.as_deref().unwrap_or("OK")
-                ),
-                Progress::Finished { total, failed } => {
-                    println!("Finished: {total} feeds, {failed} failed")
+                } => {
+                    if !json {
+                        println!(
+                            "[{done}/{total}] {title}: {}",
+                            error.as_deref().unwrap_or("OK")
+                        );
+                    }
+                    feeds.push(json!({ "title": title, "error": error }));
                 }
+                Progress::Finished { total, failed } => {
+                    if !json {
+                        println!("Finished: {total} feeds, {failed} failed");
+                    }
+                    totals = Some((total, failed));
+                }
+                _ => {}
             }
         }
+        (feeds, totals)
     });
     let minutes = Settings::load(paths).refresh_minutes;
     Refresher::new()?
         .with_cache(paths.cache.clone())
         .refresh(db.clone(), true, minutes, tx)
         .await?;
-    logger.await?;
+    let (feeds, totals) = logger.await?;
+    if json {
+        let (total, failed) = totals.unwrap_or_default();
+        print_json(&json!({ "total": total, "failed": failed, "feeds": feeds }))?;
+    }
     Ok(())
 }
 
@@ -192,8 +222,16 @@ async fn status(db: &Db) -> Result<()> {
     Ok(())
 }
 
-async fn discover(url: &str) -> Result<()> {
-    for feed in Refresher::new()?.discover(url).await? {
+async fn discover(url: &str, json: bool) -> Result<()> {
+    let found = Refresher::new()?.discover(url).await?;
+    if json {
+        let feeds: Vec<_> = found
+            .iter()
+            .map(|f| json!({ "title": f.title, "url": f.url }))
+            .collect();
+        return print_json(&json!({ "feeds": feeds }));
+    }
+    for feed in found {
         println!("{}\t{}", feed.title, feed.url);
     }
     Ok(())
@@ -216,6 +254,27 @@ fn parse_scope(text: &str) -> Result<Scope, String> {
                 "unknown scope '{text}'; use unread, today, starred, all, feed:ID or folder:ID"
             )),
         },
+    }
+}
+
+/// Seconds in a duration such as `90m`, `24h`, `2d` or `1w`.
+fn parse_duration(text: &str) -> Result<i64, String> {
+    let bad = || format!("expected a duration like 90m, 24h, 2d or 1w, got '{text}'");
+    let unit = text.chars().last().ok_or_else(bad)?;
+    let count: i64 = text[..text.len() - unit.len_utf8()]
+        .parse()
+        .map_err(|_| bad())?;
+    let seconds = match unit {
+        's' => 1,
+        'm' => 60,
+        'h' => 3600,
+        'd' => 86_400,
+        'w' => 604_800,
+        _ => return Err(bad()),
+    };
+    match count.checked_mul(seconds) {
+        Some(total) if total > 0 => Ok(total),
+        _ => Err(bad()),
     }
 }
 
@@ -272,8 +331,30 @@ async fn feeds(db: &Db) -> Result<()> {
     }))
 }
 
-async fn articles(db: &Db, query: Query, limit: usize) -> Result<()> {
-    let found = db.call(move |s| s.articles(&query)).await?;
+/// Newest-first articles, reading past one page when `limit` or `since` asks for more.
+async fn articles(db: &Db, query: Query, limit: usize, since: Option<i64>) -> Result<()> {
+    let mut found = Vec::new();
+    let mut offset = query.offset;
+    loop {
+        let page_query = Query {
+            offset,
+            ..query.clone()
+        };
+        let page = db.call(move |s| s.articles(&page_query)).await?;
+        let full = page.len() == PAGE_SIZE;
+        // Pages are ordered by date, so one article older than the cutoff ends the search.
+        let reached_cutoff = since.is_some_and(|c| page.last().is_some_and(|a| a.published < c));
+        offset += page.len();
+        found.extend(
+            page.into_iter()
+                .filter(|a| since.is_none_or(|c| a.published >= c)),
+        );
+        // One article beyond `limit` is enough to know the list was cut short.
+        if !full || reached_cutoff || found.len() > limit {
+            break;
+        }
+    }
+    let truncated = found.len() > limit;
     let items: Vec<_> = found
         .iter()
         .take(limit)
@@ -283,7 +364,7 @@ async fn articles(db: &Db, query: Query, limit: usize) -> Result<()> {
             item
         })
         .collect();
-    print_json(&json!({ "count": items.len(), "articles": items }))
+    print_json(&json!({ "count": items.len(), "truncated": truncated, "articles": items }))
 }
 
 async fn article(db: &Db, id: i64, html: bool) -> Result<()> {
