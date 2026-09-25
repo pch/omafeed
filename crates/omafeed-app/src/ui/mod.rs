@@ -170,6 +170,7 @@ impl ListPane {
         pages.add_css_class("pagination");
         for b in [&previous, &next] {
             b.set_sensitive(false);
+            b.add_css_class("flat");
             pages.append(b);
         }
         root.append(&pages);
@@ -229,6 +230,7 @@ pub struct Ui {
     selected: RefCell<Option<Article>>,
     palette: RefCell<Palette>,
     articles: RefCell<Vec<Article>>,
+    article_rows: RefCell<Vec<articles::ArticleRow>>,
     sidebar_rows: RefCell<Vec<sidebar::Row>>,
     collapsed: RefCell<HashSet<i64>>,
     /// Decoded favicons by cache path; `None` records a missing icon.
@@ -329,6 +331,7 @@ impl Ui {
             selected: RefCell::default(),
             palette: RefCell::new(palette),
             articles: RefCell::default(),
+            article_rows: RefCell::default(),
             sidebar_rows: RefCell::default(),
             collapsed: RefCell::default(),
             favicons: RefCell::default(),
