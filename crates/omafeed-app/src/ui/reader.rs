@@ -2,7 +2,10 @@
 use super::{Ui, widgets::icon, widgets::margins};
 use adw::prelude::*;
 use gtk::{gio, glib};
-use omafeed_core::db::Article;
+use omafeed_core::{
+    article::{Source, document},
+    db::Article,
+};
 use std::rc::Rc;
 use webkit6::prelude::*;
 
@@ -169,9 +172,26 @@ impl Ui {
             self.reader.stack.set_visible_child_name("empty");
             return;
         };
+        let site = self
+            .library
+            .borrow()
+            .feeds
+            .iter()
+            .find(|f| f.id == a.feed_id)
+            .map(|f| f.website().to_owned())
+            .unwrap_or_default();
+        // Favicons are small normalized PNGs, so reading one per render is cheap.
+        let icon = (!site.is_empty())
+            .then(|| std::fs::read(omafeed_core::icons::path(&self.paths.cache, &site)).ok())
+            .flatten();
+        let source = Source {
+            url: &site,
+            icon: icon.as_deref(),
+        };
         let s = self.settings.borrow();
-        let html = omafeed_core::article::document(
+        let html = document(
             a,
+            &source,
             &self.palette.borrow(),
             s.font_size,
             s.remote_images,
