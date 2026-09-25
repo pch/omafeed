@@ -437,3 +437,72 @@ async fn unsubscribe(db: &Db, id: i64, yes: bool) -> Result<()> {
         "removed": { "id": id, "title": title, "url": url, "articles": total, "starred": starred }
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn durations_accept_seconds_through_weeks() {
+        assert_eq!(parse_duration("45s"), Ok(45));
+        assert_eq!(parse_duration("90m"), Ok(5_400));
+        assert_eq!(parse_duration("24h"), Ok(86_400));
+        assert_eq!(parse_duration("2d"), Ok(172_800));
+        assert_eq!(parse_duration("1w"), Ok(604_800));
+    }
+
+    #[test]
+    fn durations_reject_malformed_input_without_panicking() {
+        for bad in [
+            "",
+            "h",
+            "24",
+            "0h",
+            "-5h",
+            "+",
+            "1.5h",
+            "24x",
+            "24H",
+            " 24h",
+            "5é",
+            "é",
+            "99999999999999999999w",
+            "9223372036854775807w",
+        ] {
+            let err = parse_duration(bad).unwrap_err();
+            assert!(err.contains("expected a duration"), "{bad:?}: {err}");
+        }
+    }
+
+    #[test]
+    fn scopes_parse_names_and_ids() {
+        assert_eq!(parse_scope("unread"), Ok(Scope::Unread));
+        assert_eq!(parse_scope("today"), Ok(Scope::Today));
+        assert_eq!(parse_scope("starred"), Ok(Scope::Starred));
+        assert_eq!(parse_scope("all"), Ok(Scope::All));
+        assert_eq!(parse_scope("feed:12"), Ok(Scope::Feed(12)));
+        assert_eq!(parse_scope("folder:3"), Ok(Scope::Folder(3)));
+    }
+
+    #[test]
+    fn scopes_reject_unknown_names_and_bad_ids() {
+        for bad in [
+            "",
+            "bogus",
+            "Feed:1",
+            "feed",
+            "feed:",
+            "feed:x",
+            "folder:1.5",
+            "feed:1:2",
+        ] {
+            assert!(parse_scope(bad).is_err(), "{bad:?} was accepted");
+        }
+        assert!(
+            parse_scope("feed:x")
+                .unwrap_err()
+                .contains("expected a number")
+        );
+        assert!(parse_scope("bogus").unwrap_err().contains("unknown scope"));
+    }
+}
