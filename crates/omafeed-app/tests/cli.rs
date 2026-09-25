@@ -602,18 +602,41 @@ fn text_is_the_default_and_json_must_be_asked_for() {
     );
     assert!(text(&["article", second, "--html"]).contains("<p>Goodbye</p>"));
 
-    assert_eq!(text(&["star", second]), "Starred 1 article\n");
+    assert_eq!(
+        text(&["star", second]),
+        format!("Starred 1 article\n{second}\tSecond\n")
+    );
     assert!(text(&["article", second]).contains("Local Feed · 2024-01-02 · unread · starred"));
     assert!(text(&["articles", "--scope", "starred"]).contains("\tunread\tstarred\t2024-01-02"));
-    assert_eq!(text(&["unstar", second]), "Unstarred 1 article\n");
     assert_eq!(
-        text(&["read", &ids[0], &ids[1]]),
-        "Marked 2 articles read\n"
+        text(&["unstar", second]),
+        format!("Unstarred 1 article\n{second}\tSecond\n")
     );
-    assert_eq!(text(&["unread", second]), "Marked 1 article unread\n");
+    // Several articles are named in ID order, whatever order they were given in.
+    let mut both = [(&ids[2], "First"), (&ids[1], "Second")];
+    let argument_order = [both[1].0.as_str(), both[0].0.as_str()];
+    both.sort_by_key(|(id, _)| id.parse::<i64>().unwrap());
+    let named: String = both.iter().map(|(id, t)| format!("{id}\t{t}\n")).collect();
+    for args in [argument_order, [both[0].0.as_str(), both[1].0.as_str()]] {
+        assert_eq!(
+            text(&["read", args[0], args[1]]),
+            format!("Marked 2 articles read\n{named}"),
+            "given as {args:?}"
+        );
+    }
+    assert_eq!(
+        text(&["unread", second]),
+        format!("Marked 1 article unread\n{second}\tSecond\n")
+    );
     // Naming an article twice counts it once.
-    assert_eq!(text(&["read", second, second]), "Marked 1 article read\n");
-    assert_eq!(cli.json(&["read", second, second])["updated"], 1);
+    assert_eq!(
+        text(&["read", second, second]),
+        format!("Marked 1 article read\n{second}\tSecond\n")
+    );
+    let named = cli.json(&["read", second, second]);
+    assert_eq!(named["updated"], 1);
+    assert_eq!(named["articles"][0]["title"], "Second");
+    assert_eq!(named["articles"][0]["id"].to_string(), *second);
 
     let extra = serve(channel(
         "Extra",

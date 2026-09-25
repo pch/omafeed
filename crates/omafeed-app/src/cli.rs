@@ -518,8 +518,9 @@ async fn article(db: &Db, id: i64, html: bool, json: bool) -> Result<()> {
     Ok(())
 }
 
-/// Apply `change` to every article, or to none if any ID does not exist. `message` says
-/// what happened, with `{}` standing for the count, such as "Starred 2 articles".
+/// Apply `change` to every article, or to none if any ID does not exist, then name what
+/// changed. `message` says what happened, with `{}` standing for the count, such as
+/// "Starred 2 articles".
 async fn set_state(
     db: &Db,
     Ids { mut ids, json }: Ids,
@@ -528,23 +529,35 @@ async fn set_state(
 ) -> Result<()> {
     ids.sort_unstable();
     ids.dedup();
-    let count = ids.len();
-    db.call(move |s| {
-        for &id in &ids {
-            if s.article(id).is_err() {
-                bail!("No article with id {id}");
+    let changed = db
+        .call(move |s| {
+            let mut changed = Vec::new();
+            for &id in &ids {
+                match s.article(id) {
+                    Ok(a) => changed.push((id, a.title)),
+                    Err(_) => bail!("No article with id {id}"),
+                }
             }
-        }
-        for &id in &ids {
-            change(s, id)?;
-        }
-        Ok(())
-    })
-    .await?;
+            for &(id, _) in &changed {
+                change(s, id)?;
+            }
+            Ok(changed)
+        })
+        .await?;
     if json {
-        return print_json(&json!({ "updated": count }));
+        let articles: Vec<_> = changed
+            .iter()
+            .map(|(id, title)| json!({ "id": id, "title": title }))
+            .collect();
+        return print_json(&json!({ "updated": changed.len(), "articles": articles }));
     }
-    println!("{}", message.replace("{}", &plural(count, "article")));
+    println!(
+        "{}",
+        message.replace("{}", &plural(changed.len(), "article"))
+    );
+    for (id, title) in &changed {
+        println!("{id}\t{}", line(title));
+    }
     Ok(())
 }
 

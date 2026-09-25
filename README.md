@@ -115,7 +115,7 @@ Not yet supported: full-article extraction, podcast playback, sync between devic
 
 Failures print a message to stderr and exit 1; a mistyped option exits 2. Feed and folder IDs come from `feeds`, article IDs from `articles`.
 
-Output is plain text by default. `feeds` prints tables, `articles` prints one tab-separated line per article (ID, read state, starred, date, feed, title) so `cut`, `awk` and `grep` work on it, and `article` prints a short header and then the text:
+Output is plain text by default. `feeds` prints tables, `articles` prints one tab-separated line per article (ID, read state, starred, date, feed, title) so `cut`, `awk` and `grep` work on it, and `article` prints a short header and then the text. Commands that change articles name every article they changed, so you can see what an ID was:
 
 ```console
 $ omafeed feeds
@@ -131,6 +131,7 @@ More articles match; raise --limit or use --offset.
 
 $ omafeed star 2
 Starred 1 article
+2	GitHub Actions leaking secrets when Miri output is cached
 ```
 
 The "More articles match" note goes to stderr, so it never lands in a pipe.
@@ -149,7 +150,7 @@ $ omafeed refresh --json
 
 - `preview` is the first 220 characters. `article ID --json` returns the whole text in `text`, or the sanitized HTML in `html`.
 - `truncated` is `true` when more articles matched than `--limit` returned. Raise the limit or page with `--offset`.
-- `read`, `unread`, `star` and `unstar` check every ID first, so one wrong ID changes nothing.
+- `read`, `unread`, `star` and `unstar` check every ID first, so one wrong ID changes nothing, and return the ID and title of each article they changed.
 - `unsubscribe` without `--yes` deletes nothing and reports how many articles, and how many starred ones, it would remove.
 
 A daily digest, for example, is four commands:
