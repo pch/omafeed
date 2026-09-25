@@ -88,7 +88,7 @@ Not yet supported: full-article extraction, podcast playback, sync between devic
 
 ## Command line
 
-`omafeed` is both the app and its command line. With no arguments it opens the window; with a command it does the job and exits. It needs the GTK libraries installed (they come with the app) but no display, so it runs from a terminal, a script, or an SSH session. The commands read and write the same library as the app.
+`omafeed` is both the app and its command line. With no arguments it opens the window; with a command it does the job and exits. It needs the GTK libraries installed (they come with the app) but no display, so it runs from a terminal, a script, or an SSH session. The commands read and write the same library as the app, and an open window picks up their changes within a couple of seconds.
 
 | Command | What it does |
 | --- | --- |

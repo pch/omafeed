@@ -272,6 +272,15 @@ impl Store {
         Ok(())
     }
 
+    /// SQLite's change counter for this connection: it differs between two calls only if
+    /// another connection (another program) committed a write in between. Writes made through
+    /// this connection never change it.
+    pub fn data_version(&self) -> Result<i64> {
+        Ok(self
+            .conn
+            .query_row("PRAGMA data_version", [], |r| r.get(0))?)
+    }
+
     pub fn library(&self) -> Result<Library> {
         let folders = self
             .conn

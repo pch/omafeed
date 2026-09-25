@@ -504,3 +504,22 @@ fn feed_article_counts_report_articles_and_stars_per_feed() {
     assert_eq!(s.feed_article_counts(a).unwrap(), (0, 0));
     assert_eq!(s.feed_article_counts(b).unwrap(), (1, 0));
 }
+#[test]
+fn data_version_changes_only_when_another_connection_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("library.db");
+    let watcher = Store::open(&path).unwrap();
+    let writer = Store::open(&path).unwrap();
+    let before = watcher.data_version().unwrap();
+    assert_eq!(watcher.data_version().unwrap(), before, "stable at rest");
+    watcher.add_folder("Mine", None).unwrap();
+    assert_eq!(
+        watcher.data_version().unwrap(),
+        before,
+        "its own writes do not count"
+    );
+    writer.add_folder("Theirs", None).unwrap();
+    let after = watcher.data_version().unwrap();
+    assert_ne!(after, before, "another connection's write must show");
+    assert_eq!(watcher.data_version().unwrap(), after, "and then settle");
+}
