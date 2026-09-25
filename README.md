@@ -9,6 +9,7 @@ A native RSS reader for Linux and Omarchy, written in Rust. A three-pane library
 - RSS, Atom, and JSON Feed; manual refresh and scheduled refresh while the app is open.
 - Nested folders: create, rename, move, and remove. Move feeds between folders without losing article history or read state. Removing a folder promotes its feeds and children to its parent.
 - OPML import/export with duplicate detection and preserved folder hierarchy.
+- A command line with JSON output, so scripts and LLM agents can list, search, star, and subscribe without the window.
 - All Unread, Today, Starred, All Articles, folder and feed views; full-text search and unread filtering.
 - Read/unread, stars, bulk mark read with undo, and offline article text.
 - Sanitized HTML articles with images, code blocks, adjustable typography, copy link, and open original.
@@ -85,20 +86,60 @@ Search looks through the current view, including nested folders. Summary-only fe
 
 Not yet supported: full-article extraction, podcast playback, sync between devices, and notifications.
 
-## Scripting and LLMs
+## Command line
 
-Every command below prints one line of JSON and exits non-zero with a message on stderr when something is wrong. Article IDs come from `articles`; feed and folder IDs come from `feeds`.
+`omafeed` is both the app and its command line. With no arguments it opens the window; with a command it does the job and exits. It needs the GTK libraries installed (they come with the app) but no display, so it runs from a terminal, a script, or an SSH session. The commands read and write the same library as the app.
+
+| Command | What it does |
+| --- | --- |
+| `import FILE` / `export FILE` | Import or export subscriptions as OPML |
+| `refresh [--json]` | Fetch every feed now |
+| `status` | One line of totals, then any feed errors |
+| `discover URL [--json]` | List the feeds a website advertises |
+| `feeds` | Folders, feeds, unread counts and feed errors |
+| `articles [OPTIONS]` | List articles, newest first |
+| `article ID [--html]` | One article's text, or its sanitized HTML |
+| `read`, `unread`, `star`, `unstar` `ID...` | Change article state |
+| `subscribe URL [--folder ID] [--title NAME]` | Find a site's feed and add it; run `refresh` to fetch its articles |
+| `unsubscribe ID --yes` | Delete a feed and all its articles, starred ones included |
+
+`articles` options:
+
+| Option | Meaning |
+| --- | --- |
+| `--scope S` | `unread` (default), `today`, `starred`, `all`, `feed:ID` or `folder:ID` (folders include their subfolders) |
+| `--search WORDS` | Articles containing every word in the title, author or text; words match literally, there is no OR or phrase syntax; results stay newest first |
+| `--unread` | Only unread articles, whatever the scope |
+| `--since 24h` | Published within `90m`, `24h`, `2d` or `1w`. `--scope today` means since local midnight; `--since` is a rolling window |
+| `--limit N`, `--offset N` | Page through results (default 50) |
+
+### Output for scripts and LLMs
+
+`feeds`, `articles`, `article`, `read`, `unread`, `star`, `unstar`, `subscribe`, `unsubscribe`, `refresh --json` and `discover --json` print one line of JSON. Failures print a message to stderr and exit 1; a mistyped option exits 2. Feed and folder IDs come from `feeds`, article IDs from `articles`.
+
+```console
+$ omafeed feeds
+{"feeds":[{"error":null,"folder":null,"id":1,"site_url":"https://blog.rust-lang.org/","title":"Rust Blog","unread":9,"url":"https://blog.rust-lang.org/feed.xml"}],"folders":[],"starred":1,"unread":9}
+
+$ omafeed articles --since 24h --limit 1
+{"articles":[{"author":"Manish Goregaokar","feed":"Rust Blog","feed_id":1,"id":2,"preview":"The Rust Security Response Team was notified that Miri stores all environment variables…","published":"2026-09-21T00:00:00+00:00","read":false,"starred":false,"title":"GitHub Actions leaking secrets when Miri output is cached","url":"https://blog.rust-lang.org/2026/09/21/…"}],"count":1,"truncated":true}
+
+$ omafeed refresh --json
+{"failed":0,"feeds":[{"error":null,"title":"Rust Blog"}],"total":1}
+```
+
+- `preview` is the first 220 characters. `article ID` returns the whole text in `text`, or the sanitized HTML in `html`.
+- `truncated` is `true` when more articles matched than `--limit` returned. Raise the limit or page with `--offset`.
+- `read`, `unread`, `star` and `unstar` check every ID first, so one wrong ID changes nothing.
+- `unsubscribe` without `--yes` deletes nothing and reports how many articles, and how many starred ones, it would remove.
+
+A daily digest, for example, is four commands:
 
 ```sh
-omafeed feeds                                   # folders, feeds, unread counts, feed errors
-omafeed articles --scope unread --limit 20      # unread, today, starred, all, feed:ID, folder:ID
-omafeed articles --scope all --search "rust"    # full-text search; --unread, --offset also work
-omafeed articles --since 24h                    # published within 90m, 24h, 2d, 1w...; "truncated" says if --limit cut the list
-omafeed article 42                              # one article as plain text (--html for sanitized HTML)
-omafeed read 42 43                              # also: unread, star, unstar; a bad ID changes nothing
-omafeed subscribe https://example.org           # finds the feed; then run `omafeed refresh`
-omafeed refresh --json                          # per-feed results; discover URL --json also works
-omafeed unsubscribe 3 --yes                     # deletes the feed and its articles for good; without --yes it only explains
+omafeed refresh --json                              # which feeds updated, which failed
+omafeed articles --since 24h --unread --limit 200   # titles, previews, IDs
+omafeed article 42                                  # full text of the ones worth reading
+omafeed read 42 43 44                               # mark what was covered
 ```
 
 Feed content is written by strangers. A tool that hands article text to a model should treat it as untrusted data, never as instructions.
@@ -151,7 +192,7 @@ The native desktop smoke test (run headlessly in CI) also verifies WebKit render
 cargo test -p omafeed desktop_smoke -- --ignored --test-threads=1
 ```
 
-Tests use temporary SQLite databases and a localhost HTTP server; they do not depend on live blogs. Use `OMAFEED_HOME=/tmp/omafeed-test` to isolate data, settings, and cache during manual testing. CLI commands: `import FILE`, `export FILE`, `refresh`, `status`, `discover URL`, the JSON commands above, `--help`, `--version`.
+Tests use temporary SQLite databases and a localhost HTTP server; they do not depend on live blogs. Use `OMAFEED_HOME=/tmp/omafeed-test` to isolate data, settings, and cache during manual testing. The [command line](#command-line) also answers `--help` and `--version`.
 
 The workspace contains `omafeed-core` (database worker, migrations, OPML, fetch scheduling, sanitization) and `omafeed-app` (GTK interface and CLI). Database work runs on a dedicated worker; HTTP work runs on Tokio. The GTK thread receives results asynchronously.
 
