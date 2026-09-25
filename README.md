@@ -88,7 +88,7 @@ Not yet supported: full-article extraction, podcast playback, sync between devic
 
 ## Command line
 
-`omafeed` is both the app and its command line. With no arguments it opens the window; with a command it does the job and exits. It needs the GTK libraries installed (they come with the app) but no display, so it runs from a terminal, a script, or an SSH session. The commands read and write the same library as the app, and an open window picks up their changes within a couple of seconds.
+`omafeed` is both the app and its command line. With no arguments it opens the window; with a command it does the job and exits. `omafeed --help` lists every command under the version number. It needs the GTK libraries installed (they come with the app) but no display, so it runs from a terminal, a script, or an SSH session. The commands read and write the same library as the app, and an open window picks up their changes within a couple of seconds.
 
 | Command | What it does |
 | --- | --- |
@@ -98,24 +98,27 @@ Not yet supported: full-article extraction, podcast playback, sync between devic
 | `discover URL` | List the feeds a website advertises |
 | `feeds` | Folders, feeds, unread counts and feed errors |
 | `articles [OPTIONS]` | List articles, newest first |
+| `search WORDS [OPTIONS]` | Find articles containing all the words; searches read and unread articles alike |
 | `article ID [--html]` | One article's text, or its sanitized HTML |
 | `read`, `unread`, `star`, `unstar` `ID...` | Change article state |
 | `subscribe URL [--folder ID] [--title NAME]` | Find a site's feed and add it; run `refresh` to fetch its articles |
 | `unsubscribe ID --yes` | Delete a feed and all its articles, starred ones included |
 
-`articles` options:
+`articles` and `search` share these options; `search` also takes the words to find:
 
 | Option | Meaning |
 | --- | --- |
-| `--scope S` | `unread` (default), `today`, `starred`, `all`, `feed:ID` or `folder:ID` (folders include their subfolders) |
-| `--search WORDS` | Articles containing every word in the title, author or text; words match literally, there is no OR or phrase syntax; results stay newest first |
+| `--scope S` | `unread` (the default for `articles`), `today`, `starred`, `all` (the default for `search`), `feed:ID` or `folder:ID` (folders include their subfolders) |
+| `--search WORDS` | `articles` only: the same as `omafeed search WORDS --scope unread` |
 | `--unread` | Only unread articles, whatever the scope |
 | `--since 24h` | Published within `90m`, `24h`, `2d` or `1w`. `--scope today` means since local midnight; `--since` is a rolling window |
 | `--limit N`, `--offset N` | Page through results (default 50) |
 
+`search` matches whole words in an article's title, author and text, ignoring case. Every word must be present, in any order, and the words can be quoted or not: `omafeed search "agentic engineering"` and `omafeed search agentic engineering` do the same. Words match literally, so `OR`, `*`, quotes and `title:` mean nothing special (there is no OR or exact-phrase search), and a dash is ignored. Put `--` before a word that starts with a dash. Results stay newest first, as in the app's own search field.
+
 Failures print a message to stderr and exit 1; a mistyped option exits 2. Feed and folder IDs come from `feeds`, article IDs from `articles`.
 
-Output is plain text by default. `feeds` prints tables, `articles` prints one tab-separated line per article (ID, read state, starred, date, feed, title) so `cut`, `awk` and `grep` work on it, and `article` prints a short header and then the text. Commands that change articles name every article they changed, so you can see what an ID was:
+Output is plain text by default. `feeds` prints tables, `articles` prints one tab-separated line per article (ID, read state, starred, date, feed, title) so `cut`, `awk` and `grep` work on it, `search` prints the same lines as `articles`, and `article` prints a short header and then the text. Commands that change articles name every article they changed, so you can see what an ID was:
 
 ```console
 $ omafeed feeds
@@ -129,26 +132,47 @@ $ omafeed articles --scope all --limit 2
 2	unread	-	2026-09-21	Rust Blog	GitHub Actions leaking secrets when Miri output is cached
 More articles match; raise --limit or use --offset.
 
+$ omafeed search miri secrets
+2	unread	-	2026-09-21	Rust Blog	GitHub Actions leaking secrets when Miri output is cached
+
 $ omafeed star 2
 Starred 1 article
 2	GitHub Actions leaking secrets when Miri output is cached
 ```
 
-The "More articles match" note goes to stderr, so it never lands in a pipe.
+The "More articles match" and "No articles match" notes go to stderr, so they never land in a pipe.
+
+`article` keeps the article's shape: blank lines between paragraphs, `#` headings, `-` and `1.` lists (nested ones indented), `>` quotes, and code in fenced blocks exactly as written. Links keep their text but not their address, and images appear as `[image: description]`.
+
+```console
+$ omafeed article 2
+GitHub Actions leaking secrets when Miri output is cached
+Rust Blog · Manish Goregaokar · 2026-09-21 · unread
+https://blog.rust-lang.org/2026/09/21/github-actions-leaking-secrets-when-miri-output-is-cached/
+
+The Rust Security Response Team was notified that Miri stores all environment variables to target/…
+
+## Overview
+
+GitHub Actions makes it possible to cache directories between runs…
+```
 
 ### JSON output
 
-Add `--json` to `feeds`, `articles`, `article`, `read`, `unread`, `star`, `unstar`, `subscribe`, `unsubscribe`, `refresh` or `discover` to get one line of JSON instead, for scripts and LLM agents:
+Add `--json` to `feeds`, `articles`, `search`, `article`, `read`, `unread`, `star`, `unstar`, `subscribe`, `unsubscribe`, `refresh` or `discover` to get one line of JSON instead, for scripts and LLM agents:
 
 ```console
 $ omafeed articles --since 24h --limit 1 --json
 {"articles":[{"author":"Manish Goregaokar","feed":"Rust Blog","feed_id":1,"id":2,"preview":"The Rust Security Response Team was notified that Miri stores all environment variables…","published":"2026-09-21T00:00:00+00:00","read":false,"starred":false,"title":"GitHub Actions leaking secrets when Miri output is cached","url":"https://blog.rust-lang.org/2026/09/21/…"}],"count":1,"truncated":true}
 
+$ omafeed search "miri secrets" --json
+{"articles":[{"id":2,"title":"GitHub Actions leaking secrets when Miri output is cached","preview":"The Rust Security Response Team was notified that Miri stores…", …}],"count":1,"truncated":false}
+
 $ omafeed refresh --json
 {"failed":0,"feeds":[{"error":null,"title":"Rust Blog"}],"total":1}
 ```
 
-- `preview` is the first 220 characters. `article ID --json` returns the whole text in `text`, or the sanitized HTML in `html`.
+- `preview` is the first 220 characters, not the passage that matched a search. `article ID --json` returns the whole text in `text`, formatted as above, or the sanitized HTML in `html`.
 - `truncated` is `true` when more articles matched than `--limit` returned. Raise the limit or page with `--offset`.
 - `read`, `unread`, `star` and `unstar` check every ID first, so one wrong ID changes nothing, and return the ID and title of each article they changed.
 - `unsubscribe` without `--yes` deletes nothing and reports how many articles, and how many starred ones, it would remove.

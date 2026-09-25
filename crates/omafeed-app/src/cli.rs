@@ -3,7 +3,7 @@ use crate::DB_FILE;
 use anyhow::{Context, Result, bail};
 use omafeed_core::{
     Db, Paths, Settings, Store,
-    article::plain,
+    article::readable,
     db::{Article, Folder, PAGE_SIZE, Query, Scope},
     fetch::{Progress, Refresher},
 };
@@ -55,6 +55,29 @@ pub enum Command {
         /// Full-text search within the scope
         #[arg(long)]
         search: Option<String>,
+        /// Only unread articles
+        #[arg(long)]
+        unread: bool,
+        /// Only articles published this recently, e.g. 90m, 24h, 2d or 1w
+        #[arg(long, value_parser = parse_duration)]
+        since: Option<i64>,
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+        /// Print JSON, with a preview of each article, instead of text
+        #[arg(long)]
+        json: bool,
+    },
+    /// Search articles for words, e.g. omafeed search "agentic engineering"
+    Search {
+        /// Words to find, quoted or not; an article must contain all of them, in any order.
+        /// Put `--` before a word that starts with a dash: omafeed search -- -word
+        #[arg(required = true, value_parser = parse_query)]
+        query: Vec<String>,
+        /// unread, today, starred, all, feed:ID or folder:ID
+        #[arg(long, default_value = "all", value_parser = parse_scope)]
+        scope: Scope,
         /// Only unread articles
         #[arg(long)]
         unread: bool,
@@ -135,6 +158,24 @@ pub fn run(command: Command) -> Result<()> {
                 let query = Query {
                     scope,
                     search: search.unwrap_or_default(),
+                    unread_only: unread,
+                    offset,
+                };
+                let cutoff = since.map(|seconds| chrono::Utc::now().timestamp() - seconds);
+                articles(&db, query, limit, cutoff, json).await
+            }
+            Command::Search {
+                query,
+                scope,
+                unread,
+                since,
+                limit,
+                offset,
+                json,
+            } => {
+                let query = Query {
+                    scope,
+                    search: query.join(" "),
                     unread_only: unread,
                     offset,
                 };
@@ -283,6 +324,15 @@ fn parse_scope(text: &str) -> Result<Scope, String> {
             )),
         },
     }
+}
+
+/// A search needs at least one word; an empty one would match every article.
+fn parse_query(text: &str) -> Result<String, String> {
+    let words = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if words.is_empty() {
+        return Err("search needs at least one word".into());
+    }
+    Ok(words)
 }
 
 /// Seconds in a duration such as `90m`, `24h`, `2d` or `1w`.
@@ -471,6 +521,9 @@ async fn articles(
                 line(&a.title)
             );
         }
+        if found.is_empty() {
+            eprintln!("No articles match.");
+        }
         if truncated {
             eprintln!("More articles match; raise --limit or use --offset.");
         }
@@ -497,7 +550,7 @@ async fn article(db: &Db, id: i64, html: bool, json: bool) -> Result<()> {
         if html {
             item["html"] = json!(a.html);
         } else {
-            item["text"] = json!(plain(&a.html));
+            item["text"] = json!(readable(&a.html));
         }
         return print_json(&item);
     }
@@ -514,7 +567,7 @@ async fn article(db: &Db, id: i64, html: bool, json: bool) -> Result<()> {
     if !a.url.is_empty() {
         println!("{}", a.url);
     }
-    println!("\n{}", if html { a.html } else { plain(&a.html) });
+    println!("\n{}", if html { a.html } else { readable(&a.html) });
     Ok(())
 }
 
@@ -656,6 +709,22 @@ mod tests {
         ] {
             let err = parse_duration(bad).unwrap_err();
             assert!(err.contains("expected a duration"), "{bad:?}: {err}");
+        }
+    }
+
+    #[test]
+    fn a_search_needs_a_word() {
+        assert_eq!(parse_query("agentic"), Ok("agentic".into()));
+        assert_eq!(
+            parse_query("  agentic \t engineering\n"),
+            Ok("agentic engineering".into())
+        );
+        for empty in ["", " ", "\t\n"] {
+            assert!(
+                parse_query(empty)
+                    .unwrap_err()
+                    .contains("at least one word")
+            );
         }
     }
 

@@ -663,3 +663,223 @@ fn text_is_the_default_and_json_must_be_asked_for() {
         "Removed \"Extra\" and its 0 articles (0 starred)\n"
     );
 }
+
+#[test]
+fn search_finds_articles_by_words_in_any_state_and_scope() {
+    let (cli, _) = Cli::with_feed(old_feed());
+    let first = cli.json(&["search", "Hello"]);
+    assert_eq!(titles(&first), ["First"]);
+    assert_eq!(first["truncated"], false);
+    assert_eq!(first["articles"][0]["preview"], "Hello world");
+    let id = first["articles"][0]["id"].to_string();
+
+    // Case does not matter; every word must match, in any order.
+    assert_eq!(titles(&cli.json(&["search", "hello"])), ["First"]);
+    assert_eq!(titles(&cli.json(&["search", "world Hello"])), ["First"]);
+    // The words may be quoted as one argument or given separately.
+    assert_eq!(titles(&cli.json(&["search", "world", "Hello"])), ["First"]);
+    assert_eq!(count(&cli.json(&["search", "Hello", "Goodbye"])), 0);
+    assert_eq!(titles(&cli.json(&["search", "Hello  world"])), ["First"]);
+    assert_eq!(count(&cli.json(&["search", "Hello Goodbye"])), 0);
+    // The title and body are both searched.
+    assert_eq!(titles(&cli.json(&["search", "second"])), ["Second"]);
+
+    // Unlike `articles`, the default scope covers articles that are already read.
+    cli.json(&["read", &id]);
+    assert_eq!(titles(&cli.json(&["search", "Hello"])), ["First"]);
+    assert_eq!(count(&cli.json(&["search", "Hello", "--unread"])), 0);
+    assert_eq!(
+        count(&cli.json(&["search", "Hello", "--scope", "unread"])),
+        0
+    );
+    assert_eq!(
+        count(&cli.json(&["search", "Hello", "--scope", "starred"])),
+        0
+    );
+    assert_eq!(
+        count(&cli.json(&["search", "Hello", "--scope", "feed:1"])),
+        1
+    );
+    assert_eq!(
+        count(&cli.json(&["search", "Hello", "--scope", "feed:999"])),
+        0
+    );
+    // The fixture's articles are from January 2024.
+    assert_eq!(count(&cli.json(&["search", "Hello", "--since", "24h"])), 0);
+    assert_eq!(
+        count(&cli.json(&["search", "Hello", "--since", "36500d"])),
+        1
+    );
+
+    // Text output has the same lines as `articles`; no match is said on stderr.
+    let found = cli.run(&["search", "Hello"]);
+    assert_eq!(
+        found.stdout,
+        format!("{id}\tread\t-\t2024-01-01\tLocal Feed\tFirst\n")
+    );
+    assert!(found.stderr.is_empty());
+    let none = cli.run(&["search", "Hello Goodbye"]);
+    assert_eq!((none.code, none.stdout.as_str()), (0, ""));
+    assert!(
+        none.stderr.contains("No articles match."),
+        "{}",
+        none.stderr
+    );
+}
+
+#[test]
+fn search_treats_search_syntax_as_plain_words() {
+    let (cli, _) = Cli::with_feed(old_feed());
+    for hostile in [
+        "AND OR NOT",
+        "\"",
+        "Hello\" OR \"x",
+        "(*)",
+        "title:First",
+        "^Hello",
+    ] {
+        let run = cli.run(&["search", hostile, "--json"]);
+        assert_eq!(run.code, 0, "{hostile:?}: {}", run.stderr);
+        serde_json::from_str::<Value>(&run.stdout).unwrap();
+    }
+    // A word starting with a dash is read as a flag unless `--` comes first.
+    cli.fails(&["search", "-Hello"], 2, "unexpected argument");
+    // A dash is punctuation to the search index, not "exclude": `-Hello` finds `Hello`.
+    let dashed = cli.json(&["search", "--json", "--", "-Hello"]);
+    assert_eq!(titles(&dashed), ["First"]);
+    let both = cli.json(&["search", "--json", "--", "-Hello", "world"]);
+    assert_eq!(titles(&both), ["First"]);
+    // Column filters and operators are not special: `title:First` is not a title search.
+    assert_eq!(count(&cli.json(&["search", "title:First"])), 0);
+    assert_eq!(count(&cli.json(&["search", "Hello OR Goodbye"])), 0);
+}
+
+#[test]
+fn search_pages_through_many_results() {
+    let items: String = (0..450)
+        .map(|i| {
+            item(
+                &format!("Post {i}"),
+                &i.to_string(),
+                &half_hour_after(i),
+                "body",
+            )
+        })
+        .collect();
+    let (cli, _) = Cli::with_feed(channel("Busy", &items));
+    let some = cli.json(&["search", "body", "--limit", "300"]);
+    assert_eq!(
+        (count(&some), some["truncated"].clone()),
+        (300, true.into())
+    );
+    assert_eq!(titles(&some)[0], "Post 0");
+    let all = cli.json(&["search", "body", "--limit", "1000"]);
+    assert_eq!((count(&all), all["truncated"].clone()), (450, false.into()));
+    let tail = cli.json(&["search", "body", "--offset", "440", "--limit", "1000"]);
+    assert_eq!(count(&tail), 10);
+    // Words are whole tokens: "7" finds "Post 7" but not "Post 70".
+    assert_eq!(titles(&cli.json(&["search", "Post 7"])), ["Post 7"]);
+    assert_eq!(
+        count(&cli.json(&["search", "body", "--since", "24h", "--limit", "1000"])),
+        24
+    );
+}
+
+#[test]
+fn search_rejects_a_missing_or_empty_query() {
+    let (cli, _) = Cli::with_feed(old_feed());
+    cli.fails(&["search"], 2, "required");
+    cli.fails(&["search", ""], 2, "at least one word");
+    cli.fails(&["search", "   "], 2, "at least one word");
+    cli.fails(&["search", "Hello", ""], 2, "at least one word");
+    cli.fails(&["search", "Hello", "--scope", "bogus"], 2, "unknown scope");
+    cli.fails(
+        &["search", "Hello", "--since", "soon"],
+        2,
+        "expected a duration",
+    );
+}
+
+#[test]
+fn articles_keep_their_paragraphs_headings_and_lists() {
+    let body = "&lt;h2&gt;Why&lt;/h2&gt;&lt;p&gt;First &lt;a href=\"http://x.y\"&gt;paragraph&lt;/a&gt;.&lt;/p&gt;\
+                &lt;ul&gt;&lt;li&gt;&lt;p&gt;one&lt;/p&gt;&lt;/li&gt;&lt;li&gt;two&lt;/li&gt;&lt;/ul&gt;\
+                &lt;blockquote&gt;&lt;p&gt;Quoted&lt;/p&gt;&lt;/blockquote&gt;&lt;p&gt;Last.&lt;/p&gt;";
+    let (cli, _) = Cli::with_feed(channel(
+        "Notes",
+        &item("Rich", "r", "Mon, 01 Jan 2024 00:00:00 GMT", body),
+    ));
+    let expected = "## Why\n\nFirst paragraph.\n\n- one\n- two\n\n> Quoted\n\nLast.";
+    let id = cli.json(&["articles"])["articles"][0]["id"].to_string();
+    let run = cli.run(&["article", &id]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_eq!(
+        run.stdout,
+        format!("Rich\nNotes · 2024-01-01 · unread\nhttp://localhost/r\n\n{expected}\n")
+    );
+    assert_eq!(cli.json(&["article", &id])["text"], expected);
+}
+
+#[test]
+fn help_and_version_name_the_version() {
+    let cli = Cli::new();
+    let version = format!("omafeed {}", env!("CARGO_PKG_VERSION"));
+    for args in [["--help"], ["-h"], ["help"]] {
+        let run = cli.run(&args);
+        assert_eq!(run.code, 0, "{args:?}: {}", run.stderr);
+        assert_eq!(
+            run.stdout.lines().next(),
+            Some(version.as_str()),
+            "{args:?}"
+        );
+        assert!(run.stdout.contains("Usage: omafeed"), "{args:?}");
+        for command in ["search", "articles", "unsubscribe"] {
+            assert!(run.stdout.contains(command), "{args:?} lacks {command}");
+        }
+    }
+    assert_eq!(cli.run(&["--version"]).stdout, format!("{version}\n"));
+    // Help for one command still works.
+    let run = cli.run(&["search", "--help"]);
+    assert_eq!(run.code, 0);
+    assert!(run.stdout.contains("--scope"), "{}", run.stdout);
+}
+
+#[test]
+fn looking_at_the_library_never_changes_it() {
+    let (cli, url) = Cli::with_feed(old_feed());
+    let everything = || cli.json(&["articles", "--scope", "all", "--limit", "1000"]);
+    let before = everything();
+    let feeds_before = cli.json(&["feeds"]);
+    let id = before["articles"][0]["id"].to_string();
+    assert_eq!(before["articles"][0]["read"], false);
+
+    let commands: Vec<Vec<&str>> = vec![
+        vec!["feeds"],
+        vec!["feeds", "--json"],
+        vec!["status"],
+        vec!["articles"],
+        vec!["articles", "--scope", "all", "--json"],
+        vec!["search", "Hello"],
+        vec!["search", "Hello", "--json"],
+        vec!["article", &id],
+        vec!["article", &id, "--html"],
+        vec!["article", &id, "--json"],
+        vec!["discover", &url],
+        vec!["--help"],
+        vec!["search", "--help"],
+        vec!["unsubscribe", "1"],
+    ];
+    for args in commands {
+        // `unsubscribe` without --yes must refuse; the rest must succeed.
+        let expected = if args[0] == "unsubscribe" { 1 } else { 0 };
+        let run = cli.run(&args);
+        assert_eq!(run.code, expected, "{args:?}: {}", run.stderr);
+    }
+    assert_eq!(
+        everything(),
+        before,
+        "a read-only command changed an article"
+    );
+    assert_eq!(cli.json(&["feeds"]), feeds_before);
+    assert_eq!(cli.json(&["feeds"])["unread"], 2);
+}
