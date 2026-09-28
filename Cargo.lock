@@ -1664,7 +1664,7 @@ dependencies = [
 
 [[package]]
 name = "omafeed"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -1673,6 +1673,7 @@ dependencies = [
  "gtk4",
  "libadwaita",
  "omafeed-core",
+ "serde_json",
  "tempfile",
  "tokio",
  "webkit6",
@@ -1680,7 +1681,7 @@ dependencies = [
 
 [[package]]
 name = "omafeed-core"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "ammonia",
  "anyhow",

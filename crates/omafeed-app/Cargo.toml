@@ -13,6 +13,7 @@ omafeed-core = { path = "../omafeed-core" }
 anyhow.workspace = true
 async-channel.workspace = true
 chrono.workspace = true
+serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "sync", "macros"] }
 adw = { package = "libadwaita", version = "0.8", features = ["v1_6"] }
 clap = { version = "4", features = ["derive"] }

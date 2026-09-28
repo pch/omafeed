@@ -272,6 +272,15 @@ impl Store {
         Ok(())
     }
 
+    /// SQLite's change counter for this connection: it differs between two calls only if
+    /// another connection (another program) committed a write in between. Writes made through
+    /// this connection never change it.
+    pub fn data_version(&self) -> Result<i64> {
+        Ok(self
+            .conn
+            .query_row("PRAGMA data_version", [], |r| r.get(0))?)
+    }
+
     pub fn library(&self) -> Result<Library> {
         let folders = self
             .conn
@@ -428,6 +437,17 @@ impl Store {
         self.conn
             .execute(UPDATE_FEED, params![Self::name(title)?, folder, url, id])?;
         Ok(())
+    }
+
+    /// Stored articles for a feed, and how many of them are starred.
+    pub fn feed_article_counts(&self, id: i64) -> Result<(i64, i64)> {
+        Ok(self.conn.query_row(
+            "SELECT count(*), COALESCE(SUM(s.starred), 0)
+             FROM articles a JOIN article_state s ON s.article_id = a.id
+             WHERE a.feed_id = ?1",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?)
     }
 
     pub fn delete_feed(&self, id: i64) -> Result<()> {

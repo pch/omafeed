@@ -58,7 +58,8 @@ fn desktop_smoke() {
     for p in [&paths.data, &paths.config, &paths.cache] {
         std::fs::create_dir_all(p).unwrap();
     }
-    let db = Db::open(paths.data.join("test.db")).unwrap();
+    let db_path = paths.data.join("test.db");
+    let db = Db::open(&db_path).unwrap();
     let runtime = Arc::new(tokio::runtime::Runtime::new().unwrap());
     let id = runtime
         .block_on(db.call(|s| {
@@ -160,6 +161,18 @@ fn desktop_smoke() {
             .read,
         "Theme/reader reload must not mark an intentionally unread article read"
     );
+    // Another program (the command line) changing the library shows up without any action
+    // in the window. A second connection to the same file stands in for that program.
+    assert!(u.articles.borrow().iter().any(|a| a.id == id && !a.read));
+    let outsider = Db::open(&db_path).unwrap();
+    runtime
+        .block_on(outsider.call(move |s| s.set_read(id, true)))
+        .unwrap();
+    pump_until(|| u.articles.borrow().iter().all(|a| a.id != id || a.read));
+    runtime
+        .block_on(outsider.call(move |s| s.set_read(id, false)))
+        .unwrap();
+    pump_until(|| u.articles.borrow().iter().any(|a| a.id == id && !a.read));
     // Choosing a different view closes the article instead of keeping it open.
     let starred = u
         .sidebar_rows

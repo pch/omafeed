@@ -477,3 +477,49 @@ fn upgrading_a_version_1_database_reextracts_article_text() {
             == 1
     );
 }
+#[test]
+fn feed_article_counts_report_articles_and_stars_per_feed() {
+    let mut s = Store::open(":memory:").unwrap();
+    let a = s.add_feed("A", "https://example.org/a", None).unwrap();
+    let b = s.add_feed("B", "https://example.org/b", None).unwrap();
+    let two = rss(
+        "<item><guid>1</guid><title>One</title></item><item><guid>2</guid><title>Two</title></item>",
+    );
+    s.commit_download(a, download(&two), 30).unwrap();
+    let one = rss("<item><guid>3</guid><title>Three</title></item>");
+    s.commit_download(b, download(&one), 30).unwrap();
+    assert_eq!(s.feed_article_counts(a).unwrap(), (2, 0));
+    let in_a = Query {
+        scope: Scope::Feed(a),
+        ..Default::default()
+    };
+    let first = s.articles(&in_a).unwrap().remove(0);
+    s.set_starred(first.id, true).unwrap();
+    // Read state does not matter; only stars are counted separately.
+    s.set_read(first.id, true).unwrap();
+    assert_eq!(s.feed_article_counts(a).unwrap(), (2, 1));
+    assert_eq!(s.feed_article_counts(b).unwrap(), (1, 0));
+    assert_eq!(s.feed_article_counts(999).unwrap(), (0, 0));
+    s.delete_feed(a).unwrap();
+    assert_eq!(s.feed_article_counts(a).unwrap(), (0, 0));
+    assert_eq!(s.feed_article_counts(b).unwrap(), (1, 0));
+}
+#[test]
+fn data_version_changes_only_when_another_connection_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("library.db");
+    let watcher = Store::open(&path).unwrap();
+    let writer = Store::open(&path).unwrap();
+    let before = watcher.data_version().unwrap();
+    assert_eq!(watcher.data_version().unwrap(), before, "stable at rest");
+    watcher.add_folder("Mine", None).unwrap();
+    assert_eq!(
+        watcher.data_version().unwrap(),
+        before,
+        "its own writes do not count"
+    );
+    writer.add_folder("Theirs", None).unwrap();
+    let after = watcher.data_version().unwrap();
+    assert_ne!(after, before, "another connection's write must show");
+    assert_eq!(watcher.data_version().unwrap(), after, "and then settle");
+}
