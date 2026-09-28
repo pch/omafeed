@@ -131,6 +131,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(SCHEMA_V1),
     // Plain-text extraction no longer inserts spaces before punctuation after links.
     Migration::Rust(reextract_text),
+    // Blocks also separate words where they end, and `details`/`summary` count as blocks.
+    Migration::Rust(reextract_text),
 ];
 
 const SCHEMA_V1: &str = r#"

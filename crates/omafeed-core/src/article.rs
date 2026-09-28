@@ -19,7 +19,10 @@ const BLOCKS: &[&str] = &[
     "aside",
     "blockquote",
     "br",
+    "caption",
+    "center",
     "dd",
+    "details",
     "div",
     "dl",
     "dt",
@@ -33,12 +36,15 @@ const BLOCKS: &[&str] = &[
     "h5",
     "h6",
     "header",
+    "hgroup",
     "hr",
     "li",
+    "nav",
     "ol",
     "p",
     "pre",
     "section",
+    "summary",
     "table",
     "td",
     "th",
@@ -51,10 +57,27 @@ pub fn plain(html: &str) -> String {
     let safe = ammonia::clean(html);
     let doc = scraper::Html::parse_fragment(&safe);
     let mut text = String::new();
+    let is_block = |node: &scraper::Node| {
+        node.as_element()
+            .is_some_and(|e| BLOCKS.contains(&e.name()))
+    };
+    // A block separates words where it ends as well as where it starts: `<summary>A</summary>B`.
+    // Closes are found as in `readable`, without recursion.
+    let mut open = Vec::new();
     for node in doc.root_element().descendants() {
+        while open.last().is_some_and(|top| node.parent() != Some(*top)) {
+            if open.pop().is_some_and(|closed| is_block(closed.value())) {
+                text.push(' ');
+            }
+        }
         match node.value() {
             scraper::Node::Text(t) => text.push_str(t),
-            scraper::Node::Element(e) if BLOCKS.contains(&e.name()) => text.push(' '),
+            scraper::Node::Element(_) => {
+                if is_block(node.value()) {
+                    text.push(' ');
+                }
+                open.push(node);
+            }
             _ => {}
         }
     }
@@ -107,6 +130,16 @@ pub fn readable(html: &str) -> String {
     out.finish()
 }
 
+/// A list item being read: its later blocks line up under its first.
+struct Item {
+    /// Spaces as wide as the item's marker, indentation included.
+    pad: String,
+    /// Quote depth outside the item; quotes inside it go after the marker.
+    quote: usize,
+    /// The top-level list it belongs to, so its blocks stay tight.
+    list: usize,
+}
+
 #[derive(Default)]
 struct Readable {
     /// Finished blocks, and the list each item belongs to. Items of one list sit on
@@ -118,7 +151,9 @@ struct Readable {
     inline: String,
     quote: usize,
     /// Open lists: `None` for bullets, `Some(n)` for numbered lists that have reached `n`.
-    lists: Vec<Option<usize>>,
+    lists: Vec<Option<i64>>,
+    /// Open list items, innermost last.
+    items: Vec<Item>,
     /// Prefix for the next block, and whether it starts a list item.
     marker: Option<(String, bool)>,
     /// Raw text of the `<pre>` being read.
@@ -127,7 +162,11 @@ struct Readable {
 
 impl Readable {
     fn open(&mut self, e: &scraper::node::Element) {
-        if self.pre.is_some() {
+        if let Some(code) = &mut self.pre {
+            // Some highlighters end code lines with `<br>` instead of a newline.
+            if e.name() == "br" {
+                code.push('\n');
+            }
             return;
         }
         match e.name() {
@@ -151,18 +190,26 @@ impl Readable {
                 if self.lists.is_empty() {
                     self.list_count += 1;
                 }
-                self.lists.push((e.name() == "ol").then_some(0));
+                // `<ol start="4">` continues numbering from an earlier list.
+                let start = e.attr("start").and_then(|s| s.trim().parse::<i64>().ok());
+                self.lists
+                    .push((e.name() == "ol").then(|| start.unwrap_or(1).saturating_sub(1)));
             }
             "li" => {
                 self.flush();
                 let indent = "  ".repeat(self.lists.len().saturating_sub(1));
                 let prefix = match self.lists.last_mut() {
                     Some(Some(n)) => {
-                        *n += 1;
+                        *n = n.saturating_add(1);
                         format!("{indent}{n}. ")
                     }
                     _ => format!("{indent}- "),
                 };
+                self.items.push(Item {
+                    pad: " ".repeat(prefix.chars().count()),
+                    quote: self.quote,
+                    list: self.list_count,
+                });
                 self.marker = Some((prefix, true));
             }
             "blockquote" => {
@@ -177,7 +224,12 @@ impl Readable {
             name @ ("h1" | "h2" | "h3" | "h4" | "h5" | "h6") => {
                 self.flush();
                 let level = usize::from(name.as_bytes()[1] - b'0');
-                self.marker = Some((format!("{} ", "#".repeat(level)), false));
+                let heading = format!("{} ", "#".repeat(level));
+                // A heading that starts a list item keeps the item's marker: `- ## Title`.
+                self.marker = Some(match self.marker.take() {
+                    Some((item, true)) => (item + &heading, true),
+                    _ => (heading, false),
+                });
             }
             name if BLOCKS.contains(&name) => self.flush(),
             _ => {}
@@ -205,6 +257,9 @@ impl Readable {
                 self.flush();
                 // An empty item or heading must not lend its marker to the next block.
                 self.marker = None;
+                if name == "li" {
+                    self.items.pop();
+                }
             }
             name if BLOCKS.contains(&name) => self.flush(),
             _ => {}
@@ -219,12 +274,54 @@ impl Readable {
         }
     }
 
-    fn quoted(&self, text: &str) -> String {
-        let quote = "> ".repeat(self.quote);
-        text.lines()
-            .map(|l| format!("{quote}{l}"))
+    /// Add a finished block, with the pending heading or list marker when `marked`. Inside a
+    /// list item the block lines up under the item's text, and quotes opened inside the item
+    /// go after its marker: `- > quoted`.
+    fn place(&mut self, lines: &[String], marked: bool) {
+        let (prefix, starts_item) = if marked {
+            self.marker.take().unwrap_or_default()
+        } else {
+            Default::default()
+        };
+        let (outer, pad, inner, list) = match self.items.last() {
+            Some(item) => {
+                let first = match (starts_item, prefix.is_empty()) {
+                    (true, _) => prefix,
+                    (false, true) => item.pad.clone(),
+                    (false, false) => format!("{}{prefix}", item.pad),
+                };
+                let pad = " ".repeat(first.chars().count());
+                let inner = self.quote.saturating_sub(item.quote);
+                ((item.quote, first), pad, inner, Some(item.list))
+            }
+            None => {
+                let pad = " ".repeat(prefix.chars().count());
+                (
+                    (self.quote, prefix),
+                    pad,
+                    0,
+                    starts_item.then_some(self.list_count),
+                )
+            }
+        };
+        let (outer, first) = outer;
+        let (outer, inner) = ("> ".repeat(outer), "> ".repeat(inner));
+        let text = lines
+            .iter()
+            .enumerate()
+            .map(|(i, l)| {
+                let lead = if i == 0 { &first } else { &pad };
+                let line = format!("{outer}{lead}{inner}{l}");
+                // A blank code line gets no dangling indentation.
+                if l.is_empty() {
+                    line.trim_end().to_owned()
+                } else {
+                    line
+                }
+            })
             .collect::<Vec<_>>()
-            .join("\n")
+            .join("\n");
+        self.blocks.push((text, list));
     }
 
     /// Turn the text collected so far into a block, with its heading or list marker.
@@ -240,16 +337,7 @@ impl Readable {
         if lines.is_empty() {
             return;
         }
-        let (prefix, item) = self.marker.take().unwrap_or_default();
-        let pad = " ".repeat(prefix.chars().count());
-        let body = lines
-            .iter()
-            .enumerate()
-            .map(|(i, l)| format!("{}{l}", if i == 0 { &prefix } else { &pad }))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let text = self.quoted(&body);
-        self.blocks.push((text, item.then_some(self.list_count)));
+        self.place(&lines, true);
     }
 
     fn end_pre(&mut self) {
@@ -265,8 +353,13 @@ impl Readable {
             .max()
             .unwrap_or_default();
         let fence = "`".repeat(longest.max(2) + 1);
-        let text = self.quoted(&format!("{fence}\n{code}\n{fence}"));
-        self.blocks.push((text, None));
+        let lines: Vec<String> = [fence.as_str(), code, fence.as_str()]
+            .iter()
+            .flat_map(|part| part.lines())
+            .map(str::to_owned)
+            .collect();
+        // Code in a list item belongs to the item; elsewhere it never takes a heading marker.
+        self.place(&lines, !self.items.is_empty());
     }
 
     fn finish(mut self) -> String {
@@ -489,6 +582,59 @@ mod tests {
         assert_eq!(
             readable("<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>"),
             "A | B\n\n1 | 2"
+        );
+    }
+
+    #[test]
+    fn readable_keeps_line_breaks_in_code() {
+        assert_eq!(
+            readable("<pre>let a = 1;<br>let b = 2;</pre>"),
+            "```\nlet a = 1;\nlet b = 2;\n```"
+        );
+    }
+
+    #[test]
+    fn readable_separates_details_and_other_blocks() {
+        assert_eq!(
+            readable("<details><summary>Changes</summary>Fixed bug</details><center>a</center>b"),
+            "Changes\n\nFixed bug\n\na\n\nb"
+        );
+        assert_eq!(
+            plain("<details><summary>Changes</summary>Fixed</details><nav>x</nav>y"),
+            "Changes Fixed x y"
+        );
+    }
+
+    #[test]
+    fn readable_numbers_from_the_list_start() {
+        assert_eq!(
+            readable("<ol start=\"4\"><li>four</li><li>five</li></ol>"),
+            "4. four\n5. five"
+        );
+        assert_eq!(readable("<ol start=\"x\"><li>one</li></ol>"), "1. one");
+    }
+
+    #[test]
+    fn readable_keeps_everything_in_a_list_item_inside_it() {
+        assert_eq!(
+            readable("<ul><li><p>a</p><p>b</p></li><li>c</li></ul><p>after</p>"),
+            "- a\n  b\n- c\n\nafter"
+        );
+        assert_eq!(
+            readable("<ul><li><blockquote>q</blockquote></li></ul>"),
+            "- > q"
+        );
+        assert_eq!(
+            readable("<blockquote><ul><li>x</li></ul></blockquote>"),
+            "> - x"
+        );
+        assert_eq!(
+            readable("<ul><li><h3>H</h3>body</li></ul>"),
+            "- ### H\n  body"
+        );
+        assert_eq!(
+            readable("<ol><li>run<pre>make\n\nmake install</pre>then done</li></ol>"),
+            "1. run\n   ```\n   make\n\n   make install\n   ```\n   then done"
         );
     }
 

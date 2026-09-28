@@ -950,3 +950,35 @@ fn a_snapshot_does_not_see_writes_made_while_it_reads() {
     assert_eq!((before, during), (1, 1));
     assert_eq!(mine.articles(&all()).unwrap().len(), 2, "seen once it ends");
 }
+
+#[test]
+fn upgrading_a_version_2_database_separates_words_at_block_ends() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("old.db");
+    {
+        let mut s = Store::open(&path).unwrap();
+        let f = s
+            .add_feed("Test", "https://example.org/feed", None)
+            .unwrap();
+        s.commit_download(
+            f,
+            download(&rss(
+                "<item><guid>1</guid><title>A</title><description>&lt;details&gt;&lt;summary&gt;Changes&lt;/summary&gt;Fixed&lt;/details&gt;</description></item>",
+            )),
+            30,
+        )
+        .unwrap();
+    }
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch("UPDATE articles SET text = 'ChangesFixed'; PRAGMA user_version = 2;")
+        .unwrap();
+    drop(conn);
+    let s = Store::open(&path).unwrap();
+    assert_eq!(s.articles(&all()).unwrap()[0].preview, "Changes Fixed");
+    let exact = Query {
+        search: "changes".into(),
+        exact: true,
+        ..all()
+    };
+    assert_eq!(s.articles(&exact).unwrap().len(), 1);
+}
