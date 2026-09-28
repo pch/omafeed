@@ -243,6 +243,8 @@ pub struct Ui {
     /// Incremented per request so stale async results are discarded.
     generation: Cell<u64>,
     selection_generation: Cell<u64>,
+    /// Counts this window's own read/star changes, so a reload that raced one keeps it.
+    state_writes: Cell<u64>,
     /// Article to mark read once WebKit finishes loading it.
     pending_mark: Cell<Option<i64>>,
     /// Suppresses selection signals while lists are repopulated.
@@ -344,6 +346,7 @@ impl Ui {
             page: Cell::new(0),
             generation: Cell::new(0),
             selection_generation: Cell::new(0),
+            state_writes: Cell::new(0),
             pending_mark: Cell::new(None),
             rebuilding: Cell::new(false),
             busy: Cell::new(false),
@@ -579,6 +582,7 @@ impl Ui {
         let u = self.clone();
         let selected = self.selected.borrow().as_ref().map(|a| a.id);
         let generation = self.selection_generation.get();
+        let writes = self.state_writes.get();
         glib::spawn_future_local(async move {
             let result =
                 u.db.call(move |s| {
@@ -594,7 +598,14 @@ impl Ui {
                     // A result for the old selection must not replace a newly opened article.
                     if u.selection_generation.get() == generation {
                         match article {
-                            Some(Some(a)) => {
+                            Some(Some(mut a)) => {
+                                // A star or read change made here since the read is newer.
+                                if u.state_writes.get() != writes
+                                    && let Some(old) = u.selected.borrow().as_ref()
+                                {
+                                    a.read = old.read;
+                                    a.starred = old.starred;
+                                }
                                 // State-only updates preserve the reader's scroll position.
                                 let render = u.selected.borrow().as_ref().is_some_and(|old| {
                                     old.html != a.html

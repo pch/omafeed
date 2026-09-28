@@ -199,6 +199,7 @@ impl Ui {
 
     /// Persist a read and/or star change, then update every view of the article.
     pub(super) fn set_state(self: &Rc<Self>, id: i64, read: Option<bool>, starred: Option<bool>) {
+        self.state_writes.set(self.state_writes.get() + 1);
         let u = self.clone();
         glib::spawn_future_local(async move {
             let result =
@@ -241,6 +242,7 @@ impl Ui {
     }
 
     pub(super) fn mark_all(self: &Rc<Self>) {
+        self.state_writes.set(self.state_writes.get() + 1);
         let q = self.query.borrow().clone();
         let u = self.clone();
         glib::spawn_future_local(async move {
@@ -271,6 +273,7 @@ impl Ui {
         }
         let selected = self.selected.borrow().as_ref().map(|a| a.id);
         let restore = selected.is_some_and(|id| ids.contains(&id));
+        self.state_writes.set(self.state_writes.get() + 1);
         let u = self.clone();
         glib::spawn_future_local(async move {
             match u.db.call(move |s| s.undo_read(&ids)).await {
