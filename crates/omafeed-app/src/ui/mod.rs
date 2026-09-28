@@ -4,7 +4,8 @@ mod keys;
 mod reader;
 mod sidebar;
 #[cfg(test)]
-mod tests;
+#[allow(dead_code)]
+pub(crate) mod tests;
 mod theme;
 pub mod widgets;
 

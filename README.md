@@ -82,7 +82,7 @@ OPML contains subscriptions, not historical articles or read/star state. The fir
 
 Click **Manage library** (Ctrl+L) to create folders and subscribe using a website or feed URL. Omafeed finds the site's RSS, Atom, or JSON feed, lets you choose when there are several, and uses the feed's title if you leave the name blank. Select a feed or folder and choose **Edit / Move** to rename it, move it, or correct its URL without losing saved articles. Removing a feed deletes its articles after confirmation; removing a folder keeps them.
 
-Search looks through the current view, including nested folders. It forgives typos (`agentc` finds `agentic`), treats plural and singular forms alike, and matches the start of the last word you type, so results appear as you go. Words shorter than five letters and numbers are matched exactly, and a word that appears in your articles is never swapped for a similar one. Summary-only feeds show the summary; open the original for the rest. Podcast episodes appear as download links.
+Search looks through the current view, including nested folders. It forgives typos (`agentc` finds `agentic`), treats plural and singular forms alike, and matches the start of the last word you type, so results appear as you go. Words shorter than five letters are not typo-corrected; the last word can match prefixes from three letters onward. Numbers are matched exactly, and a word that appears in your articles is never swapped for a similar one. Summary-only feeds show the summary; open the original for the rest. Podcast episodes appear as download links.
 
 Not yet supported: full-article extraction, podcast playback, sync between devices, and notifications.
 
@@ -111,10 +111,11 @@ Not yet supported: full-article extraction, podcast playback, sync between devic
 | `--scope S` | `unread` (the default for `articles`), `today`, `starred`, `all` (the default for `search`), `feed:ID` or `folder:ID` (folders include their subfolders) |
 | `--search WORDS` | `articles` only: the same as `omafeed search WORDS --scope unread` |
 | `--unread` | Only unread articles, whatever the scope |
+| `--exact` | Disable typo correction, plural expansion and prefix matching |
 | `--since 24h` | Published within `90m`, `24h`, `2d` or `1w`. `--scope today` means since local midnight; `--since` is a rolling window |
 | `--limit N`, `--offset N` | Page through results (default 50) |
 
-`search` matches whole words in an article's title, author and text, ignoring case. Every word must be present, in any order, and the words can be quoted or not: `omafeed search "agentic engineering"` and `omafeed search agentic engineering` do the same. Words match literally, so `OR`, `*`, quotes and `title:` mean nothing special (there is no OR or exact-phrase search), and a dash is ignored. Put `--` before a word that starts with a dash. Results stay newest first, as in the app's own search field.
+`search` searches an article's title, author and text, ignoring case and accents as supported by SQLite’s Unicode tokenizer. By default it uses the same forgiving search as the app; use `--exact` for whole-word matching without expansion. Every word must be present, in any order, and the words can be quoted or not: `omafeed search "agentic engineering"` and `omafeed search agentic engineering` do the same. Typed search syntax is quoted, so `OR`, `*`, quotes and `title:` mean nothing special (there is no OR or exact-phrase search), and a dash is ignored. Put `--` before a word that starts with a dash. Results stay newest first, as in the app's own search field.
 
 Failures print a message to stderr and exit 1; a mistyped option exits 2. Feed and folder IDs come from `feeds`, article IDs from `articles`.
 
@@ -233,7 +234,7 @@ cargo test -p omafeed-core
 The native desktop smoke test (run headlessly in CI) also verifies WebKit rendering, read/star state, folder creation, and moving a feed through the real dialogs:
 
 ```sh
-cargo test -p omafeed desktop_smoke -- --ignored --test-threads=1
+cargo test -p omafeed --test desktop_smoke -- --ignored
 ```
 
 Tests use temporary SQLite databases and a localhost HTTP server; they do not depend on live blogs. Use `OMAFEED_HOME=/tmp/omafeed-test` to isolate data, settings, and cache during manual testing. The [command line](#command-line) also answers `--help` and `--version`.

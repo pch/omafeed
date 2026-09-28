@@ -47,7 +47,7 @@ jobs:
           LIBGL_ALWAYS_SOFTWARE: "1"
         run: >-
           dbus-run-session -- xvfb-run -a
-          cargo test -p omafeed --locked desktop_smoke -- --ignored --test-threads=1
+          cargo test -p omafeed --locked --test desktop_smoke -- --ignored
       - name: Validate desktop entry and AppStream metadata
         run: |
           desktop-file-validate data/io.github.pch.Omafeed.desktop

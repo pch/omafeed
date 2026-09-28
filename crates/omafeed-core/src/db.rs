@@ -648,6 +648,39 @@ impl Store {
         Ok(opml::export(&self.library()?))
     }
 
+    /// Use the index's own tokenizer for Unicode case/accent normalization. The scratch
+    /// index is connection-local and never writes to the library or invalidates its vocabulary.
+    /// ASCII needs no scratch index; punctuated terms retain literal phrase semantics.
+    fn normalize_search(&self, search: &str) -> Result<String> {
+        let mut words = Vec::new();
+        for word in search.split_whitespace() {
+            if word.is_ascii() || !word.chars().all(char::is_alphanumeric) {
+                words.push(word.to_owned());
+                continue;
+            }
+            self.conn.execute_batch(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS temp.search_token USING fts5(text, tokenize='unicode61');
+                 CREATE VIRTUAL TABLE IF NOT EXISTS temp.search_token_vocab USING fts5vocab(temp, search_token, 'instance');
+                 DELETE FROM temp.search_token;"
+            )?;
+            self.conn.execute(
+                "INSERT INTO temp.search_token(rowid, text) VALUES(1, ?1)",
+                [word],
+            )?;
+            let tokens = self
+                .conn
+                .prepare("SELECT term FROM temp.search_token_vocab ORDER BY offset")?
+                .query_map([], |r| r.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            words.push(if tokens.len() == 1 {
+                tokens[0].clone()
+            } else {
+                word.to_owned()
+            });
+        }
+        Ok(words.join(" "))
+    }
+
     /// The index query for a search: forgiving unless the query asks for exact matching.
     fn match_expression(&self, q: &Query) -> Result<Option<String>> {
         if q.exact || q.search.trim().is_empty() {
@@ -671,7 +704,7 @@ impl Store {
             self.vocabulary_loads.set(self.vocabulary_loads.get() + 1);
         }
         Ok(fuzzy::expression(
-            &q.search,
+            &self.normalize_search(&q.search)?,
             cache.as_ref().map(|(_, words)| words),
         ))
     }

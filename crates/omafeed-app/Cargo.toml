@@ -23,3 +23,9 @@ webkit6 = { version = "0.5", features = ["v2_42"] }
 [dev-dependencies]
 tempfile.workspace = true
 tokio = { workspace = true, features = ["net", "io-util"] }
+
+# GTK/WebKit must initialize on the process main thread, not a libtest worker.
+[[test]]
+name = "desktop_smoke"
+path = "tests/desktop_smoke.rs"
+harness = false

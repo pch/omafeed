@@ -45,9 +45,7 @@ fn form_button(text: &str) -> gtk::Button {
         .find(|b| b.label().as_deref() == Some(text))
         .unwrap_or_else(|| panic!("Missing form button {text}"))
 }
-#[test]
-#[ignore = "requires a desktop session; uses an isolated temporary library"]
-fn desktop_smoke() {
+pub(crate) fn desktop_smoke() {
     adw::init().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let paths = Paths {

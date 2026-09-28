@@ -155,6 +155,10 @@ pub(crate) fn expression(typed: &str, vocabulary: Option<&Vocabulary>) -> Option
 }
 
 fn widen(options: &mut Vec<String>, word: &str, is_last: bool, vocabulary: &Vocabulary) {
+    // Numeric tokens are identifiers/dates, never prefixes or plural candidates.
+    if word.chars().all(char::is_numeric) {
+        return;
+    }
     let chars = word.chars().count();
     if is_last && chars >= MIN_PREFIX {
         options.push(format!("{}*", quote(word)));
@@ -170,7 +174,7 @@ fn widen(options: &mut Vec<String>, word: &str, is_last: bool, vocabulary: &Voca
         for form in forms.filter(|f| f.chars().count() >= MIN_PREFIX && vocabulary.contains(f)) {
             options.push(quote(&form));
         }
-    } else if !word.chars().all(char::is_numeric) {
+    } else {
         let max = allowed_mistakes(chars);
         if max > 0 {
             options.extend(vocabulary.near(word, max).into_iter().map(quote));

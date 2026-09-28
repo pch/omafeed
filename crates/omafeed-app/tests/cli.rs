@@ -883,3 +883,19 @@ fn looking_at_the_library_never_changes_it() {
     assert_eq!(cli.json(&["feeds"]), feeds_before);
     assert_eq!(cli.json(&["feeds"])["unread"], 2);
 }
+
+#[test]
+fn exact_option_disables_expansion_in_both_search_commands() {
+    let (cli, _) = Cli::with_feed(old_feed());
+    assert_eq!(cli.json(&["search", "Hell"])["count"], 1);
+    assert_eq!(cli.json(&["search", "Hell", "--exact"])["count"], 0);
+    assert_eq!(
+        cli.json(&["articles", "--scope", "all", "--search", "Hell"])["count"],
+        1
+    );
+    assert_eq!(
+        cli.json(&["articles", "--scope", "all", "--search", "Hell", "--exact"])["count"],
+        0
+    );
+    assert_eq!(cli.json(&["search", "Hello", "--exact"])["count"], 1);
+}

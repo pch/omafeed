@@ -312,11 +312,10 @@ impl Ui {
 
 #[cfg(test)]
 mod tests {
-    use super::format_date;
-    use chrono::{Local, TimeZone};
-
     #[test]
     fn dates_get_coarser_with_age() {
+        use super::format_date;
+        use chrono::{Local, TimeZone};
         let now = Local.with_ymd_and_hms(2026, 9, 25, 15, 0, 0).unwrap();
         let at = |y, m, d, h| {
             Local

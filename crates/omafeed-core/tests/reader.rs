@@ -872,3 +872,51 @@ fn the_word_list_is_read_again_only_when_articles_change() {
     found(&s, "fourht");
     assert_eq!(s.vocabulary_loads(), 4);
 }
+
+#[test]
+fn numeric_search_never_expands_to_prefixes_or_plural_forms() {
+    let s = library(&[("Exact", "2026"), ("Longer", "202601"), ("Suffix", "2026s")]);
+    assert_eq!(found(&s, "2026"), ["Exact"]);
+    assert!(found(&s, "202").is_empty());
+    assert_eq!(
+        s.mark_read(&Query {
+            scope: Scope::All,
+            search: "2026".into(),
+            ..Default::default()
+        })
+        .unwrap()
+        .len(),
+        1
+    );
+}
+
+#[test]
+fn accented_known_words_use_the_index_normalization_before_correction() {
+    let s = library(&[
+        ("Accent", "touché"),
+        ("Different", "touchy"),
+        ("Uppercase", "ÅNGSTRÖM"),
+    ]);
+    for word in ["touché", "touche", "TOUCHÉ", "touche\u{301}"] {
+        assert_eq!(found(&s, word), ["Accent"], "{word}");
+    }
+    assert_eq!(found(&s, "ångström"), ["Uppercase"]);
+    assert_eq!(found(&s, "angstrom"), ["Uppercase"]);
+    let loads = s.vocabulary_loads();
+    assert_eq!(found(&s, "touché"), ["Accent"]);
+    assert_eq!(
+        s.vocabulary_loads(),
+        loads,
+        "normalizing queries must not invalidate the library vocabulary"
+    );
+    assert_eq!(
+        s.mark_read(&Query {
+            scope: Scope::All,
+            search: "touché".into(),
+            ..Default::default()
+        })
+        .unwrap()
+        .len(),
+        1
+    );
+}

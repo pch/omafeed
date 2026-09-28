@@ -55,6 +55,9 @@ pub enum Command {
         /// Full-text search within the scope
         #[arg(long)]
         search: Option<String>,
+        /// Disable typo, plural and prefix expansion
+        #[arg(long)]
+        exact: bool,
         /// Only unread articles
         #[arg(long)]
         unread: bool,
@@ -78,6 +81,9 @@ pub enum Command {
         /// unread, today, starred, all, feed:ID or folder:ID
         #[arg(long, default_value = "all", value_parser = parse_scope)]
         scope: Scope,
+        /// Disable typo, plural and prefix expansion
+        #[arg(long)]
+        exact: bool,
         /// Only unread articles
         #[arg(long)]
         unread: bool,
@@ -150,6 +156,7 @@ pub fn run(command: Command) -> Result<()> {
                 scope,
                 search,
                 unread,
+                exact,
                 since,
                 limit,
                 offset,
@@ -159,6 +166,7 @@ pub fn run(command: Command) -> Result<()> {
                     scope,
                     search: search.unwrap_or_default(),
                     unread_only: unread,
+                    exact,
                     offset,
                 };
                 let cutoff = since.map(|seconds| chrono::Utc::now().timestamp() - seconds);
@@ -168,6 +176,7 @@ pub fn run(command: Command) -> Result<()> {
                 query,
                 scope,
                 unread,
+                exact,
                 since,
                 limit,
                 offset,
@@ -177,6 +186,7 @@ pub fn run(command: Command) -> Result<()> {
                     scope,
                     search: query.join(" "),
                     unread_only: unread,
+                    exact,
                     offset,
                 };
                 let cutoff = since.map(|seconds| chrono::Utc::now().timestamp() - seconds);
