@@ -135,6 +135,8 @@ fn plain_word(typed: &str) -> Option<String> {
 /// vocabulary this is exactly the old behaviour: each word quoted and matched literally, so
 /// search syntax typed by the user is never interpreted.
 pub(crate) fn expression(typed: &str, vocabulary: Option<&Vocabulary>) -> Option<String> {
+    // The index cannot take a NUL inside a quoted word; treat it as a space.
+    let typed = typed.replace('\0', " ");
     let words: Vec<&str> = typed.split_whitespace().collect();
     let last = words.len().checked_sub(1)?;
     let groups: Vec<String> = words
@@ -165,13 +167,7 @@ fn widen(options: &mut Vec<String>, word: &str, is_last: bool, vocabulary: &Voca
     }
     if vocabulary.contains(word) {
         // A known word stays exact; only add the plural or singular the library really has.
-        let singular = word
-            .strip_suffix("es")
-            .into_iter()
-            .chain(word.strip_suffix('s'));
-        let plural = [format!("{word}s"), format!("{word}es")];
-        let forms = singular.map(str::to_owned).chain(plural);
-        for form in forms.filter(|f| f.chars().count() >= MIN_PREFIX && vocabulary.contains(f)) {
+        for form in number_forms(word).filter(|f| vocabulary.contains(f)) {
             options.push(quote(&form));
         }
     } else {
@@ -180,6 +176,55 @@ fn widen(options: &mut Vec<String>, word: &str, is_last: bool, vocabulary: &Voca
             options.extend(vocabulary.near(word, max).into_iter().map(quote));
         }
     }
+}
+
+/// Common words ending in `s` that are not the plural of the word without it.
+const NOT_PLURALS: &[&str] = &[
+    "always", "does", "goes", "lens", "news", "perhaps", "series", "species", "whereas",
+];
+
+/// The regular English plural or singular forms of `word`. `-es` pairs only after s, x, z,
+/// ch or sh, so `notes` is never `not` and `times` never `tim`, while `boxes` is `box`.
+fn number_forms(word: &str) -> impl Iterator<Item = String> {
+    let sibilant = |stem: &str| {
+        ["s", "x", "z", "ch", "sh"]
+            .iter()
+            .any(|e| stem.ends_with(e))
+    };
+    let long = |stem: &str| stem.chars().count() >= MIN_PREFIX;
+    let mut forms = Vec::new();
+    if NOT_PLURALS.contains(&word) {
+        return forms.into_iter();
+    }
+    // Singular: `boxes` → `box`, `stories` → `story`, `prompts` → `prompt`.
+    if let Some(stem) = word.strip_suffix("es").filter(|s| sibilant(s) && long(s)) {
+        forms.push(stem.to_owned());
+    }
+    if let Some(stem) = word.strip_suffix("ies").filter(|s| s.chars().count() >= 2) {
+        forms.push(format!("{stem}y"));
+    }
+    // Not after s, u or i: `class`, `status` and `analysis` are singular already.
+    if let Some(stem) = word
+        .strip_suffix('s')
+        .filter(|s| long(s) && !s.ends_with(['s', 'u', 'i']))
+    {
+        forms.push(stem.to_owned());
+    }
+    // Plural: `box` → `boxes`, `story` → `stories`, `prompt` → `prompts`.
+    let plural = if sibilant(word) {
+        format!("{word}es")
+    } else if let Some(stem) = word
+        .strip_suffix('y')
+        .filter(|s| s.chars().count() >= 2 && !s.ends_with(['a', 'e', 'o', 'u']))
+    {
+        format!("{stem}ies")
+    } else {
+        format!("{word}s")
+    };
+    if long(word) && !NOT_PLURALS.contains(&plural.as_str()) {
+        forms.push(plural);
+    }
+    forms.into_iter()
 }
 
 #[cfg(test)]
@@ -324,6 +369,44 @@ mod tests {
                 .unwrap()
                 .contains("prompts")
         );
+    }
+
+    #[test]
+    fn plural_rules_pair_real_forms_and_leave_lookalikes_alone() {
+        let forms = |w: &str| number_forms(w).collect::<Vec<_>>();
+        assert!(forms("boxes").contains(&"box".into()));
+        assert!(forms("box").contains(&"boxes".into()));
+        assert!(forms("stories").contains(&"story".into()));
+        assert!(forms("story").contains(&"stories".into()));
+        assert!(forms("bugs").contains(&"bug".into()));
+        assert!(forms("classes").contains(&"class".into()));
+        // Look-alikes that are not plurals of each other.
+        let v = vocabulary(&[
+            "not", "notes", "new", "news", "tim", "times", "car", "cares", "us", "uses", "ha",
+            "has", "doe", "does", "status", "statu", "day", "days",
+        ]);
+        for (typed, unrelated) in [
+            ("notes", "not"),
+            ("not", "notes"),
+            ("news", "new"),
+            ("new", "news"),
+            ("times", "tim"),
+            ("cares", "car"),
+            ("us", "uses"),
+            ("ha", "has"),
+            ("does", "doe"),
+            ("status", "statu"),
+        ] {
+            let options = expression(&format!("{typed} x"), Some(&v)).unwrap();
+            assert!(!options.contains(&quote(unrelated)), "{typed}: {options}");
+        }
+        assert!(expression("days x", Some(&v)).unwrap().contains("\"day\""));
+    }
+
+    #[test]
+    fn a_nul_character_separates_words() {
+        assert_eq!(expression("\0x", None).unwrap(), "\"x\"");
+        assert_eq!(expression("\0", None), None);
     }
 
     #[test]

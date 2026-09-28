@@ -920,3 +920,12 @@ fn accented_known_words_use_the_index_normalization_before_correction() {
         1
     );
 }
+
+#[test]
+fn decomposed_accents_get_typo_correction_and_prefixes() {
+    let s = library(&[("Resume", "my résumé"), ("Other", "nothing")]);
+    // U+0301 is a combining acute accent, as pasted from some systems.
+    for typed in ["re\u{301}sume\u{301}e", "re\u{301}sum", "résumée", "résum"] {
+        assert_eq!(found(&s, typed), ["Resume"], "{typed:?}");
+    }
+}

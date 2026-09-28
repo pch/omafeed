@@ -650,11 +650,12 @@ impl Store {
 
     /// Use the index's own tokenizer for Unicode case/accent normalization. The scratch
     /// index is connection-local and never writes to the library or invalidates its vocabulary.
-    /// ASCII needs no scratch index; punctuated terms retain literal phrase semantics.
+    /// ASCII needs no scratch index. Every other word goes through it, including accents typed
+    /// as separate combining marks; a word the tokenizer splits keeps literal phrase semantics.
     fn normalize_search(&self, search: &str) -> Result<String> {
         let mut words = Vec::new();
         for word in search.split_whitespace() {
-            if word.is_ascii() || !word.chars().all(char::is_alphanumeric) {
+            if word.is_ascii() {
                 words.push(word.to_owned());
                 continue;
             }
