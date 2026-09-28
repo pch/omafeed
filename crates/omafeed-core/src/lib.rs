@@ -2,6 +2,7 @@ pub mod article;
 pub mod db;
 pub mod discovery;
 pub mod fetch;
+mod fuzzy;
 pub mod http;
 pub mod icons;
 pub mod opml;
