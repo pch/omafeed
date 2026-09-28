@@ -113,13 +113,13 @@ Not yet supported: full-article extraction, podcast playback, sync between devic
 | `--unread` | Only unread articles, whatever the scope |
 | `--exact` | Disable typo correction, plural expansion and prefix matching |
 | `--since 24h` | Published within `90m`, `24h`, `2d` or `1w`. `--scope today` means since local midnight; `--since` is a rolling window |
-| `--limit N`, `--offset N` | Page through results (default 50) |
+| `--limit N`, `--offset N` | Page through results (default 50, at least 1). Every page comes from one snapshot, so the app writing meanwhile cannot repeat or skip articles |
 
-`search` searches an article's title, author and text, ignoring case and accents as supported by SQLite’s Unicode tokenizer. By default it uses the same forgiving search as the app; use `--exact` for whole-word matching without expansion. Every word must be present, in any order, and the words can be quoted or not: `omafeed search "agentic engineering"` and `omafeed search agentic engineering` do the same. Typed search syntax is quoted, so `OR`, `*`, quotes and `title:` mean nothing special (there is no OR or exact-phrase search), and a dash is ignored. Put `--` before a word that starts with a dash. Results stay newest first, as in the app's own search field.
+`search` searches an article's title, author and text, ignoring case and accents as supported by SQLite’s Unicode tokenizer. By default it uses the same forgiving search as the app; use `--exact` for whole-word matching without expansion, which scripts that need precise results should prefer. Every word must match, in any order (by default a close misspelling, the plural or singular, or for the last word a longer word starting with it also counts), and the words can be quoted or not: `omafeed search "agentic engineering"` and `omafeed search agentic engineering` do the same. Typed search syntax is quoted, so `OR`, `*`, quotes and `title:` mean nothing special (there is no OR or exact-phrase search), and a dash is ignored. Put `--` before a word that starts with a dash. Results stay newest first, as in the app's own search field.
 
 Failures print a message to stderr and exit 1; a mistyped option exits 2. Feed and folder IDs come from `feeds`, article IDs from `articles`.
 
-Output is plain text by default. `feeds` prints tables, `articles` prints one tab-separated line per article (ID, read state, starred, date, feed, title) so `cut`, `awk` and `grep` work on it, `search` prints the same lines as `articles`, and `article` prints a short header and then the text. Commands that change articles name every article they changed, so you can see what an ID was:
+Output is plain text by default. `feeds` prints tables, `articles` prints one tab-separated line per article (ID, read state, starred, local date, feed, title) so `cut`, `awk` and `grep` work on it, `search` prints the same lines as `articles`, and `article` prints a short header and then the text. Commands that change articles name every article they changed, so you can see what an ID was:
 
 ```console
 $ omafeed feeds

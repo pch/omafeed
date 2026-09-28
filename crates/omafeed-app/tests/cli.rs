@@ -87,12 +87,18 @@ impl Cli {
         (cli, url)
     }
 
-    fn run(&self, args: &[&str]) -> Run {
-        let out = Command::new(env!("CARGO_BIN_EXE_omafeed"))
+    /// The command, in UTC so text dates do not depend on where the tests run.
+    fn command(&self, args: &[&str]) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_omafeed"));
+        command
             .args(args)
             .env("OMAFEED_HOME", self.0.path())
-            .output()
-            .unwrap();
+            .env("TZ", "UTC");
+        command
+    }
+
+    fn run(&self, args: &[&str]) -> Run {
+        let out = self.command(args).output().unwrap();
         Run {
             code: out.status.code().unwrap(),
             stdout: String::from_utf8(out.stdout).unwrap(),
@@ -425,6 +431,7 @@ fn bad_input_fails_with_a_message_and_the_right_exit_code() {
     cli.fails(&["articles", "--since", "soon"], 2, "expected a duration");
     cli.fails(&["articles", "--since", "0h"], 2, "expected a duration");
     cli.fails(&["articles", "--limit", "many"], 2, "invalid value");
+    cli.fails(&["search", "hello", "--limit", "0"], 2, "at least 1");
     cli.fails(&["read"], 2, "required");
     cli.fails(&["read", "abc"], 2, "invalid value");
     cli.fails(&["nonsense"], 2, "unrecognized subcommand");
@@ -898,4 +905,54 @@ fn exact_option_disables_expansion_in_both_search_commands() {
         0
     );
     assert_eq!(cli.json(&["search", "Hello", "--exact"])["count"], 1);
+}
+
+#[test]
+fn text_dates_are_local_like_the_today_scope() {
+    let (cli, _) = Cli::with_feed(old_feed());
+    // "Second" was published at midnight UTC on 2 January, still 1 January in New York.
+    let out = cli
+        .command(&["articles", "--scope", "all"])
+        .env("TZ", "America/New_York")
+        .output()
+        .unwrap();
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.contains("\t2023-12-31\tLocal Feed\tFirst"), "{text}");
+    assert!(text.contains("\t2024-01-01\tLocal Feed\tSecond"), "{text}");
+}
+
+#[test]
+fn a_closed_output_pipe_stops_quietly() {
+    // Far more output than a pipe buffers, so writing must fail once the reader leaves.
+    let long = "word ".repeat(100);
+    let items: String = (0..300)
+        .map(|i| {
+            item(
+                &format!("Post {i} {long}"),
+                &i.to_string(),
+                &half_hour_after(i),
+                &long,
+            )
+        })
+        .collect();
+    let (cli, _) = Cli::with_feed(channel("Busy", &items));
+    for json in [false, true] {
+        let mut args = vec!["articles", "--scope", "all", "--limit", "1000"];
+        if json {
+            args.push("--json");
+        }
+        let mut child = cli
+            .command(&args)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        // Like `| head -c 1`: read a little, then hang up.
+        let mut first = [0; 1];
+        child.stdout.take().unwrap().read_exact(&mut first).unwrap();
+        let out = child.wait_with_output().unwrap();
+        let stderr = String::from_utf8(out.stderr).unwrap();
+        assert!(!stderr.contains("panicked"), "{stderr}");
+        assert_ne!(out.status.code(), Some(101), "{stderr}");
+    }
 }

@@ -52,7 +52,7 @@ pub enum Command {
         /// unread, today, starred, all, feed:ID or folder:ID
         #[arg(long, default_value = "unread", value_parser = parse_scope)]
         scope: Scope,
-        /// Full-text search within the scope
+        /// Search within the scope, as `search` does
         #[arg(long)]
         search: Option<String>,
         /// Disable typo, plural and prefix expansion
@@ -64,7 +64,7 @@ pub enum Command {
         /// Only articles published this recently, e.g. 90m, 24h, 2d or 1w
         #[arg(long, value_parser = parse_duration)]
         since: Option<i64>,
-        #[arg(long, default_value_t = 50)]
+        #[arg(long, default_value_t = 50, value_parser = parse_limit)]
         limit: usize,
         #[arg(long, default_value_t = 0)]
         offset: usize,
@@ -74,7 +74,9 @@ pub enum Command {
     },
     /// Search articles for words, e.g. omafeed search "agentic engineering"
     Search {
-        /// Words to find, quoted or not; an article must contain all of them, in any order.
+        /// Words to find, quoted or not; an article must match all of them, in any order.
+        /// Like the app, a word also matches close misspellings and its plural or singular,
+        /// and the last word matches longer words that start with it; --exact turns this off.
         /// Put `--` before a word that starts with a dash: omafeed search -- -word
         #[arg(required = true, value_parser = parse_query)]
         query: Vec<String>,
@@ -90,7 +92,7 @@ pub enum Command {
         /// Only articles published this recently, e.g. 90m, 24h, 2d or 1w
         #[arg(long, value_parser = parse_duration)]
         since: Option<i64>,
-        #[arg(long, default_value_t = 50)]
+        #[arg(long, default_value_t = 50, value_parser = parse_limit)]
         limit: usize,
         #[arg(long, default_value_t = 0)]
         offset: usize,
@@ -337,6 +339,15 @@ fn parse_query(text: &str) -> Result<String, String> {
     Ok(words)
 }
 
+/// A page size of at least one article.
+fn parse_limit(text: &str) -> Result<usize, String> {
+    match text.parse() {
+        Ok(0) => Err("must be at least 1".into()),
+        Ok(n) => Ok(n),
+        Err(_) => Err(format!("`{text}` is not a whole number")),
+    }
+}
+
 /// Seconds in a duration such as `90m`, `24h`, `2d` or `1w`.
 fn parse_duration(text: &str) -> Result<i64, String> {
     let bad = || format!("expected a duration like 90m, 24h, 2d or 1w, got '{text}'");
@@ -372,9 +383,14 @@ fn line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// The local date, matching `--scope today` and the reader's own dates.
 fn day(timestamp: i64) -> String {
     chrono::DateTime::from_timestamp(timestamp, 0)
-        .map(|d| d.format("%Y-%m-%d").to_string())
+        .map(|d| {
+            d.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d")
+                .to_string()
+        })
         .unwrap_or_default()
 }
 
@@ -488,27 +504,34 @@ async fn articles(
     since: Option<i64>,
     json: bool,
 ) -> Result<()> {
-    let mut found = Vec::new();
-    let mut offset = query.offset;
-    loop {
-        let page_query = Query {
-            offset,
-            ..query.clone()
-        };
-        let page = db.call(move |s| s.articles(&page_query)).await?;
-        let full = page.len() == PAGE_SIZE;
-        // Pages are ordered by date, so one article older than the cutoff ends the search.
-        let reached_cutoff = since.is_some_and(|c| page.last().is_some_and(|a| a.published < c));
-        offset += page.len();
-        found.extend(
-            page.into_iter()
-                .filter(|a| since.is_none_or(|c| a.published >= c)),
-        );
-        // One article beyond `limit` is enough to know the list was cut short.
-        if !full || reached_cutoff || found.len() > limit {
-            break;
-        }
-    }
+    // All pages come from one snapshot, so the reader's writes cannot shift them.
+    let mut found = db
+        .call(move |s| {
+            s.snapshot(|s| {
+                let mut found = Vec::new();
+                let mut offset = query.offset;
+                loop {
+                    let page = s.articles(&Query {
+                        offset,
+                        ..query.clone()
+                    })?;
+                    let full = page.len() == PAGE_SIZE;
+                    // Pages are ordered by date, so one article older than the cutoff ends it.
+                    let reached_cutoff =
+                        since.is_some_and(|c| page.last().is_some_and(|a| a.published < c));
+                    offset += page.len();
+                    found.extend(
+                        page.into_iter()
+                            .filter(|a| since.is_none_or(|c| a.published >= c)),
+                    );
+                    // One article beyond `limit` is enough to know the list was cut short.
+                    if !full || reached_cutoff || found.len() > limit {
+                        return Ok(found);
+                    }
+                }
+            })
+        })
+        .await?;
     let truncated = found.len() > limit;
     found.truncate(limit);
     if !json {
@@ -544,9 +567,9 @@ async fn articles(
 
 async fn article(db: &Db, id: i64, html: bool, json: bool) -> Result<()> {
     let a = db
-        .call(move |s| s.article(id))
-        .await
-        .map_err(|_| anyhow::anyhow!("No article with id {id}"))?;
+        .call(move |s| s.article_if_exists(id))
+        .await?
+        .with_context(|| format!("No article with id {id}"))?;
     if json {
         let mut item = summary(&a);
         if html {

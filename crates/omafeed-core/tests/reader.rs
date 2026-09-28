@@ -929,3 +929,24 @@ fn decomposed_accents_get_typo_correction_and_prefixes() {
         assert_eq!(found(&s, typed), ["Resume"], "{typed:?}");
     }
 }
+
+#[test]
+fn a_snapshot_does_not_see_writes_made_while_it_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("library.db");
+    let mut mine = Store::open(&path).unwrap();
+    let feed = mine
+        .add_feed("Test", "https://example.org/feed", None)
+        .unwrap();
+    add(&mut mine, feed, &[("One", "first")]);
+    let mut other = Store::open(&path).unwrap();
+    let (before, during) = mine
+        .snapshot(|s| {
+            let before = s.articles(&all())?.len();
+            add(&mut other, feed, &[("Two", "second")]);
+            Ok((before, s.articles(&all())?.len()))
+        })
+        .unwrap();
+    assert_eq!((before, during), (1, 1));
+    assert_eq!(mine.articles(&all()).unwrap().len(), 2, "seen once it ends");
+}

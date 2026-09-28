@@ -804,6 +804,15 @@ impl Store {
         Ok(self.conn.query_row(&sql, [id], Self::article_row)?)
     }
 
+    /// Run several reads against one snapshot of the library, so pages read one after another
+    /// neither repeat nor skip articles when another program writes in between.
+    pub fn snapshot<T>(&self, reads: impl FnOnce(&Self) -> Result<T>) -> Result<T> {
+        let tx = self.conn.unchecked_transaction()?;
+        let result = reads(self)?;
+        tx.commit()?;
+        Ok(result)
+    }
+
     /// Look up an article without treating deletion as a database error.
     pub fn article_if_exists(&self, id: i64) -> Result<Option<Article>> {
         let sql = format!(

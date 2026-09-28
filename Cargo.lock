@@ -1672,6 +1672,7 @@ dependencies = [
  "clap",
  "gtk4",
  "libadwaita",
+ "libc",
  "omafeed-core",
  "serde_json",
  "tempfile",

@@ -27,7 +27,13 @@ struct Args {
 fn main() {
     let args = Args::parse();
     let result = match args.command {
-        Some(command) => cli::run(command),
+        Some(command) => {
+            // Like other command-line tools, stop quietly when the reader of our output
+            // goes away (`omafeed articles | head -1`) instead of panicking in `println!`.
+            // SAFETY: called before any other thread exists.
+            unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
+            cli::run(command)
+        }
         None => run_gui(),
     };
     if let Err(e) = result {
