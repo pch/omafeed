@@ -2,7 +2,7 @@
 use crate::DB_FILE;
 use anyhow::{Context, Result, bail};
 use omafeed_core::{
-    Db, Paths, Settings, Store,
+    Db, Paths, Settings,
     article::readable,
     db::{Article, Folder, PAGE_SIZE, Query, Scope},
     fetch::{Progress, Refresher},
@@ -183,18 +183,10 @@ pub fn run(command: Command) -> Result<()> {
                 articles(&db, query, limit, cutoff, json).await
             }
             Command::Article { id, html, json } => article(&db, id, html, json).await,
-            Command::Read(i) => {
-                set_state(&db, i, "Marked {} read", |s, id| s.set_read(id, true)).await
-            }
-            Command::Unread(i) => {
-                set_state(&db, i, "Marked {} unread", |s, id| s.set_read(id, false)).await
-            }
-            Command::Star(i) => {
-                set_state(&db, i, "Starred {}", |s, id| s.set_starred(id, true)).await
-            }
-            Command::Unstar(i) => {
-                set_state(&db, i, "Unstarred {}", |s, id| s.set_starred(id, false)).await
-            }
+            Command::Read(i) => set_state(&db, i, "Marked {} read", Some(true), None).await,
+            Command::Unread(i) => set_state(&db, i, "Marked {} unread", Some(false), None).await,
+            Command::Star(i) => set_state(&db, i, "Starred {}", None, Some(true)).await,
+            Command::Unstar(i) => set_state(&db, i, "Unstarred {}", None, Some(false)).await,
             Command::Subscribe {
                 url,
                 folder,
@@ -571,31 +563,16 @@ async fn article(db: &Db, id: i64, html: bool, json: bool) -> Result<()> {
     Ok(())
 }
 
-/// Apply `change` to every article, or to none if any ID does not exist, then name what
-/// changed. `message` says what happened, with `{}` standing for the count, such as
-/// "Starred 2 articles".
+/// Update every requested article atomically, then name the articles changed.
 async fn set_state(
     db: &Db,
-    Ids { mut ids, json }: Ids,
+    Ids { ids, json }: Ids,
     message: &str,
-    change: fn(&Store, i64) -> Result<()>,
+    read: Option<bool>,
+    starred: Option<bool>,
 ) -> Result<()> {
-    ids.sort_unstable();
-    ids.dedup();
     let changed = db
-        .call(move |s| {
-            let mut changed = Vec::new();
-            for &id in &ids {
-                match s.article(id) {
-                    Ok(a) => changed.push((id, a.title)),
-                    Err(_) => bail!("No article with id {id}"),
-                }
-            }
-            for &(id, _) in &changed {
-                change(s, id)?;
-            }
-            Ok(changed)
-        })
+        .call(move |s| s.set_article_states(&ids, read, starred))
         .await?;
     if json {
         let articles: Vec<_> = changed

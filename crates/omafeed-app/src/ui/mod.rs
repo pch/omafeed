@@ -569,7 +569,57 @@ impl Ui {
             // The first reading is only a baseline.
             let previous = u.data_version.replace(Some(version));
             if previous.is_some_and(|p| p != version) {
-                u.reload();
+                u.reload_external_changes();
+            }
+        });
+    }
+
+    fn reload_external_changes(self: &Rc<Self>) {
+        let u = self.clone();
+        let selected = self.selected.borrow().as_ref().map(|a| a.id);
+        let generation = self.selection_generation.get();
+        glib::spawn_future_local(async move {
+            let result =
+                u.db.call(move |s| {
+                    Ok((
+                        s.library()?,
+                        selected.map(|id| s.article_if_exists(id)).transpose()?,
+                    ))
+                })
+                .await;
+            match result {
+                Ok((lib, article)) => {
+                    *u.library.borrow_mut() = lib;
+                    // A result for the old selection must not replace a newly opened article.
+                    if u.selection_generation.get() == generation {
+                        match article {
+                            Some(Some(a)) => {
+                                // State-only updates preserve the reader's scroll position.
+                                let render = u.selected.borrow().as_ref().is_some_and(|old| {
+                                    old.html != a.html
+                                        || old.title != a.title
+                                        || old.author != a.author
+                                        || old.url != a.url
+                                        || old.feed_title != a.feed_title
+                                        || old.published != a.published
+                                });
+                                u.update_buttons(&a);
+                                *u.selected.borrow_mut() = Some(a);
+                                if render {
+                                    u.render();
+                                }
+                            }
+                            Some(None) => {
+                                u.clear_article();
+                                u.save();
+                            }
+                            None => {}
+                        }
+                    }
+                    u.rebuild_sidebar();
+                    u.reload_articles();
+                }
+                Err(e) => u.error(e),
             }
         });
     }

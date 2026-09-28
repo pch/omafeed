@@ -523,3 +523,43 @@ fn data_version_changes_only_when_another_connection_writes() {
     assert_ne!(after, before, "another connection's write must show");
     assert_eq!(watcher.data_version().unwrap(), after, "and then settle");
 }
+
+#[test]
+fn batch_state_changes_roll_back_on_invalid_ids_and_write_failures() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("batch.db");
+    let mut s = Store::open(&path).unwrap();
+    let feed = s
+        .add_feed("Test", "https://example.org/feed", None)
+        .unwrap();
+    s.commit_download(feed, download(&rss("<item><guid>1</guid><title>One</title></item><item><guid>2</guid><title>Two</title></item>")), 30).unwrap();
+    let mut ids: Vec<_> = s.articles(&all()).unwrap().iter().map(|a| a.id).collect();
+    ids.sort();
+    assert!(
+        s.set_article_states(&[ids[0], 9999], Some(true), Some(true))
+            .is_err()
+    );
+    assert!(!s.article(ids[0]).unwrap().read);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(&format!("CREATE TRIGGER fail_batch BEFORE UPDATE ON article_state WHEN NEW.article_id = {} BEGIN SELECT RAISE(ABORT, 'write failure'); END", ids[1])).unwrap();
+    assert!(s.set_article_states(&ids, Some(true), Some(true)).is_err());
+    for id in &ids {
+        let a = s.article(*id).unwrap();
+        assert!(!a.read && !a.starred);
+    }
+    conn.execute_batch("DROP TRIGGER fail_batch").unwrap();
+    assert_eq!(
+        s.set_article_states(&[ids[1], ids[0], ids[0]], Some(true), None)
+            .unwrap()
+            .len(),
+        2
+    );
+    for id in &ids {
+        let a = s.article(*id).unwrap();
+        assert!(a.read && !a.starred);
+    }
+    s.set_article_states(&ids, None, Some(true)).unwrap();
+    assert!(s.article(ids[0]).unwrap().read && s.article(ids[0]).unwrap().starred);
+    s.delete_feed(feed).unwrap();
+    assert!(s.article_if_exists(ids[0]).unwrap().is_none());
+}

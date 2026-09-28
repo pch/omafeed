@@ -701,6 +701,53 @@ impl Store {
         Ok(self.conn.query_row(&sql, [id], Self::article_row)?)
     }
 
+    /// Look up an article without treating deletion as a database error.
+    pub fn article_if_exists(&self, id: i64) -> Result<Option<Article>> {
+        let sql = format!(
+            "SELECT {} {ARTICLE_JOINS} WHERE a.id = ?1",
+            Self::article_columns(true)
+        );
+        Ok(self
+            .conn
+            .query_row(&sql, [id], Self::article_row)
+            .optional()?)
+    }
+
+    /// Validate and update a batch in one transaction, including rollback on write failure.
+    pub fn set_article_states(
+        &mut self,
+        ids: &[i64],
+        read: Option<bool>,
+        starred: Option<bool>,
+    ) -> Result<Vec<(i64, String)>> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let mut ids = ids.to_vec();
+        ids.sort_unstable();
+        ids.dedup();
+        let mut changed = Vec::new();
+        for id in ids {
+            let title: Option<String> = tx
+                .query_row("SELECT title FROM articles WHERE id = ?1", [id], |r| {
+                    r.get(0)
+                })
+                .optional()?;
+            let Some(title) = title else {
+                bail!("No article with id {id}");
+            };
+            changed.push((id, title));
+        }
+        for (id, _) in &changed {
+            tx.execute(
+                "UPDATE article_state SET read = COALESCE(?1, read), starred = COALESCE(?2, starred) WHERE article_id = ?3",
+                params![read, starred, id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(changed)
+    }
+
     pub fn set_read(&self, id: i64, read: bool) -> Result<()> {
         self.conn.execute(
             "UPDATE article_state SET read = ?1 WHERE article_id = ?2",

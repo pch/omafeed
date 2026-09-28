@@ -168,11 +168,37 @@ fn desktop_smoke() {
     runtime
         .block_on(outsider.call(move |s| s.set_read(id, true)))
         .unwrap();
-    pump_until(|| u.articles.borrow().iter().all(|a| a.id != id || a.read));
+    pump_until(|| {
+        u.articles.borrow().iter().all(|a| a.id != id || a.read)
+            && u.selected.borrow().as_ref().is_some_and(|a| a.read)
+    });
+    assert!(
+        widgets(&u.reader.root.clone().upcast())
+            .iter()
+            .any(|w| w.tooltip_text().as_deref() == Some("Mark unread (M)"))
+    );
     runtime
         .block_on(outsider.call(move |s| s.set_read(id, false)))
         .unwrap();
     pump_until(|| u.articles.borrow().iter().any(|a| a.id == id && !a.read));
+    pump_until(|| u.selected.borrow().as_ref().is_some_and(|a| !a.read));
+    runtime
+        .block_on(outsider.call(move |s| s.set_starred(id, false)))
+        .unwrap();
+    pump_until(|| u.selected.borrow().as_ref().is_some_and(|a| !a.starred));
+    assert!(
+        widgets(&u.reader.root.clone().upcast())
+            .iter()
+            .any(|w| w.tooltip_text().as_deref() == Some("Star (S)"))
+    );
+    u.toggle_star();
+    pump_until(|| u.selected.borrow().as_ref().is_some_and(|a| a.starred));
+    assert!(
+        runtime
+            .block_on(outsider.call(move |s| s.article(id)))
+            .unwrap()
+            .starred
+    );
     // Choosing a different view closes the article instead of keeping it open.
     let starred = u
         .sidebar_rows
@@ -339,6 +365,20 @@ fn desktop_smoke() {
     library.close();
     pump_until(|| !library.is_visible());
     // Persisted state and actual WebKit rendering were verified above.
+    u.select(id);
+    pump_until(|| u.selected.borrow().as_ref().is_some_and(|a| a.id == id));
+    let feed = u.selected.borrow().as_ref().unwrap().feed_id;
+    runtime
+        .block_on(outsider.call(move |s| s.delete_feed(feed)))
+        .unwrap();
+    pump_until(|| u.selected.borrow().is_none());
+    assert!(u.settings.borrow().selected_article.is_none());
+    assert!(
+        widgets(&u.reader.root.clone().upcast())
+            .into_iter()
+            .filter_map(|w| w.downcast::<gtk::Stack>().ok())
+            .any(|s| s.visible_child_name().as_deref() == Some("empty"))
+    );
     u.window.close();
     pump_until(|| !u.window.is_visible());
 }
