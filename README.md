@@ -20,6 +20,14 @@ A native RSS reader for Linux and Omarchy, written in Rust. A three-pane library
 
 Pick one of the options below. All of them keep your articles and settings when you update or uninstall.
 
+### Let your agent install it
+
+Point your coding agent to [GitHub Releases](https://github.com/pch/omafeed/releases) and tell it to install the latest version for Arch / Omarchy, or give it this prompt:
+
+```text
+Install the latest release of Omafeed for my Arch / Omarchy system from https://github.com/pch/omafeed/releases. Check my CPU architecture, choose a compatible installation method from the README, verify downloads against the release's checksums, install it with its dependencies, and tell me how to launch it.
+```
+
 ### Option 1: Arch package (recommended)
 
 Builds from the tagged source and installs a regular pacman package, so dependencies are handled for you:
