@@ -996,3 +996,26 @@ fn icon_cache_path_preserves_existing_sha256_names() {
         )
     );
 }
+
+#[test]
+fn feed_authors_use_names_or_email_and_skip_missing_contacts() {
+    for (author, expected) in [
+        ("Jane Doe", "Jane Doe"),
+        ("jane@example.org", "jane@example.org"),
+        ("jane@example.org (Jane Doe)", "(Jane Doe)"),
+        ("", ""),
+    ] {
+        let body = rss(&format!(
+            "<item><title>Post</title><author>{author}</author></item>"
+        ));
+        assert_eq!(
+            fetch::parse(body.as_bytes(), "https://example.org/feed").unwrap()[0].author,
+            expected
+        );
+    }
+    let atom = br#"<feed xmlns="http://www.w3.org/2005/Atom"><title>Test</title><id>urn:feed</id><entry><id>urn:entry</id><title>Post</title><author><uri>https://example.org/</uri></author><author><name>Jane</name></author><author><email>john@example.org</email></author></entry></feed>"#;
+    assert_eq!(
+        fetch::parse(atom, "https://example.org/feed").unwrap()[0].author,
+        "Jane, john@example.org"
+    );
+}

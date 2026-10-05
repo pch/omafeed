@@ -378,7 +378,7 @@ fn entry(e: feed_rs::model::Entry, base: &str) -> Entry {
         author: e
             .authors
             .iter()
-            .map(|a| a.name.as_str())
+            .filter_map(|a| a.name.as_deref().or(a.email.as_deref()))
             .collect::<Vec<_>>()
             .join(", "),
         published: e.published.or(e.updated).map(|d| d.timestamp()),
