@@ -2,12 +2,11 @@ use crate::{
     Db, article,
     db::Feed,
     http::{self, BODY_LIMIT},
-    util::{escape, resolve_http, validate_url},
+    util::{escape, resolve_http, sha256_hex, validate_url},
 };
 use anyhow::{Context, Result};
 use futures_util::{StreamExt, stream};
 use reqwest::{Client, StatusCode, header};
-use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
@@ -354,8 +353,8 @@ fn entry(e: feed_rs::model::Entry, base: &str) -> Entry {
         format!("url:{link}")
     } else {
         let published = e.published.map(|d| d.to_rfc3339()).unwrap_or_default();
-        let digest = Sha256::digest(format!("{title}\n{published}").as_bytes());
-        format!("fallback:{digest:x}")
+        let digest = sha256_hex(format!("{title}\n{published}").as_bytes());
+        format!("fallback:{digest}")
     };
     let mut body = e
         .content

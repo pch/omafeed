@@ -132,6 +132,10 @@ fn fallback_identity_is_stable_on_body_edits() {
             .clone()
     };
     assert_eq!(identity(&a), identity(&b));
+    assert_eq!(
+        identity(&a),
+        "fallback:f9f8e2b06979764ac2b826be18503a1021d012edb397a26d33ad3412d605e498"
+    );
 }
 #[test]
 fn atom_json_and_sanitized_relative_links() {
@@ -981,4 +985,14 @@ fn upgrading_a_version_2_database_separates_words_at_block_ends() {
         ..all()
     };
     assert_eq!(s.articles(&exact).unwrap().len(), 1);
+}
+
+#[test]
+fn icon_cache_path_preserves_existing_sha256_names() {
+    assert_eq!(
+        omafeed_core::icons::path(std::path::Path::new("cache"), "https://example.org/article"),
+        std::path::Path::new(
+            "cache/icons-v2/50d7a905e3046b88638362cc34a31a1ae534766ca55e3aa397951efe653b062b.png"
+        )
+    );
 }

@@ -1,6 +1,6 @@
 //! Discover and decode website icons into small, validated PNGs for GTK.
+use crate::util::sha256_hex;
 use futures_util::StreamExt;
-use sha2::{Digest, Sha256};
 use std::{
     io::Cursor,
     path::{Path, PathBuf},
@@ -20,7 +20,7 @@ pub fn path(cache: &Path, site_url: &str) -> PathBuf {
         .unwrap_or_default();
     cache
         .join("icons-v2")
-        .join(format!("{:x}.png", Sha256::digest(origin.as_bytes())))
+        .join(format!("{}.png", sha256_hex(origin.as_bytes())))
 }
 fn recent(path: &Path, seconds: u64) -> bool {
     std::fs::metadata(path)

@@ -1,7 +1,16 @@
 //! Small helpers shared by OPML, storage, fetching, and rendering.
 use anyhow::{Result, bail};
+use sha2::{Digest, Sha256};
 use std::net::IpAddr;
 use url::{Host, Url};
+
+/// SHA-256 as lowercase, zero-padded hex for persistent IDs and cache keys.
+pub(crate) fn sha256_hex(data: &[u8]) -> String {
+    Sha256::digest(data)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
 
 /// Escape text for HTML/XML element content and quoted attributes.
 pub fn escape(s: &str) -> String {
