@@ -689,6 +689,7 @@ async fn unsubscribe(db: &Db, id: i64, yes: bool, json: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
 
     #[test]
     fn durations_accept_seconds_through_weeks() {
@@ -800,7 +801,13 @@ mod tests {
     fn feed_content_is_flattened_to_one_line() {
         assert_eq!(line("a\tb\n  c\r\nd"), "a b c d");
         assert_eq!(line("  "), "");
-        assert_eq!(day(0), "1970-01-01");
+        // `day` prints the local date, so derive the timestamp from a local date
+        // instead of asserting the UTC date of epoch 0.
+        let local = chrono::Local
+            .with_ymd_and_hms(2026, 1, 2, 3, 0, 0)
+            .single()
+            .expect("an unambiguous local time");
+        assert_eq!(day(local.timestamp()), "2026-01-02");
         assert_eq!(plural(1, "article"), "1 article");
         assert_eq!(plural(0, "article"), "0 articles");
         assert_eq!(plural(2, "article"), "2 articles");
