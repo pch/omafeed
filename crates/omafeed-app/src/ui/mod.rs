@@ -7,6 +7,7 @@ mod sidebar;
 #[cfg(feature = "test-support")]
 pub(crate) mod tests;
 mod theme;
+mod view;
 pub mod widgets;
 
 use adw::prelude::*;
@@ -15,16 +16,17 @@ use omafeed_core::{
     Db, Paths, Settings,
     config::Palette,
     ingest::{Progress, Refresher},
-    model::{Article, ArticleId, FolderId, Library, Query, Scope},
+    model::{Library, Query, Scope},
 };
 use std::{
     cell::{Cell, RefCell},
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     path::PathBuf,
     rc::Rc,
     sync::Arc,
     time::Duration,
 };
+use view::Reloaded;
 use widgets::{icon, label, margins, scroll};
 
 /// Widths (px) at which panes collapse; see [`Layout`].
@@ -229,27 +231,13 @@ pub struct Ui {
 
     pub(crate) settings: RefCell<Settings>,
     pub(crate) library: RefCell<Library>,
-    query: RefCell<Query>,
-    selected: RefCell<Option<Article>>,
+    /// What is shown: view, page, articles, the open article, and changes in flight.
+    view: RefCell<view::View>,
     palette: RefCell<Palette>,
-    articles: RefCell<Vec<Article>>,
     article_rows: RefCell<Vec<articles::ArticleRow>>,
     sidebar_rows: RefCell<Vec<sidebar::Row>>,
-    collapsed: RefCell<HashSet<FolderId>>,
     /// Decoded favicons by cache path; `None` records a missing icon.
     favicons: RefCell<HashMap<PathBuf, Option<gdk::Texture>>>,
-    /// The last "mark all read", for Ctrl+Z.
-    undo: RefCell<changes::Undo>,
-    /// Read and star changes shown before the database confirmed them.
-    changes: RefCell<changes::Changes>,
-    page: Cell<usize>,
-    /// Incremented per request so stale async results are discarded.
-    generation: Cell<u64>,
-    selection_generation: Cell<u64>,
-    /// Counts this window's own read/star changes, so a reload that raced one keeps it.
-    state_writes: Cell<u64>,
-    /// Article to mark read once WebKit finishes loading it.
-    pending_mark: Cell<Option<ArticleId>>,
     /// Suppresses selection signals while lists are repopulated.
     rebuilding: Cell<bool>,
     busy: Cell<bool>,
@@ -337,21 +325,11 @@ impl Ui {
             css,
             settings: RefCell::new(settings),
             library: RefCell::default(),
-            query: RefCell::new(query),
-            selected: RefCell::default(),
+            view: RefCell::new(view::View::new(query)),
             palette: RefCell::new(palette),
-            articles: RefCell::default(),
             article_rows: RefCell::default(),
             sidebar_rows: RefCell::default(),
-            collapsed: RefCell::default(),
             favicons: RefCell::default(),
-            undo: RefCell::default(),
-            changes: RefCell::default(),
-            page: Cell::new(0),
-            generation: Cell::new(0),
-            selection_generation: Cell::new(0),
-            state_writes: Cell::new(0),
-            pending_mark: Cell::new(None),
             rebuilding: Cell::new(false),
             busy: Cell::new(false),
             data_version: Cell::new(None),
@@ -418,8 +396,7 @@ impl Ui {
             #[weak(rename_to = u)]
             self,
             move |s| {
-                u.query.borrow_mut().search = s.text().to_string();
-                u.page.set(0);
+                u.view.borrow_mut().set_search(s.text().to_string());
                 u.reload_articles();
             }
         ));
@@ -427,9 +404,8 @@ impl Ui {
             #[weak(rename_to = u)]
             self,
             move |b| {
-                u.query.borrow_mut().unread_only = b.is_active();
+                u.view.borrow_mut().set_unread_only(b.is_active());
                 u.settings.borrow_mut().unread_only = b.is_active();
-                u.page.set(0);
                 u.reload_articles();
                 u.save();
             }
@@ -446,9 +422,8 @@ impl Ui {
                     rows.get(row.index() as usize).map(|r| r.scope.clone())
                 });
                 if let Some(scope) = scope {
-                    u.query.borrow_mut().scope = scope.clone();
+                    u.view.borrow_mut().set_scope(scope.clone());
                     u.settings.borrow_mut().scope = scope;
-                    u.page.set(0);
                     // A different view starts with an empty reader, as in NetNewsWire.
                     u.clear_article();
                     u.reload_articles();
@@ -463,8 +438,13 @@ impl Ui {
                 if u.rebuilding.get() {
                     return;
                 }
-                let id =
-                    row.and_then(|row| u.articles.borrow().get(row.index() as usize).map(|a| a.id));
+                let id = row.and_then(|row| {
+                    u.view
+                        .borrow()
+                        .articles()
+                        .get(row.index() as usize)
+                        .map(|a| a.id)
+                });
                 if let Some(id) = id {
                     u.select(id);
                 }
@@ -474,7 +454,7 @@ impl Ui {
             #[weak(rename_to = u)]
             self,
             move |_| {
-                u.page.set(u.page.get() + 1);
+                u.view.borrow_mut().next_page();
                 u.reload_articles();
             }
         ));
@@ -482,8 +462,8 @@ impl Ui {
             #[weak(rename_to = u)]
             self,
             move |_| {
-                if u.page.get() > 0 {
-                    u.page.set(u.page.get() - 1);
+                let moved = u.view.borrow_mut().previous_page();
+                if moved {
                     u.reload_articles();
                 }
             }
@@ -584,10 +564,8 @@ impl Ui {
 
     fn reload_external_changes(self: &Rc<Self>) {
         let u = self.clone();
-        let selected = self.selected.borrow().as_ref().map(|a| a.id);
-        let generation = self.selection_generation.get();
-        let writes = self.state_writes.get();
-        let mark = self.changes.borrow().mark();
+        let reload = self.view.borrow().start_outside_reload();
+        let selected = reload.open;
         glib::spawn_future_local(async move {
             let result =
                 u.db.call(move |s| {
@@ -604,40 +582,25 @@ impl Ui {
                 Ok((lib, article)) => {
                     *u.library.borrow_mut() = lib;
                     // A result for the old selection must not replace a newly opened article.
-                    if u.selection_generation.get() == generation {
-                        match article {
-                            Some(Some(mut a)) => {
-                                // A star or read change made here since the read is newer.
-                                if u.state_writes.get() != writes
-                                    && let Some(old) = u.selected.borrow().as_ref()
-                                {
-                                    a.read = old.read;
-                                    a.starred = old.starred;
-                                }
-                                u.changes
-                                    .borrow()
-                                    .overlay(a.id, mark, &mut a.read, &mut a.starred);
-                                // State-only updates preserve the reader's scroll position.
-                                let render = u.selected.borrow().as_ref().is_some_and(|old| {
-                                    old.html != a.html
-                                        || old.title != a.title
-                                        || old.author != a.author
-                                        || old.url != a.url
-                                        || old.feed_title != a.feed_title
-                                        || old.published != a.published
-                                });
-                                u.update_buttons(&a);
-                                *u.selected.borrow_mut() = Some(a);
-                                if render {
-                                    u.render();
-                                }
+                    let reloaded = u
+                        .view
+                        .borrow_mut()
+                        .finish_outside_reload(&reload, article.flatten());
+                    match reloaded {
+                        Some(Reloaded::Updated { content_changed }) => {
+                            if let Some(a) = u.view.borrow().open() {
+                                u.update_buttons(a);
                             }
-                            Some(None) => {
-                                u.clear_article();
-                                u.save();
+                            // State-only updates preserve the reader's scroll position.
+                            if content_changed {
+                                u.render();
                             }
-                            None => {}
                         }
+                        Some(Reloaded::Gone) => {
+                            u.clear_article();
+                            u.save();
+                        }
+                        None => {}
                     }
                     u.rebuild_sidebar();
                     u.reload_articles();
@@ -657,7 +620,7 @@ impl Ui {
 
     fn apply_layout(&self) {
         let layout = self.layout();
-        let reading = self.selected.borrow().is_some();
+        let reading = self.view.borrow().open().is_some();
         self.side.root.set_visible(layout == Layout::Wide);
         self.inner.set_visible(true);
         self.list
@@ -735,7 +698,7 @@ impl Ui {
 
     /// Show "All Articles" with nothing selected, e.g. after removing the current feed.
     pub fn reset_selection(self: &Rc<Self>) {
-        self.query.borrow_mut().scope = Scope::All;
+        self.view.borrow_mut().query.scope = Scope::All;
         self.settings.borrow_mut().scope = Scope::All;
         self.clear_article();
         self.save();
@@ -745,10 +708,7 @@ impl Ui {
     /// Close the current article and show the reader's empty state.
     fn clear_article(&self) {
         // Discard any article load still in flight.
-        self.selection_generation
-            .set(self.selection_generation.get() + 1);
-        self.pending_mark.set(None);
-        *self.selected.borrow_mut() = None;
+        self.view.borrow_mut().close();
         self.settings.borrow_mut().selected_article = None;
         self.render();
         self.show_reader(false);

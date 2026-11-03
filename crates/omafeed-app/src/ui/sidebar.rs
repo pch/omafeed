@@ -96,13 +96,16 @@ fn tooltip(feed: &Feed) -> String {
 
 impl Ui {
     fn sidebar_items(&self) -> Vec<Item> {
-        visible(items(&self.library.borrow()), &self.collapsed.borrow())
+        visible(
+            items(&self.library.borrow()),
+            self.view.borrow().collapsed(),
+        )
     }
 
     pub(super) fn rebuild_sidebar(self: &Rc<Self>) {
         self.rebuilding.set(true);
         self.side.list.remove_all();
-        let selected = self.query.borrow().scope.clone();
+        let selected = self.view.borrow().query.scope.clone();
         let rows: Vec<Row> = self
             .sidebar_items()
             .into_iter()
@@ -156,7 +159,7 @@ impl Ui {
     }
 
     fn folder_expander(self: &Rc<Self>, id: FolderId) -> gtk::Button {
-        let collapsed = self.collapsed.borrow().contains(&id);
+        let collapsed = self.view.borrow().collapsed().contains(&id);
         let (name, tip) = if collapsed {
             ("pan-end-symbolic", "Expand folder")
         } else {
@@ -169,11 +172,7 @@ impl Ui {
             #[weak(rename_to = u)]
             self,
             move |_| {
-                let mut collapsed = u.collapsed.borrow_mut();
-                if !collapsed.remove(&id) {
-                    collapsed.insert(id);
-                }
-                drop(collapsed);
+                u.view.borrow_mut().toggle_folder(id);
                 u.rebuild_sidebar();
             }
         ));
