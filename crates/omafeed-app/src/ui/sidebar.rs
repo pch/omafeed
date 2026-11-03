@@ -1,7 +1,8 @@
-//! Library sidebar: smart views, folders, and feeds with unread counts.
-use super::{Ui, widgets::icon, widgets::label};
+//! Library sidebar: smart views, folders, and feeds with unread counts, and their context
+//! menu.
+use super::{Ui, reader, widgets::icon, widgets::label};
 use gtk::{gdk, gio, glib, prelude::*};
-use omafeed_core::model::{Feed, FolderId, Library, Scope, TreeItem};
+use omafeed_core::model::{Feed, FolderId, Library, Query, Scope, TreeItem};
 use std::rc::Rc;
 
 /// One sidebar entry before it becomes a widget.
@@ -91,6 +92,80 @@ fn tooltip(feed: &Feed) -> String {
     match &feed.error {
         Some(e) => format!("{}\n{e}", feed.url),
         None => feed.url.clone(),
+    }
+}
+
+/// What the context menu of a sidebar entry can do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Command {
+    OpenHomePage,
+    CopyFeedUrl,
+    CopyHomePageUrl,
+    MarkRead,
+    Edit,
+    Remove,
+}
+
+impl Command {
+    /// The action's name, under the `sidebar.` prefix.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::OpenHomePage => "open-home-page",
+            Self::CopyFeedUrl => "copy-feed-url",
+            Self::CopyHomePageUrl => "copy-home-page-url",
+            Self::MarkRead => "mark-read",
+            Self::Edit => "edit",
+            Self::Remove => "remove",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::OpenHomePage => "Open home page",
+            Self::CopyFeedUrl => "Copy feed URL",
+            Self::CopyHomePageUrl => "Copy home page URL",
+            Self::MarkRead => "Mark all as read",
+            Self::Edit => "Edit…",
+            Self::Remove => "Remove…",
+        }
+    }
+}
+
+/// The context menu of the sidebar entry for `scope`: sections of commands, each with
+/// whether it can be used now. Empty for a feed or folder no longer in the library.
+fn menu(scope: &Scope, lib: &Library) -> Vec<Vec<(Command, bool)>> {
+    // Smart views other than All Unread show no count, so they may always have unread ones.
+    let unread = match scope {
+        Scope::Unread => Some(lib.unread),
+        Scope::Feed(_) | Scope::Folder(_) => {
+            let Some(item) = items(lib).into_iter().find(|i| i.scope == *scope) else {
+                return Vec::new();
+            };
+            Some(item.count)
+        }
+        _ => None,
+    };
+    let mark = vec![(Command::MarkRead, unread.is_none_or(|n| n > 0))];
+    let manage = vec![(Command::Edit, true), (Command::Remove, true)];
+    match scope {
+        Scope::Feed(id) => {
+            let Some(feed) = lib.feed(*id) else {
+                return Vec::new();
+            };
+            // A feed's website is unknown until it is refreshed or imported with one.
+            let home = !feed.site_url.is_empty();
+            vec![
+                vec![(Command::OpenHomePage, reader::opens(&feed.site_url))],
+                vec![
+                    (Command::CopyFeedUrl, true),
+                    (Command::CopyHomePageUrl, home),
+                ],
+                mark,
+                manage,
+            ]
+        }
+        Scope::Folder(_) => vec![mark, manage],
+        _ => vec![mark],
     }
 }
 
@@ -222,5 +297,248 @@ impl Ui {
             count,
             warning,
         }
+    }
+
+    /// Open the context menu on right click, and with the Menu key or Shift+F10 on the
+    /// focused entry.
+    pub(super) fn connect_sidebar_menu(self: &Rc<Self>) {
+        let click = gtk::GestureClick::new();
+        click.set_button(gdk::BUTTON_SECONDARY);
+        click.connect_pressed(glib::clone!(
+            #[weak(rename_to = u)]
+            self,
+            move |gesture, _, x, y| {
+                #[expect(clippy::cast_possible_truncation, reason = "pixel coordinates")]
+                let row = u.side.list.row_at_y(y as i32);
+                if let Some(row) = row {
+                    gesture.set_state(gtk::EventSequenceState::Claimed);
+                    u.open_sidebar_menu(&row, Some((x, y)));
+                }
+            }
+        ));
+        self.side.list.add_controller(click);
+        let keys = gtk::EventControllerKey::new();
+        keys.connect_key_pressed(glib::clone!(
+            #[weak(rename_to = u)]
+            self,
+            #[upgrade_or]
+            glib::Propagation::Proceed,
+            move |_, key, _, mods| {
+                let menu_key = key == gdk::Key::Menu
+                    || (key == gdk::Key::F10 && mods.contains(gdk::ModifierType::SHIFT_MASK));
+                let list = &u.side.list;
+                let row = list
+                    .focus_child()
+                    .and_downcast::<gtk::ListBoxRow>()
+                    .or_else(|| list.selected_row());
+                match row.filter(|_| menu_key) {
+                    Some(row) => {
+                        u.open_sidebar_menu(&row, None);
+                        glib::Propagation::Stop
+                    }
+                    None => glib::Propagation::Proceed,
+                }
+            }
+        ));
+        self.side.list.add_controller(keys);
+    }
+
+    /// Show the context menu of a sidebar row, at `at` in the list's coordinates or, without
+    /// it, below the row. The row is not selected, so the view shown stays.
+    pub(super) fn open_sidebar_menu(
+        self: &Rc<Self>,
+        row: &gtk::ListBoxRow,
+        at: Option<(f64, f64)>,
+    ) {
+        let scope = {
+            let rows = self.sidebar_rows.borrow();
+            let Some(r) = usize::try_from(row.index()).ok().and_then(|i| rows.get(i)) else {
+                return;
+            };
+            r.scope.clone()
+        };
+        let sections = menu(&scope, &self.library.borrow());
+        if sections.is_empty() {
+            return;
+        }
+        let model = gio::Menu::new();
+        let group = gio::SimpleActionGroup::new();
+        for section in sections {
+            let part = gio::Menu::new();
+            for (command, enabled) in section {
+                part.append(
+                    Some(command.label()),
+                    Some(&format!("sidebar.{}", command.name())),
+                );
+                let action = gio::SimpleAction::new(command.name(), None);
+                action.set_enabled(enabled);
+                let weak = Rc::downgrade(self);
+                let scope = scope.clone();
+                action.connect_activate(move |_, _| {
+                    if let Some(u) = weak.upgrade() {
+                        u.run_command(command, &scope);
+                    }
+                });
+                group.add_action(&action);
+            }
+            model.append_section(None, &part);
+        }
+        let menu = &self.side.menu;
+        menu.set_menu_model(Some(&model));
+        menu.insert_action_group("sidebar", Some(&group));
+        let root = &self.side.root;
+        let target = match at {
+            Some((x, y)) => self
+                .side
+                .list
+                .compute_point(root, &gtk::graphene::Point::new(x as f32, y as f32))
+                .map(|p| gtk::graphene::Rect::new(p.x(), p.y(), 1.0, 1.0)),
+            None => row.compute_bounds(root),
+        };
+        if let Some(r) = target {
+            #[expect(clippy::cast_possible_truncation, reason = "pixel coordinates")]
+            menu.set_pointing_to(Some(&gdk::Rectangle::new(
+                r.x() as i32,
+                r.y() as i32,
+                (r.width() as i32).max(1),
+                (r.height() as i32).max(1),
+            )));
+        }
+        menu.popup();
+    }
+
+    /// Close the context menu and forget its actions. Called whenever the library is read
+    /// again: the entry it was opened on may have been removed meanwhile, and its ID reused
+    /// for another feed or folder, so its actions must not outlive what it showed.
+    pub(crate) fn close_sidebar_menu(&self) {
+        self.side.menu.popdown();
+        self.side
+            .menu
+            .insert_action_group("sidebar", None::<&gio::ActionGroup>);
+    }
+
+    fn run_command(self: &Rc<Self>, command: Command, scope: &Scope) {
+        let feed = match scope {
+            Scope::Feed(id) => self.library.borrow().feed(*id).cloned(),
+            _ => None,
+        };
+        match (command, feed) {
+            (Command::OpenHomePage, Some(feed)) => reader::open_uri(&feed.site_url),
+            (Command::CopyFeedUrl, Some(feed)) => self.copy(&feed.url, "Feed URL copied"),
+            (Command::CopyHomePageUrl, Some(feed)) if !feed.site_url.is_empty() => {
+                self.copy(&feed.site_url, "Home page URL copied");
+            }
+            (Command::MarkRead, _) => self.mark_read(Query {
+                scope: scope.clone(),
+                ..Default::default()
+            }),
+            (Command::Edit, _) => crate::dialogs::edit(self.clone(), scope.clone()),
+            (Command::Remove, _) => crate::dialogs::remove(self.clone(), scope.clone()),
+            _ => {}
+        }
+    }
+
+    fn copy(&self, text: &str, done: &str) {
+        self.window.clipboard().set_text(text);
+        self.toast(done);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use omafeed_core::model::{FeedId, Folder};
+
+    fn feed(id: i64, folder: Option<i64>, site_url: &str, unread: i64) -> Feed {
+        Feed {
+            id: FeedId(id),
+            folder: folder.map(FolderId),
+            title: format!("Feed {id}"),
+            url: format!("https://example.org/{id}.xml"),
+            site_url: site_url.into(),
+            unread,
+            error: None,
+            etag: None,
+            modified: None,
+            next_fetch: 0,
+            failures: 0,
+            revision: 0,
+        }
+    }
+
+    fn commands(menu: &[Vec<(Command, bool)>]) -> Vec<Vec<Command>> {
+        menu.iter()
+            .map(|section| section.iter().map(|(c, _)| *c).collect())
+            .collect()
+    }
+
+    fn enabled(menu: &[Vec<(Command, bool)>], command: Command) -> bool {
+        menu.iter()
+            .flatten()
+            .find(|(c, _)| *c == command)
+            .unwrap_or_else(|| panic!("{command:?} is not in the menu"))
+            .1
+    }
+
+    #[test]
+    fn feeds_folders_and_views_get_their_own_menus() {
+        use Command::*;
+        let lib = Library {
+            folders: vec![
+                Folder {
+                    id: FolderId(1),
+                    parent: None,
+                    name: "Read".into(),
+                },
+                Folder {
+                    id: FolderId(2),
+                    parent: Some(FolderId(1)),
+                    name: "Nested".into(),
+                },
+            ],
+            feeds: vec![
+                feed(1, Some(1), "", 0),
+                feed(2, Some(2), "https://example.org/", 3),
+                feed(3, None, "feed://example.org/", 0),
+            ],
+            unread: 3,
+            starred: 0,
+        };
+        let new = menu(&Scope::Feed(FeedId(1)), &lib);
+        assert_eq!(
+            commands(&new),
+            [
+                vec![OpenHomePage],
+                vec![CopyFeedUrl, CopyHomePageUrl],
+                vec![MarkRead],
+                vec![Edit, Remove],
+            ]
+        );
+        // Not refreshed yet, and nothing unread.
+        assert!(!enabled(&new, OpenHomePage));
+        assert!(!enabled(&new, CopyHomePageUrl));
+        assert!(!enabled(&new, MarkRead));
+        assert!(enabled(&new, CopyFeedUrl));
+        let known = menu(&Scope::Feed(FeedId(2)), &lib);
+        assert!(enabled(&known, OpenHomePage));
+        assert!(enabled(&known, CopyHomePageUrl));
+        assert!(enabled(&known, MarkRead));
+        // A website the browser is not given can still be copied.
+        let other = menu(&Scope::Feed(FeedId(3)), &lib);
+        assert!(!enabled(&other, OpenHomePage));
+        assert!(enabled(&other, CopyHomePageUrl));
+        // A folder counts the unread articles of the folders inside it.
+        let folder = menu(&Scope::Folder(FolderId(1)), &lib);
+        assert_eq!(commands(&folder), [vec![MarkRead], vec![Edit, Remove]]);
+        assert!(enabled(&folder, MarkRead));
+        assert_eq!(commands(&menu(&Scope::Starred, &lib)), [vec![MarkRead]]);
+        assert!(enabled(&menu(&Scope::Today, &lib), MarkRead));
+        let read = Library {
+            unread: 0,
+            ..Library::default()
+        };
+        assert!(!enabled(&menu(&Scope::Unread, &read), MarkRead));
+        assert!(menu(&Scope::Feed(FeedId(9)), &lib).is_empty());
+        assert!(menu(&Scope::Folder(FolderId(9)), &lib).is_empty());
     }
 }

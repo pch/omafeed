@@ -12,6 +12,7 @@ A native RSS reader for Linux and Omarchy, written in Rust. A three-pane library
 - A command line to list, search, star, and subscribe without the window, with `--json` output for scripts and LLM agents.
 - All Unread, Today, Starred, All Articles, folder and feed views; full-text search and unread filtering.
 - Read/unread, stars, bulk mark read with undo, and offline article text.
+- A context menu on sidebar feeds, folders and views (right-click, Menu key or Shift+F10): open or copy a feed's home page, copy its feed URL, mark all as read, edit, and remove.
 - Sanitized HTML articles with images, code blocks, adjustable typography, copy link, and open original.
 - Omarchy palette following across the top bar, menus, sidebar, and reader; light/dark modes, persisted window/pane sizes, keyboard navigation, and favicon caching.
 - Conditional HTTP requests, bounded concurrency, timeouts, retry backoff, and visible per-feed errors.
@@ -211,6 +212,7 @@ Feed content is written by strangers. A tool that hands article text to a model 
 | Ctrl+R | Refresh |
 | Ctrl+F | Search |
 | Ctrl+L | Manage library |
+| Menu or Shift+F10 | Context menu of the focused sidebar item |
 | Ctrl+Shift+A | Mark current view read |
 | Ctrl+Z | Undo bulk mark read |
 | Ctrl+Q | Quit |

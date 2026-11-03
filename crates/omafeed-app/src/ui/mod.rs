@@ -108,6 +108,8 @@ struct SidebarPane {
     root: gtk::Box,
     list: gtk::ListBox,
     manage: gtk::Button,
+    /// The context menu of feeds, folders and views, filled in each time it opens.
+    menu: gtk::PopoverMenu,
 }
 
 impl SidebarPane {
@@ -126,7 +128,17 @@ impl SidebarPane {
         let manage = gtk::Button::with_label("Manage library");
         margins(&manage, 12);
         root.append(&manage);
-        Self { root, list, manage }
+        // Parented to the box, not the list: a list box takes every child for a row.
+        let menu = gtk::PopoverMenu::from_model(None::<&gio::MenuModel>);
+        menu.set_has_arrow(false);
+        menu.set_halign(gtk::Align::Start);
+        menu.set_parent(&root);
+        Self {
+            root,
+            list,
+            manage,
+            menu,
+        }
     }
 }
 
@@ -474,6 +486,7 @@ impl Ui {
             move |_| u.mark_all()
         ));
         self.connect_reader_signals();
+        self.connect_sidebar_menu();
     }
 
     fn listen_for_progress(self: &Rc<Self>, events: async_channel::Receiver<Progress>) {
@@ -580,6 +593,7 @@ impl Ui {
                 .await;
             match result {
                 Ok((lib, article)) => {
+                    u.close_sidebar_menu();
                     *u.library.borrow_mut() = lib;
                     // A result for the old selection must not replace a newly opened article.
                     let reloaded = u
@@ -705,6 +719,21 @@ impl Ui {
         self.reload();
     }
 
+    /// Show the library without a feed or folder just removed from it: "All Articles" if it
+    /// was the view shown, and no open article if that was in the removed feed.
+    pub fn removed(self: &Rc<Self>, scope: &Scope) {
+        let after = self.view.borrow().after_removal(scope);
+        match after {
+            view::AfterRemoval::ShowAll => self.reset_selection(),
+            view::AfterRemoval::CloseArticle => {
+                self.clear_article();
+                self.save();
+                self.reload();
+            }
+            view::AfterRemoval::Reload => self.reload(),
+        }
+    }
+
     /// Close the current article and show the reader's empty state.
     fn clear_article(&self) {
         // Discard any article load still in flight.
@@ -719,6 +748,7 @@ impl Ui {
         glib::spawn_future_local(async move {
             match u.db.call(|s| s.library()).await {
                 Ok(lib) => {
+                    u.close_sidebar_menu();
                     *u.library.borrow_mut() = lib;
                     u.rebuild_sidebar();
                     u.reload_articles();
@@ -734,6 +764,7 @@ impl Ui {
         glib::spawn_future_local(async move {
             match u.db.call(|s| s.library()).await {
                 Ok(lib) => {
+                    u.close_sidebar_menu();
                     *u.library.borrow_mut() = lib;
                     u.update_sidebar();
                 }

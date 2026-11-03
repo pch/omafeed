@@ -51,6 +51,17 @@ pub(super) struct Writing {
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Bulk(u64);
 
+/// What the window must change once a feed or folder has been removed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum AfterRemoval {
+    /// The view shown was the removed item: show "All Articles" instead.
+    ShowAll,
+    /// The open article belonged to the removed feed: close it.
+    CloseArticle,
+    /// Only the lists need reloading.
+    Reload,
+}
+
 #[derive(Debug, Default)]
 pub(super) struct View {
     pub query: Query,
@@ -392,6 +403,20 @@ impl View {
         self.changes.unfinished(id, field)
     }
 
+    /// What to change after `removed` (a feed or folder) was deleted. A removed folder's
+    /// feeds move to its parent, so only a removed feed takes the open article with it.
+    pub fn after_removal(&self, removed: &Scope) -> AfterRemoval {
+        if self.query.scope == *removed {
+            AfterRemoval::ShowAll
+        } else if let Scope::Feed(id) = removed
+            && self.open.as_ref().is_some_and(|a| a.feed_id == *id)
+        {
+            AfterRemoval::CloseArticle
+        } else {
+            AfterRemoval::Reload
+        }
+    }
+
     // Folders.
 
     pub fn collapsed(&self) -> &HashSet<FolderId> {
@@ -445,6 +470,40 @@ mod tests {
     fn opened(view: &mut View, a: Article) {
         let opening = view.start_opening();
         assert!(view.finish_opening(opening, a));
+    }
+
+    #[test]
+    fn removing_the_view_shown_or_the_open_articles_feed_resets_it() {
+        let mut v = View::new(Query {
+            scope: Scope::Folder(FolderId(1)),
+            ..Default::default()
+        });
+        assert_eq!(
+            v.after_removal(&Scope::Feed(FeedId(1))),
+            AfterRemoval::Reload
+        );
+        assert_eq!(
+            v.after_removal(&Scope::Folder(FolderId(1))),
+            AfterRemoval::ShowAll
+        );
+        opened(&mut v, article(1, false));
+        assert_eq!(
+            v.after_removal(&Scope::Feed(FeedId(1))),
+            AfterRemoval::CloseArticle
+        );
+        assert_eq!(
+            v.after_removal(&Scope::Feed(FeedId(2))),
+            AfterRemoval::Reload
+        );
+        assert_eq!(
+            v.after_removal(&Scope::Folder(FolderId(2))),
+            AfterRemoval::Reload
+        );
+        v.set_scope(Scope::Feed(FeedId(1)));
+        assert_eq!(
+            v.after_removal(&Scope::Feed(FeedId(1))),
+            AfterRemoval::ShowAll
+        );
     }
 
     #[test]

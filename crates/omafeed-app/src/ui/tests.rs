@@ -472,6 +472,164 @@ pub(crate) fn desktop_smoke() {
     slow.abort();
     library.close();
     pump_until(|| !library.is_visible());
+    // The sidebar's context menu, as a right click or the Menu key opens it, does its work
+    // without changing the view shown.
+    let (fixture, discovered, folder) = runtime
+        .block_on(db.call(move |s| {
+            let lib = s.library()?;
+            let fixture = s.article(id)?.feed_id;
+            let discovered = lib
+                .feeds
+                .iter()
+                .find(|f| f.title == "Discovered feed")
+                .unwrap()
+                .id;
+            Ok((
+                fixture,
+                discovered,
+                lib.feed(fixture).unwrap().folder.unwrap(),
+            ))
+        }))
+        .unwrap();
+    pump_until(|| {
+        u.sidebar_rows
+            .borrow()
+            .iter()
+            .any(|r| r.scope == Scope::Feed(discovered))
+    });
+    let open_menu = |scope: Scope| -> Vec<String> {
+        u.side.menu.popdown();
+        let index = u
+            .sidebar_rows
+            .borrow()
+            .iter()
+            .position(|r| r.scope == scope)
+            .unwrap();
+        let row = u.side.list.row_at_index(index as i32).unwrap();
+        u.open_sidebar_menu(&row, None);
+        // No main loop turn until the caller has run an action: a reload finishing in between
+        // would close the menu and drop its actions. (Whether the popover is mapped yet is up
+        // to GTK; its actions work either way.)
+        let model = u.side.menu.menu_model().unwrap();
+        let mut labels = Vec::new();
+        for i in 0..model.n_items() {
+            let section = model.item_link(i, gio::MENU_LINK_SECTION).unwrap();
+            for j in 0..section.n_items() {
+                let label = section
+                    .item_attribute_value(j, gio::MENU_ATTRIBUTE_LABEL, None)
+                    .and_then(|v| v.get::<String>())
+                    .unwrap();
+                labels.push(label);
+            }
+        }
+        labels
+    };
+    // Opens the menu each time, since anything that reads the library meanwhile closes it.
+    let run = |scope: Scope, command: sidebar::Command| {
+        open_menu(scope);
+        u.side
+            .menu
+            .activate_action(&format!("sidebar.{}", command.name()), None)
+            .unwrap();
+    };
+    let clipboard = || {
+        let text = Rc::new(RefCell::new(None));
+        let out = text.clone();
+        let clipboard = u.window.clipboard();
+        glib::spawn_future_local(async move {
+            let read = clipboard.read_text_future().await;
+            *out.borrow_mut() = Some(read.ok().flatten().map(|t| t.to_string()));
+        });
+        pump_until(|| text.borrow().is_some());
+        text.borrow_mut().take().flatten()
+    };
+    assert_eq!(
+        open_menu(Scope::Feed(fixture)),
+        [
+            "Open home page",
+            "Copy feed URL",
+            "Copy home page URL",
+            "Mark all as read",
+            "Edit…",
+            "Remove…"
+        ]
+    );
+    run(Scope::Feed(fixture), sidebar::Command::CopyFeedUrl);
+    assert_eq!(clipboard().as_deref(), Some("https://example.invalid/feed"));
+    run(Scope::Feed(fixture), sidebar::Command::CopyHomePageUrl);
+    let website = u.library.borrow().feed(fixture).unwrap().site_url.clone();
+    assert!(!website.is_empty());
+    assert_eq!(clipboard(), Some(website));
+    run(Scope::Feed(fixture), sidebar::Command::MarkRead);
+    pump_until(|| {
+        runtime
+            .block_on(db.call(move |s| s.article(id)))
+            .unwrap()
+            .read
+    });
+    u.undo();
+    pump_until(|| {
+        !runtime
+            .block_on(db.call(move |s| s.article(id)))
+            .unwrap()
+            .read
+    });
+    assert_eq!(
+        open_menu(Scope::Folder(folder)),
+        ["Mark all as read", "Edit…", "Remove…"]
+    );
+    assert_eq!(open_menu(Scope::Starred), ["Mark all as read"]);
+    // Reading the library again closes the menu and drops its actions: the entry it was
+    // opened on may be gone, its ID taken by another.
+    open_menu(Scope::Feed(fixture));
+    u.reload();
+    pump_until(|| {
+        u.side
+            .menu
+            .activate_action("sidebar.copy-feed-url", None)
+            .is_err()
+    });
+    assert!(!u.side.menu.is_visible());
+    run(Scope::Feed(discovered), sidebar::Command::Edit);
+    pump_until(|| all_widgets().iter().any(|w| w.is::<gtk::Entry>()));
+    let fields = all_widgets()
+        .into_iter()
+        .filter_map(|w| w.downcast::<gtk::Entry>().ok())
+        .collect::<Vec<_>>();
+    assert_eq!(fields[0].text(), "Discovered feed");
+    fields[0].set_text("Renamed from the menu");
+    form_button("Save").emit_clicked();
+    pump_until(|| {
+        runtime
+            .block_on(db.call(move |s| {
+                Ok(s.library()?
+                    .feed(discovered)
+                    .is_some_and(|f| f.title == "Renamed from the menu"))
+            }))
+            .unwrap()
+    });
+    pump_until(|| !all_widgets().iter().any(|w| w.is::<gtk::Entry>()));
+    run(Scope::Feed(discovered), sidebar::Command::Remove);
+    pump_until(|| {
+        all_widgets()
+            .into_iter()
+            .filter_map(|w| w.downcast::<gtk::Button>().ok())
+            .any(|b| b.label().as_deref() == Some("Remove"))
+    });
+    form_button("Remove").emit_clicked();
+    pump_until(|| {
+        runtime
+            .block_on(db.call(move |s| Ok(s.library()?.feed(discovered).is_none())))
+            .unwrap()
+    });
+    pump_until(|| {
+        !u.sidebar_rows
+            .borrow()
+            .iter()
+            .any(|r| r.scope == Scope::Feed(discovered))
+    });
+    assert_eq!(u.view.borrow().query.scope, Scope::Starred);
+    assert_eq!(u.list.heading.text(), "Starred");
     // Persisted state and actual WebKit rendering were verified above.
     u.select(id);
     pump_until(|| u.view.borrow().open().is_some_and(|a| a.id == id));

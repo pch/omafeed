@@ -116,9 +116,14 @@ fn web_view() -> webkit6::WebView {
     web
 }
 
+/// Whether [`open_uri`] opens `uri`: web and mail links only.
+pub fn opens(uri: &str) -> bool {
+    uri.starts_with("https://") || uri.starts_with("http://") || uri.starts_with("mailto:")
+}
+
 /// Open web and mail links with the default handler; other schemes are ignored.
 pub fn open_uri(uri: &str) {
-    if !(uri.starts_with("https://") || uri.starts_with("http://") || uri.starts_with("mailto:")) {
+    if !opens(uri) {
         return;
     }
     if let Err(e) = gio::AppInfo::launch_default_for_uri(uri, None::<&gio::AppLaunchContext>) {

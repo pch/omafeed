@@ -12,6 +12,14 @@ Notable changes to Omafeed. Earlier versions are described in the
   library with "Database was created by a newer Omafeed version", so back up the data
   directory first if you may need to go back.
 
+### Added
+
+- Feeds, folders and views in the sidebar have a context menu: right-click one, or press the
+  Menu key or Shift+F10 on it. A feed's menu opens or copies its home page, copies its feed
+  URL, marks it all read (undo with Ctrl+Z), and edits or removes it; a folder's marks it read
+  and edits or removes it; a view's marks it read. The view shown stays as it is, unless it is
+  the feed or folder removed.
+
 ### Fixed
 
 - A refresh that finished after its feed's URL changed, or after the feed was removed or
