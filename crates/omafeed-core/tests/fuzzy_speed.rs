@@ -211,11 +211,11 @@ fn report(store: &mut Store, title: &str, queries: &[&str]) {
     println!("\n{title}");
     println!(
         "  {:<22} {:>5} {:>15} {:>15} {:>15} {:>15}",
-        "search", "hits", "exact (old)", "forgiving", "after a star", "new article"
+        "search", "hits", "exact", "forgiving", "after a star", "new article"
     );
     for query in queries {
         let hits = search(store, query, false);
-        let old = measure(15, || timed(|| search(store, query, true)));
+        let exact = measure(15, || timed(|| search(store, query, true)));
         let warm = measure(15, || timed(|| search(store, query, false)));
         let starred = measure(15, || {
             flip = !flip;
@@ -253,7 +253,7 @@ fn report(store: &mut Store, title: &str, queries: &[&str]) {
         });
         println!(
             "  {query:<22} {hits:>5} {:>6.2}/{:>6.2} {:>6.2}/{:>6.2} {:>6.2}/{:>6.2} {:>6.2}/{:>6.2}",
-            old.0, old.1, warm.0, warm.1, starred.0, starred.1, fresh.0, fresh.1
+            exact.0, exact.1, warm.0, warm.1, starred.0, starred.1, fresh.0, fresh.1
         );
     }
     println!("  (each cell: median/worst, ms per search)");

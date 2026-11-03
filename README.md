@@ -68,7 +68,7 @@ For a system-wide install, build as your user and install with `sudo make instal
 
 ### Option 3: Prebuilt binary
 
-Each [release](https://github.com/pch/omafeed/releases) includes `omafeed-VERSION-x86_64-linux.tar.gz`, built on Arch Linux, and `omafeed-VERSION-aarch64-linux.tar.gz` for ARM, built on Debian 13. Both need `gtk4`, `libadwaita`, and `webkitgtk-6.0`, and are intended for up-to-date Arch-based systems. Extract the one for your architecture (`uname -m`) into `~/.local`:
+Each [release](https://github.com/pch/omafeed/releases) includes `omafeed-VERSION-x86_64-linux.tar.gz`, built on Arch Linux, and `omafeed-VERSION-aarch64-linux.tar.gz` for ARM (such as Arch Linux ARM), built on Debian 13. Both need `gtk4`, `libadwaita` 1.6 or newer, and `webkitgtk-6.0`, and are intended for up-to-date Arch-based systems. The aarch64 build runs where these libraries and glibc are at least as new as Debian 13's (glibc 2.41). Extract the one for your architecture (`uname -m`) into `~/.local`:
 
 ```sh
 tar -xzf omafeed-*-$(uname -m)-linux.tar.gz -C ~/.local --strip-components=1
@@ -249,11 +249,11 @@ Tests use temporary SQLite databases and a localhost HTTP server; they do not de
 
 The workspace contains `omafeed-core` (database worker, migrations, OPML, fetch scheduling, sanitization) and `omafeed-app` (GTK interface and CLI). Database work runs on a dedicated worker; HTTP work runs on Tokio. The GTK thread receives results asynchronously.
 
-Command output is checked byte for byte against transcripts in `crates/omafeed-app/tests/snapshots/`, because scripts and agents parse it. After an intended change to the output, rewrite them with `OMAFEED_BLESS=1 cargo test -p omafeed --test cli_output` and review the diff. [ARCHITECTURE.md](ARCHITECTURE.md) describes the modules, data flow, storage, and known limits.
+Command output is checked byte for byte against transcripts in `crates/omafeed-app/tests/snapshots/`, because scripts and agents parse it. After an intended change to the output, rewrite them with `OMAFEED_BLESS=1 cargo test -p omafeed --test cli_output` and review the diff. [ARCHITECTURE.md](ARCHITECTURE.md) describes the modules, data flow, storage, and known limits, and [CONTRIBUTING.md](CONTRIBUTING.md) the rules that keep scripts, settings and libraries working across versions.
 
 ## Releases
 
-CI runs formatting, Clippy, tests, the headless desktop smoke test, an Arch package build, and `cargo deny`. To release, bump `version` in `Cargo.toml` and the `<releases>` entry in `data/io.github.pch.Omafeed.metainfo.xml`, commit, then push a matching tag (`git tag v0.2.0 && git push origin v0.2.0`). The release workflow reruns CI, builds a binary tarball and a checksummed `PKGBUILD`, and publishes them as a GitHub release.
+CI runs formatting, Clippy, tests, the documentation build, the headless desktop smoke test, a build with the minimum supported Rust version, an Arch package build, and `cargo deny`. To release, bump `version` in `Cargo.toml` and the `<releases>` entry in `data/io.github.pch.Omafeed.metainfo.xml`, move the notes under "Unreleased" in [CHANGELOG.md](CHANGELOG.md) to the new version, commit, then push a matching tag (`git tag v0.2.0 && git push origin v0.2.0`). The release workflow reruns CI, builds the x86_64 tarball on Arch Linux and the aarch64 tarball on Debian 13, fills in a checksummed `PKGBUILD`, and publishes them with `SHA256SUMS` as a GitHub release.
 
 ## Inspiration
 

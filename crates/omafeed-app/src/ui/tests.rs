@@ -1,3 +1,5 @@
+//! The desktop smoke test: the real window, driven through its widgets against a temporary
+//! library and local servers. Built only with the `test-support` feature.
 use super::*;
 use std::time::{Duration, Instant};
 use webkit6::prelude::*;

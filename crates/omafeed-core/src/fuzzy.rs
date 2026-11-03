@@ -132,8 +132,8 @@ fn plain_word(typed: &str) -> Option<String> {
 /// The index query for what the user typed, or `None` for an empty search.
 ///
 /// Every typed word must match, and each may match through alternatives. Without a
-/// vocabulary this is exactly the old behaviour: each word quoted and matched literally, so
-/// search syntax typed by the user is never interpreted.
+/// vocabulary (an exact search) each word is quoted and matched literally. Either way, search
+/// syntax typed by the user is never interpreted.
 pub(crate) fn expression(typed: &str, vocabulary: Option<&Vocabulary>) -> Option<String> {
     // The index cannot take a NUL inside a quoted word; treat it as a space.
     let typed = typed.replace('\0', " ");

@@ -5,18 +5,24 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::{ops::RangeInclusive, path::PathBuf};
 
+/// The appearance the user chose.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Theme {
+    /// Follow the current Omarchy theme's colors.
     #[default]
     Omarchy,
+    /// The built-in light colors.
     Light,
+    /// The built-in dark colors.
     Dark,
 }
 
 impl Theme {
+    /// Every theme, in the order the settings form lists them.
     pub const ALL: [Theme; 3] = [Theme::Omarchy, Theme::Light, Theme::Dark];
 
+    /// The theme's name in the settings form.
     pub fn label(self) -> &'static str {
         match self {
             Theme::Omarchy => "Follow Omarchy",
@@ -26,21 +32,34 @@ impl Theme {
     }
 }
 
+/// The user's settings and the window's state, as kept in `settings.toml`. The keys are
+/// these field names; changing them breaks existing files.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    /// How often the open window refreshes feeds, in minutes.
     pub refresh_minutes: u32,
+    /// The reader's text size, in pixels.
     pub font_size: u32,
+    /// Whether the reader loads images from the web.
     pub remote_images: bool,
+    /// The appearance; an unknown value reads as the default.
     #[serde(deserialize_with = "lenient")]
     pub theme: Theme,
+    /// The window's width when it was last closed.
     pub width: i32,
+    /// The window's height when it was last closed.
     pub height: i32,
+    /// The sidebar's width when it was last closed.
     pub sidebar_width: i32,
+    /// The article list's width when it was last closed.
     pub list_width: i32,
+    /// The view shown when the window was last closed.
     #[serde(deserialize_with = "scope")]
     pub scope: Scope,
+    /// The article open when the window was last closed.
     pub selected_article: Option<ArticleId>,
+    /// Whether the list showed only unread articles.
     pub unread_only: bool,
 }
 
@@ -88,12 +107,18 @@ fn clamp<T: Ord + Copy>(value: T, range: RangeInclusive<T>) -> T {
 }
 
 impl Settings {
-    /// Supported values; a file with others is clamped to them.
+    /// Supported values of [`Settings::font_size`]; a file with others is clamped to them,
+    /// as for the other ranges.
     pub const FONT_SIZES: RangeInclusive<u32> = 12..=32;
+    /// Supported values of [`Settings::refresh_minutes`].
     pub const REFRESH_MINUTES: RangeInclusive<u32> = 5..=1440;
+    /// Supported values of [`Settings::width`], from the window's minimum width.
     pub const WIDTHS: RangeInclusive<i32> = 360..=5000;
+    /// Supported values of [`Settings::height`], from the window's minimum height.
     pub const HEIGHTS: RangeInclusive<i32> = 400..=3000;
+    /// Supported values of [`Settings::sidebar_width`], from the sidebar's minimum.
     pub const SIDEBAR_WIDTHS: RangeInclusive<i32> = 180..=800;
+    /// Supported values of [`Settings::list_width`], from the list's minimum.
     pub const LIST_WIDTHS: RangeInclusive<i32> = 270..=1200;
 
     fn file(paths: &Paths) -> PathBuf {
@@ -132,6 +157,7 @@ impl Settings {
         Ok(Some(s))
     }
 
+    /// Write the settings, replacing the file atomically.
     pub fn save(&self, paths: &Paths) -> Result<()> {
         let temp = paths.config.join("settings.toml.tmp");
         std::fs::write(&temp, toml::to_string_pretty(self)?)?;

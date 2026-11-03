@@ -95,6 +95,9 @@ impl Store {
         })
     }
 
+    /// Subscribe to `url` as `title` (the URL if empty) in `folder`. Fails with
+    /// [`Error::DuplicateFeed`] if the library already has the URL, and with
+    /// [`Error::Validation`] for a URL that is not HTTP(S) or a bad name.
     pub fn add_feed(&self, title: &str, url: &str, folder: Option<FolderId>) -> Result<FeedId> {
         let url = validate_url(url)?;
         let title = if title.trim().is_empty() {
@@ -113,6 +116,9 @@ impl Store {
         })
     }
 
+    /// Rename a feed, move it to `folder`, and set its URL. A new URL keeps the feed's articles
+    /// but clears its validators, website, schedule and error, and gives it a new revision;
+    /// fails with [`Error::DuplicateFeed`] if another feed has it.
     pub fn update_feed(
         &self,
         id: FeedId,
@@ -142,6 +148,7 @@ impl Store {
         )?)
     }
 
+    /// Remove a feed and all its articles, starred ones included.
     pub fn delete_feed(&self, id: FeedId) -> Result<()> {
         self.conn.execute("DELETE FROM feeds WHERE id = ?1", [id])?;
         self.articles_changed();
@@ -234,6 +241,9 @@ impl Store {
         Ok(())
     }
 
+    /// Add the subscriptions and folders of an OPML document in one transaction. Feeds already
+    /// subscribed are skipped, entries that cannot be used are reported and skipped, and
+    /// folders of the same name are reused; a document that cannot be read adds nothing.
     pub fn import(&self, text: &str) -> Result<ImportReport> {
         let doc = opml::parse(text)?;
         self.immediate(|s| {
@@ -321,6 +331,7 @@ impl Store {
         Ok(())
     }
 
+    /// The library as an OPML document.
     pub fn export(&self) -> Result<String> {
         Ok(opml::export(&self.library()?))
     }

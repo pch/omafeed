@@ -12,6 +12,7 @@ pub struct Db {
 }
 
 impl Db {
+    /// Open the library as [`Store::open`] does, on this thread, and start its worker.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let store = Store::open(path)?;
         let (sender, receiver) = std::sync::mpsc::channel::<Job>();

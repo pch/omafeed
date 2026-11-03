@@ -51,6 +51,8 @@ async fn get(
     let bytes = read_limited(response, limit, body).await.ok()?;
     Some((final_url, bytes))
 }
+/// The icon links a web page declares (`icon` and `apple-touch-icon`), resolved against its
+/// address and `<base>`, HTTP(S) only, at most eight.
 pub fn discover(html: &str, base: &str) -> Vec<String> {
     let Ok(mut base) = url::Url::parse(base) else {
         return vec![];

@@ -24,21 +24,33 @@ use tokio::sync::Semaphore;
 const CONCURRENT_FEEDS: usize = 8;
 const CONCURRENT_PER_HOST: usize = 2;
 
+/// What a refresh pass reports as it goes.
 #[derive(Clone, Debug)]
 pub enum Progress {
+    /// The pass started with this many due feeds.
     Started(usize),
+    /// One feed finished, in completion order.
     Feed {
+        /// The feed's title.
         title: String,
+        /// Why it failed, or `None`.
         error: Option<String>,
+        /// Feeds finished so far, this one included.
         done: usize,
+        /// Feeds in the pass.
         total: usize,
     },
+    /// The pass ended.
     Finished {
+        /// Feeds in the pass.
         total: usize,
+        /// Feeds that failed.
         failed: usize,
     },
 }
 
+/// Refreshes feeds and finds them. Cheap to clone; clones share one HTTP client and allow
+/// only one refresh pass at a time between them.
 #[derive(Clone)]
 pub struct Refresher {
     client: Client,
@@ -67,6 +79,7 @@ fn host(url: &str) -> String {
 }
 
 impl Refresher {
+    /// A refresher that does not fetch website icons.
     pub fn new() -> Result<Self> {
         Ok(Self {
             client: http::client()?,
@@ -75,11 +88,13 @@ impl Refresher {
         })
     }
 
+    /// Also fetch website icons into the cache directory `path` while refreshing.
     pub fn with_cache(mut self, path: PathBuf) -> Self {
         self.cache = Some(path);
         self
     }
 
+    /// [`discovery::discover`](super::discovery::discover), giving up after a minute.
     pub async fn discover(&self, input: &str) -> Result<Vec<super::discovery::Candidate>> {
         tokio::time::timeout(
             Duration::from_secs(60),

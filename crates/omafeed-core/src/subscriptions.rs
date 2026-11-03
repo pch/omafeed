@@ -10,11 +10,15 @@ use anyhow::Result;
 /// A feed removed by [`unsubscribe`], or that would be without confirmation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Removal {
+    /// The feed's ID, no longer in use once it is removed.
     pub id: FeedId,
+    /// Its title.
     pub title: String,
+    /// Its feed address.
     pub url: String,
     /// Its stored articles, starred ones included.
     pub articles: i64,
+    /// How many of those are starred.
     pub starred: i64,
 }
 

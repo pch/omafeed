@@ -6,6 +6,7 @@ use crate::{
 };
 use anyhow::Result;
 
+/// The articles in an RSS, Atom or JSON feed document served from `base`.
 pub fn parse(data: &[u8], base: &str) -> Result<Vec<Entry>> {
     Ok(parse_document(data, base)?.0)
 }

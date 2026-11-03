@@ -2,11 +2,16 @@
 use super::{Theme, xdg};
 use std::path::PathBuf;
 
+/// The reader's and window's colors, each a validated `#rrggbb` value.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Palette {
+    /// The page.
     pub background: String,
+    /// Text.
     pub foreground: String,
+    /// Links, quotes and highlights.
     pub accent: String,
+    /// Whether the window should use its dark style.
     pub dark: bool,
 }
 impl Palette {
@@ -18,6 +23,8 @@ impl Palette {
         ]
     }
 
+    /// The colors for `theme`: built in for light and dark, or read from Omarchy's current
+    /// theme (the built-in dark colors if there is none, and for any it lacks).
     pub fn load(theme: Theme) -> Self {
         let light = Self {
             background: "#faf9f5".into(),

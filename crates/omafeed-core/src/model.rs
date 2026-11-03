@@ -42,25 +42,42 @@ id!(
     ArticleId
 );
 
+/// A folder of feeds, possibly inside another folder.
 #[derive(Clone, Debug)]
 pub struct Folder {
+    /// Its row ID.
     pub id: FolderId,
+    /// The folder it is in, or `None` at the top level.
     pub parent: Option<FolderId>,
+    /// Unique among its siblings, trimmed, 1–300 bytes.
     pub name: String,
 }
 
+/// A subscription, as the library listing reads it.
 #[derive(Clone, Debug)]
 pub struct Feed {
+    /// Its row ID; see [`Feed::revision`] for why that is not enough to name it.
     pub id: FeedId,
+    /// The folder it is in, or `None` at the top level.
     pub folder: Option<FolderId>,
+    /// The name shown for it: the user's, or the feed's own.
     pub title: String,
+    /// The feed's address, unique in the library.
     pub url: String,
+    /// The website the feed names (or, failing that, its own origin), or the OPML file's
+    /// `htmlUrl`; empty until either is known. See [`Feed::website`].
     pub site_url: String,
+    /// Its unread articles.
     pub unread: i64,
+    /// Why the last refresh failed, or `None` if it succeeded.
     pub error: Option<String>,
+    /// The `ETag` of the last download, sent back as `If-None-Match`.
     pub etag: Option<String>,
+    /// The `Last-Modified` of the last download, sent back as `If-Modified-Since`.
     pub modified: Option<String>,
+    /// When it is due to be refreshed, in Unix seconds.
     pub next_fetch: i64,
+    /// Refreshes that failed in a row since the last success.
     pub failures: i64,
     /// Changes whenever the row stops being the subscription it was: when it is created and
     /// when its URL changes. A refresh that started earlier must not store anything once it
@@ -79,33 +96,53 @@ impl Feed {
     }
 }
 
+/// An article with its feed's name and its read and star state.
 #[derive(Clone, Debug, Default)]
 pub struct Article {
+    /// Its row ID.
     pub id: ArticleId,
+    /// The feed it came from.
     pub feed_id: FeedId,
+    /// The [`Feed::title`] of its feed.
     pub feed_title: String,
+    /// Plain text; "Untitled article" if the feed gave none.
     pub title: String,
+    /// The original on the web (HTTP or HTTPS only), or empty.
     pub url: String,
+    /// Authors' names, comma-separated, or empty.
     pub author: String,
+    /// When it was published (or first seen, if the feed did not say), in Unix seconds.
     pub published: i64,
+    /// Sanitized HTML; empty in list pages, which do not need it.
     pub html: String,
+    /// The start of its plain text, for lists.
     pub preview: String,
+    /// Whether it has been read.
     pub read: bool,
+    /// Whether it is starred.
     pub starred: bool,
 }
 
+/// Which articles a view shows. Saved in the settings as the last view.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Scope {
+    /// Every unread article.
     #[default]
     Unread,
+    /// Articles published since local midnight.
     Today,
+    /// Starred articles, read or not.
     Starred,
+    /// Every article.
     All,
+    /// Articles of the feeds in a folder and the folders inside it.
     Folder(FolderId),
+    /// Articles of one feed.
     Feed(FeedId),
 }
 
 impl Scope {
+    /// The view's name in the window; a feed or folder missing from `lib` gets a generic one.
     pub fn label(&self, lib: &Library) -> String {
         match self {
             Scope::Unread => "All Unread".into(),
@@ -166,40 +203,57 @@ impl std::str::FromStr for Scope {
     }
 }
 
+/// A page of articles to list, newest first.
 #[derive(Clone, Debug, Default)]
 pub struct Query {
+    /// Which articles.
     pub scope: Scope,
+    /// Words every article must contain; empty for none.
     pub search: String,
     /// Match the search words exactly as typed. By default a search forgives typos, finds
     /// plurals, and matches the start of the last word.
     pub exact: bool,
+    /// Only unread articles, whatever the scope.
     pub unread_only: bool,
+    /// Articles to skip from the newest.
     pub offset: usize,
 }
 
+/// What an OPML import did.
 #[derive(Debug, Default)]
 pub struct ImportReport {
+    /// Subscriptions added.
     pub added: usize,
+    /// Subscriptions already in the library.
     pub skipped: usize,
+    /// Why each entry that could not be used was refused, prefixed with its name.
     pub invalid: Vec<String>,
 }
 
+/// All folders and feeds, with totals, read from one snapshot.
 #[derive(Debug, Default)]
 pub struct Library {
+    /// Sorted by name, ignoring case.
     pub folders: Vec<Folder>,
+    /// Sorted by title, ignoring case.
     pub feeds: Vec<Feed>,
+    /// Unread articles in the whole library.
     pub unread: i64,
+    /// Starred articles in the whole library.
     pub starred: i64,
 }
 
 /// A change to an article's read and star state; `None` leaves that part as it is.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct StatePatch {
+    /// Mark read (`true`) or unread (`false`).
     pub read: Option<bool>,
+    /// Star (`true`) or unstar (`false`).
     pub starred: Option<bool>,
 }
 
 impl StatePatch {
+    /// Mark read or unread, leaving the star alone.
     pub fn read(read: bool) -> Self {
         Self {
             read: Some(read),
@@ -207,6 +261,7 @@ impl StatePatch {
         }
     }
 
+    /// Star or unstar, leaving the read state alone.
     pub fn starred(starred: bool) -> Self {
         Self {
             starred: Some(starred),
@@ -225,18 +280,30 @@ impl StatePatch {
 #[derive(Clone, Copy, Debug)]
 pub enum TreeItem<'a> {
     /// A folder `depth` levels down; everything inside it follows, then its `FolderEnd`.
-    Folder { folder: &'a Folder, depth: usize },
+    Folder {
+        /// The folder.
+        folder: &'a Folder,
+        /// 0 at the top level.
+        depth: usize,
+    },
     /// The end of a folder's contents.
     FolderEnd(&'a Folder),
-    /// A feed `depth` levels down (0 is the top level).
-    Feed { feed: &'a Feed, depth: usize },
+    /// A feed `depth` levels down.
+    Feed {
+        /// The feed.
+        feed: &'a Feed,
+        /// 0 at the top level.
+        depth: usize,
+    },
 }
 
 impl Library {
+    /// The feed with this ID, if the library has it.
     pub fn feed(&self, id: FeedId) -> Option<&Feed> {
         self.feeds.iter().find(|f| f.id == id)
     }
 
+    /// The folder with this ID, if the library has it.
     pub fn folder(&self, id: FolderId) -> Option<&Folder> {
         self.folders.iter().find(|f| f.id == id)
     }
@@ -289,29 +356,45 @@ impl Library {
     }
 }
 
+/// An article as parsed from a feed, ready to store.
 #[derive(Clone, Debug)]
 pub struct Entry {
+    /// What makes it the same article on the next download: the feed's ID for it, else its
+    /// link (`url:…`), else a hash of its title and date (`fallback:…`).
     pub identity: String,
+    /// Plain text.
     pub title: String,
+    /// The original on the web (HTTP or HTTPS only), or empty.
     pub url: String,
+    /// Authors' names or addresses, comma-separated, or empty.
     pub author: String,
+    /// When it was published or last updated, in Unix seconds, if the feed said.
     pub published: Option<i64>,
+    /// Sanitized HTML, with links to any attachments added.
     pub html: String,
+    /// Plain text of `html`, for previews and search.
     pub text: String,
 }
 
+/// The result of downloading a feed.
 #[derive(Debug)]
 pub enum Download {
     /// The server answered 304; cached articles stay as they are.
     NotModified,
+    /// New content.
     Updated(Update),
 }
 
+/// A feed's new content.
 #[derive(Debug)]
 pub struct Update {
+    /// The website the feed names, or its own origin if it names none.
     pub site_url: Option<String>,
+    /// Every article in the feed now, in its order.
     pub entries: Vec<Entry>,
+    /// The `ETag` to send back on the next download.
     pub etag: Option<String>,
+    /// The `Last-Modified` to send back on the next download.
     pub modified: Option<String>,
 }
 

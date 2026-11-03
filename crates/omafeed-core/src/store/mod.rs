@@ -42,6 +42,7 @@ sql_id!(ArticleId, FeedId, FolderId);
 /// Number of articles per list page.
 pub const PAGE_SIZE: usize = 200;
 
+/// One connection to the library database. Not shared between threads: use [`Db`] for that.
 pub struct Store {
     conn: Connection,
     /// The library's words for forgiving search, and the state they were read at.
@@ -55,6 +56,8 @@ pub struct Store {
 }
 
 impl Store {
+    /// Open (creating if need be) the library at `path`, or `:memory:`, and bring its schema
+    /// up to date. Fails with [`crate::Error::NewerDatabase`] for a newer one.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let mut conn = Connection::open(path)?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
