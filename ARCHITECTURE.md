@@ -135,6 +135,11 @@ These are properties of the current design, not promises. Change them deliberate
 
 - `crates/omafeed-core/tests/reader.rs`: storage, refresh, discovery, icons and search
   against in-memory databases and local HTTP servers.
+- `crates/omafeed-core/tests/stale_refresh.rs`: refresh results that arrive after their feed
+  was edited, removed or replaced.
+- Unit tests next to the code, notably `ingest/schedule.rs` (when feeds are due), `http.rs`
+  and `util.rs` (the network policy), and the app's `ui/view.rs` and `ui/changes.rs` (what late
+  database results may change on screen).
 - `crates/omafeed-core/tests/files.rs`: frozen database fixtures from every schema version and
   settings files, which must keep opening (`tests/fixtures/`).
 - `crates/omafeed-core/tests/fuzzy_speed.rs`: ignored search benchmarks.

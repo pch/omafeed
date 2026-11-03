@@ -13,6 +13,7 @@ WITH RECURSIVE descendants(id) AS (
 SELECT EXISTS(SELECT 1 FROM descendants WHERE id = ?2)";
 
 impl Store {
+    /// Create a folder in `parent`, or at the top level.
     pub fn add_folder(&self, name: &str, parent: Option<FolderId>) -> Result<FolderId> {
         self.conn.execute(
             "INSERT INTO folders(name, parent) VALUES(?1, ?2)",
@@ -21,6 +22,7 @@ impl Store {
         Ok(FolderId(self.conn.last_insert_rowid()))
     }
 
+    /// Rename a folder; the name must be unique among its siblings.
     pub fn rename_folder(&self, id: FolderId, name: &str) -> Result<()> {
         self.conn.execute(
             "UPDATE folders SET name = ?1 WHERE id = ?2",
@@ -29,6 +31,7 @@ impl Store {
         Ok(())
     }
 
+    /// Move a folder into `parent`, or to the top level, but never inside itself.
     pub fn move_folder(&self, id: FolderId, parent: Option<FolderId>) -> Result<()> {
         if let Some(p) = parent
             && self

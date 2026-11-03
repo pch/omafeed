@@ -19,6 +19,8 @@ impl std::fmt::Display for RetryDelay {
 
 impl std::error::Error for RetryDelay {}
 
+/// Download `feed` conditionally, with its stored validators, and parse it. A server asking
+/// to wait (429 or 503 with `Retry-After`) is an error that carries the wait.
 pub async fn download(client: &Client, feed: &Feed) -> Result<Download> {
     Ok(download_from(client, feed).await?.0)
 }

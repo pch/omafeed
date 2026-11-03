@@ -18,6 +18,7 @@ impl Store {
         )
     }
 
+    /// A page of up to [`PAGE_SIZE`] articles matching `q`, newest first, without their HTML.
     pub fn articles(&self, q: &Query) -> Result<Vec<Article>> {
         let (predicate, mut values) = self.predicate(q)?;
         values.push((q.offset as i64).into());
@@ -49,6 +50,7 @@ impl Store {
         })
     }
 
+    /// One article with its HTML; an error if it does not exist.
     pub fn article(&self, id: ArticleId) -> Result<Article> {
         let sql = format!(
             "SELECT {} {ARTICLE_JOINS} WHERE a.id = ?1",
@@ -118,6 +120,7 @@ impl Store {
         Ok(())
     }
 
+    /// Mark one article read or unread; an article that does not exist is left alone.
     pub fn set_read(&self, id: ArticleId, read: bool) -> Result<()> {
         self.conn.execute(
             "UPDATE article_state SET read = ?1 WHERE article_id = ?2",
@@ -126,6 +129,7 @@ impl Store {
         Ok(())
     }
 
+    /// Star or unstar one article; an article that does not exist is left alone.
     pub fn set_starred(&self, id: ArticleId, value: bool) -> Result<()> {
         self.conn.execute(
             "UPDATE article_state SET starred = ?1 WHERE article_id = ?2",
@@ -149,6 +153,7 @@ impl Store {
             .collect::<Result<Vec<ArticleId>, _>>()?)
     }
 
+    /// Mark unread again the articles a [`Store::mark_read`] returned.
     pub fn undo_read(&self, ids: &[ArticleId]) -> Result<()> {
         self.conn.execute(
             "UPDATE article_state SET read = 0 WHERE article_id IN (SELECT value FROM json_each(?1))",

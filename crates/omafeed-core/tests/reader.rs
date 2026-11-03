@@ -1,3 +1,5 @@
+//! Storage, refreshing, discovery, icons and search, against temporary libraries and local
+//! HTTP servers.
 use omafeed_core::{
     Db, Store, content,
     ingest::{self, Refresher},

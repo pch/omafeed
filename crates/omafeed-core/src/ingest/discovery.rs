@@ -9,9 +9,12 @@ use reqwest::Client;
 use scraper::{Html, Selector};
 use url::Url;
 
+/// A feed found for an address, ready to subscribe to.
 #[derive(Debug)]
 pub struct Candidate {
+    /// The feed's own title, or its URL if it has none.
     pub title: String,
+    /// The feed's address, validated.
     pub url: String,
 }
 
@@ -89,6 +92,9 @@ pub fn links(html: &str, base: &str) -> Vec<String> {
     urls.truncate(12);
     urls
 }
+/// The feeds at `input`: the feed itself if it is one, else those the page advertises (or,
+/// failing that, the usual feed addresses on its site) that turn out to be readable feeds,
+/// in the page's order. Fails if there are none.
 pub async fn discover(client: &Client, input: &str) -> Result<Vec<Candidate>> {
     let url = validate_url(input).context("Enter a website or feed URL starting with https://")?;
     let (base, data) = get(client, &url).await.context("Could not open this URL")?;

@@ -2,6 +2,8 @@
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 
+/// The XDG base directory in `key` if it is set to an absolute path, else `fallback` under
+/// the home directory.
 pub fn xdg(key: &str, fallback: &str) -> PathBuf {
     std::env::var_os(key)
         .filter(|v| PathBuf::from(v).is_absolute())
@@ -10,13 +12,18 @@ pub fn xdg(key: &str, fallback: &str) -> PathBuf {
             PathBuf::from,
         )
 }
+/// Where Omafeed keeps its files.
 #[derive(Clone, Debug)]
 pub struct Paths {
+    /// The directory of the library database.
     pub data: PathBuf,
+    /// The directory of `settings.toml`.
     pub config: PathBuf,
+    /// The directory of cached website icons.
     pub cache: PathBuf,
 }
 impl Paths {
+    /// The directories under `$OMAFEED_HOME` if it is set, else the XDG ones, creating them.
     pub fn discover() -> Result<Self> {
         let paths = if let Some(root) = std::env::var_os("OMAFEED_HOME") {
             let root = PathBuf::from(root);
