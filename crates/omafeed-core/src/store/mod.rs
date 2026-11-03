@@ -7,7 +7,10 @@ mod schema;
 mod search;
 mod worker;
 
-use crate::fuzzy::Vocabulary;
+use crate::{
+    fuzzy::Vocabulary,
+    model::{ArticleId, FeedId, FolderId},
+};
 use anyhow::Result;
 use rusqlite::Connection;
 use std::{
@@ -16,6 +19,25 @@ use std::{
 };
 
 pub use worker::Db;
+
+/// IDs go into and come out of SQLite as the integers they are.
+macro_rules! sql_id {
+    ($($name:ty),*) => {$(
+        impl rusqlite::ToSql for $name {
+            fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+                self.0.to_sql()
+            }
+        }
+
+        impl rusqlite::types::FromSql for $name {
+            fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+                i64::column_result(value).map(Self)
+            }
+        }
+    )*};
+}
+
+sql_id!(ArticleId, FeedId, FolderId);
 
 /// Number of articles per list page.
 pub const PAGE_SIZE: usize = 200;

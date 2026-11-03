@@ -4,7 +4,7 @@ use chrono::{DateTime, Datelike, Local};
 use gtk::{glib, prelude::*};
 use omafeed_core::{
     content::one_line,
-    model::{Article, Scope, StatePatch},
+    model::{Article, ArticleId, Scope, StatePatch},
     store::PAGE_SIZE,
 };
 use std::rc::Rc;
@@ -172,7 +172,7 @@ impl Ui {
         }
     }
 
-    pub(super) fn select(self: &Rc<Self>, id: i64) {
+    pub(super) fn select(self: &Rc<Self>, id: ArticleId) {
         let generation = self.selection_generation.get() + 1;
         self.selection_generation.set(generation);
         let mark = self.changes.borrow().mark();
@@ -197,7 +197,7 @@ impl Ui {
     }
 
     /// Show an article's read and/or star state in the list and, if it is open, the reader.
-    fn show_state(&self, id: i64, patch: StatePatch) {
+    fn show_state(&self, id: ArticleId, patch: StatePatch) {
         if let Some(a) = self.selected.borrow_mut().as_mut().filter(|a| a.id == id) {
             patch.apply(a);
             self.update_buttons(a);
@@ -214,7 +214,7 @@ impl Ui {
 
     /// Show a read and/or star change at once, then write it. Results are applied only while
     /// no newer change of the same field is pending; an article deleted meanwhile is ignored.
-    pub(super) fn set_state(self: &Rc<Self>, id: i64, patch: StatePatch) {
+    pub(super) fn set_state(self: &Rc<Self>, id: ArticleId, patch: StatePatch) {
         self.state_writes.set(self.state_writes.get() + 1);
         let started: Vec<(Field, u64)> = {
             let mut changes = self.changes.borrow_mut();
@@ -246,7 +246,7 @@ impl Ui {
 
     /// Show the article's saved state again after a failed write, keeping any change made
     /// after this read was sent.
-    fn reconcile(self: &Rc<Self>, id: i64) {
+    fn reconcile(self: &Rc<Self>, id: ArticleId) {
         let mark = self.changes.borrow().mark();
         let u = self.clone();
         glib::spawn_future_local(async move {
@@ -287,7 +287,7 @@ impl Ui {
 
     /// Record that bulk change `sequence` set `articles` to `read`, except those changed
     /// since it was sent, and show it on the open article if it is one of them.
-    fn bulk_read_done(&self, articles: &[i64], read: bool, sequence: u64) {
+    fn bulk_read_done(&self, articles: &[ArticleId], read: bool, sequence: u64) {
         let open = self.selected.borrow().as_ref().map(|a| a.id);
         let mut show = false;
         let mut changes = self.changes.borrow_mut();

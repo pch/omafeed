@@ -6,10 +6,10 @@
 pub enum Error {
     /// No article has this ID, perhaps because its feed was removed.
     #[error("No article with id {0}")]
-    ArticleNotFound(i64),
+    ArticleNotFound(crate::model::ArticleId),
     /// No feed has this ID.
     #[error("No feed with id {0}")]
-    FeedNotFound(i64),
+    FeedNotFound(crate::model::FeedId),
     /// Another subscription already has this feed URL. The message is SQLite's own.
     #[error(transparent)]
     DuplicateFeed(rusqlite::Error),

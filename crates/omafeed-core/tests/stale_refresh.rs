@@ -2,7 +2,7 @@
 use omafeed_core::{
     Db, Store,
     ingest::{self, Refresher},
-    model::{Download, Feed, Query, Scope, Update},
+    model::{Download, Feed, FeedId, Query, Scope, Update},
 };
 
 fn rss(items: &str) -> String {
@@ -29,7 +29,7 @@ fn stale_download() -> Download {
 fn now() -> i64 {
     chrono::Utc::now().timestamp()
 }
-fn feed(s: &Store, id: i64) -> Feed {
+fn feed(s: &Store, id: FeedId) -> Feed {
     s.library()
         .unwrap()
         .feeds
@@ -49,7 +49,7 @@ fn article_count(s: &Store) -> usize {
 
 /// Nothing from the old download or failure reached `id`.
 #[track_caller]
-fn untouched(s: &Store, id: i64) {
+fn untouched(s: &Store, id: FeedId) {
     let f = feed(s, id);
     assert_eq!(article_count(s), 0);
     assert_eq!((f.etag, f.modified), (None, None));
@@ -58,7 +58,7 @@ fn untouched(s: &Store, id: i64) {
 }
 
 /// Deliver a late success and a late failure for the snapshot `(id, revision)`.
-fn deliver_late_results(s: &mut Store, id: i64, revision: i64) {
+fn deliver_late_results(s: &Store, id: FeedId, revision: i64) {
     s.commit_download(id, revision, stale_download(), now(), now() + 1800)
         .unwrap();
     s.record_failure(id, revision, "Old URL failed", 1_700_000_000, 1_700_000_600)
@@ -67,7 +67,7 @@ fn deliver_late_results(s: &mut Store, id: i64, revision: i64) {
 
 #[test]
 fn results_for_a_changed_url_are_dropped() {
-    let mut s = Store::open(":memory:").unwrap();
+    let s = Store::open(":memory:").unwrap();
     let id = s
         .add_feed("Feed", "https://old.example.org/feed", None)
         .unwrap();
@@ -75,7 +75,7 @@ fn results_for_a_changed_url_are_dropped() {
     s.update_feed(id, "Feed", "https://new.example.org/feed", None)
         .unwrap();
     assert_ne!(feed(&s, id).revision, before);
-    deliver_late_results(&mut s, id, before);
+    deliver_late_results(&s, id, before);
     untouched(&s, id);
     assert_eq!(feed(&s, id).url, "https://new.example.org/feed");
 }
@@ -102,20 +102,20 @@ fn renaming_or_moving_a_feed_keeps_its_refresh() {
 
 #[test]
 fn results_for_a_feed_deleted_and_subscribed_again_are_dropped() {
-    let mut s = Store::open(":memory:").unwrap();
+    let s = Store::open(":memory:").unwrap();
     let url = "https://old.example.org/feed";
     let id = s.add_feed("Feed", url, None).unwrap();
     let before = feed(&s, id).revision;
     s.delete_feed(id).unwrap();
     let again = s.add_feed("Feed", url, None).unwrap();
     assert_eq!(again, id, "SQLite reuses the highest deleted ID");
-    deliver_late_results(&mut s, id, before);
+    deliver_late_results(&s, id, before);
     untouched(&s, again);
 }
 
 #[test]
 fn results_for_a_feed_deleted_and_imported_again_are_dropped() {
-    let mut s = Store::open(":memory:").unwrap();
+    let s = Store::open(":memory:").unwrap();
     let url = "https://old.example.org/feed";
     let id = s.add_feed("Feed", url, None).unwrap();
     let before = feed(&s, id).revision;
@@ -129,13 +129,13 @@ fn results_for_a_feed_deleted_and_imported_again_are_dropped() {
     let again = s.library().unwrap().feeds[0].id;
     assert_eq!(again, id, "SQLite reuses the highest deleted ID");
     assert_ne!(feed(&s, again).revision, before);
-    deliver_late_results(&mut s, id, before);
+    deliver_late_results(&s, id, before);
     untouched(&s, again);
 }
 
 #[test]
 fn results_for_a_deleted_feed_do_not_reach_a_new_feed_with_its_id() {
-    let mut s = Store::open(":memory:").unwrap();
+    let s = Store::open(":memory:").unwrap();
     s.add_feed("Keep", "https://keep.example.org/feed", None)
         .unwrap();
     let id = s
@@ -147,7 +147,7 @@ fn results_for_a_deleted_feed_do_not_reach_a_new_feed_with_its_id() {
         .add_feed("Different", "https://other.example.org/feed", None)
         .unwrap();
     assert_eq!(new, id, "SQLite reuses the highest deleted ID");
-    deliver_late_results(&mut s, id, before);
+    deliver_late_results(&s, id, before);
     untouched(&s, new);
 }
 

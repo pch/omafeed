@@ -1,7 +1,7 @@
 use omafeed_core::{
     Db, Store, content,
     ingest::{self, Refresher},
-    model::{Download, Query, Scope, StatePatch, Update},
+    model::{ArticleId, Download, FeedId, Query, Scope, StatePatch, Update},
 };
 fn rss(body: &str) -> String {
     format!(
@@ -19,7 +19,7 @@ fn download(body: &str) -> Download {
 /// Turns a new library back into the version 2 schema, for tests that write older text.
 const UNDO_LATER_MIGRATIONS: &str = "ALTER TABLE feeds DROP COLUMN revision; DROP TABLE meta;";
 /// The feed's current revision, as a refresh would see it.
-fn revision(s: &Store, feed: i64) -> i64 {
+fn revision(s: &Store, feed: FeedId) -> i64 {
     s.library()
         .unwrap()
         .feeds
@@ -563,7 +563,7 @@ fn feed_article_counts_report_articles_and_stars_per_feed() {
     s.set_read(first.id, true).unwrap();
     assert_eq!(s.feed_article_counts(a).unwrap(), (2, 1));
     assert_eq!(s.feed_article_counts(b).unwrap(), (1, 0));
-    assert_eq!(s.feed_article_counts(999).unwrap(), (0, 0));
+    assert_eq!(s.feed_article_counts(FeedId(999)).unwrap(), (0, 0));
     s.delete_feed(a).unwrap();
     assert_eq!(s.feed_article_counts(a).unwrap(), (0, 0));
     assert_eq!(s.feed_article_counts(b).unwrap(), (1, 0));
@@ -601,7 +601,7 @@ fn batch_state_changes_roll_back_on_invalid_ids_and_write_failures() {
     ids.sort();
     assert!(
         s.set_article_states(
-            &[ids[0], 9999],
+            &[ids[0], ArticleId(9999)],
             StatePatch {
                 read: Some(true),
                 starred: Some(true)
@@ -664,15 +664,15 @@ fn article(guid: &str, title: &str, body: &str) -> String {
 
 /// A store with one feed holding the given (title, body) articles.
 fn library(articles: &[(&str, &str)]) -> Store {
-    let mut s = Store::open(":memory:").unwrap();
+    let s = Store::open(":memory:").unwrap();
     let feed = s
         .add_feed("Test", "https://example.org/feed", None)
         .unwrap();
-    add(&mut s, feed, articles);
+    add(&s, feed, articles);
     s
 }
 
-fn add(s: &mut Store, feed: i64, articles: &[(&str, &str)]) {
+fn add(s: &Store, feed: FeedId, articles: &[(&str, &str)]) {
     let items: String = articles
         .iter()
         .map(|(title, body)| article(&format!("{title}-{body}"), title, body))
@@ -801,23 +801,23 @@ fn exact_search_matches_words_as_typed() {
 fn search_sees_words_added_by_this_connection_and_by_other_programs() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("library.db");
-    let mut mine = Store::open(&path).unwrap();
+    let mine = Store::open(&path).unwrap();
     let feed = mine
         .add_feed("Test", "https://example.org/feed", None)
         .unwrap();
-    add(&mut mine, feed, &[("Base", "ordinary words")]);
+    add(&mine, feed, &[("Base", "ordinary words")]);
     assert!(
         found(&mine, "zebrafisch").is_empty(),
         "primes the cached word list"
     );
 
     // A word this connection just stored is found by a typo of it.
-    add(&mut mine, feed, &[("Fish", "a zebrafish swims")]);
+    add(&mine, feed, &[("Fish", "a zebrafish swims")]);
     assert_eq!(found(&mine, "zebrafisch"), ["Fish"]);
 
     // So is a word another program (the command line) stored in the meantime.
-    let mut other = Store::open(&path).unwrap();
-    add(&mut other, feed, &[("Marsupial", "the quokka smiles")]);
+    let other = Store::open(&path).unwrap();
+    add(&other, feed, &[("Marsupial", "the quokka smiles")]);
     assert_eq!(found(&mine, "quokkaa"), ["Marsupial"]);
 
     // Deleting articles removes their words from the corrections too.
@@ -912,15 +912,11 @@ fn search_copes_with_odd_words_and_huge_neighbourhoods() {
 fn the_word_list_is_read_again_only_when_articles_change() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("library.db");
-    let mut s = Store::open(&path).unwrap();
+    let s = Store::open(&path).unwrap();
     let feed = s
         .add_feed("Test", "https://example.org/feed", None)
         .unwrap();
-    add(
-        &mut s,
-        feed,
-        &[("One", "first article"), ("Two", "second one")],
-    );
+    add(&s, feed, &[("One", "first article"), ("Two", "second one")]);
     assert_eq!(s.vocabulary_loads(), 0, "not read until a search needs it");
     let id = s.articles(&all()).unwrap()[0].id;
 
@@ -947,7 +943,7 @@ fn the_word_list_is_read_again_only_when_articles_change() {
     assert_eq!(s.vocabulary_loads(), 1, "no reason to read the words again");
 
     // A download with new articles does, and so does removing a feed.
-    add(&mut s, feed, &[("Three", "third article")]);
+    add(&s, feed, &[("Three", "third article")]);
     assert_eq!(found(&s, "thrid"), ["Three"]);
     assert_eq!(s.vocabulary_loads(), 2);
     let notmodified = Download::NotModified;
@@ -964,11 +960,11 @@ fn the_word_list_is_read_again_only_when_articles_change() {
     assert_eq!(s.vocabulary_loads(), 3);
 
     // Another program's write is noticed too, once.
-    let mut other = Store::open(&path).unwrap();
+    let other = Store::open(&path).unwrap();
     let elsewhere = other
         .add_feed("Elsewhere", "https://example.org/other", None)
         .unwrap();
-    add(&mut other, elsewhere, &[("Four", "fourth article")]);
+    add(&other, elsewhere, &[("Four", "fourth article")]);
     assert_eq!(found(&s, "fourht"), ["Four"]);
     found(&s, "fourht");
     assert_eq!(s.vocabulary_loads(), 4);
@@ -1035,16 +1031,16 @@ fn decomposed_accents_get_typo_correction_and_prefixes() {
 fn a_snapshot_does_not_see_writes_made_while_it_reads() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("library.db");
-    let mut mine = Store::open(&path).unwrap();
+    let mine = Store::open(&path).unwrap();
     let feed = mine
         .add_feed("Test", "https://example.org/feed", None)
         .unwrap();
-    add(&mut mine, feed, &[("One", "first")]);
-    let mut other = Store::open(&path).unwrap();
+    add(&mine, feed, &[("One", "first")]);
+    let other = Store::open(&path).unwrap();
     let (before, during) = mine
         .snapshot(|s| {
             let before = s.articles(&all())?.len();
-            add(&mut other, feed, &[("Two", "second")]);
+            add(&other, feed, &[("Two", "second")]);
             Ok((before, s.articles(&all())?.len()))
         })
         .unwrap();
@@ -1194,8 +1190,9 @@ fn callers_can_tell_the_errors_they_act_on_apart() {
     // Other constraints are not mistaken for a duplicate feed.
     s.add_folder("Same", None).unwrap();
     assert!(kind(s.add_folder("Same", None).unwrap_err()).starts_with("other: UNIQUE"));
-    let missing = s.set_article_states(&[404], StatePatch::read(true));
+    let missing = s.set_article_states(&[ArticleId(404)], StatePatch::read(true));
     assert_eq!(kind(missing.unwrap_err()), "article 404");
     // A single article that is gone is left alone, without an error.
-    s.set_state(404, StatePatch::starred(true)).unwrap();
+    s.set_state(ArticleId(404), StatePatch::starred(true))
+        .unwrap();
 }

@@ -1,7 +1,7 @@
 //! Library sidebar: smart views, folders, and feeds with unread counts.
 use super::{Ui, widgets::icon, widgets::label};
 use gtk::{gdk, gio, glib, prelude::*};
-use omafeed_core::model::{Feed, Library, Scope, TreeItem};
+use omafeed_core::model::{Feed, FolderId, Library, Scope, TreeItem};
 use std::rc::Rc;
 
 /// One sidebar entry before it becomes a widget.
@@ -70,7 +70,7 @@ fn items(lib: &Library) -> Vec<Item> {
 }
 
 /// Drop items inside collapsed folders.
-fn visible(items: Vec<Item>, collapsed: &std::collections::HashSet<i64>) -> Vec<Item> {
+fn visible(items: Vec<Item>, collapsed: &std::collections::HashSet<FolderId>) -> Vec<Item> {
     let mut hidden_below = None;
     items
         .into_iter()
@@ -155,7 +155,7 @@ impl Ui {
         image
     }
 
-    fn folder_expander(self: &Rc<Self>, id: i64) -> gtk::Button {
+    fn folder_expander(self: &Rc<Self>, id: FolderId) -> gtk::Button {
         let collapsed = self.collapsed.borrow().contains(&id);
         let (name, tip) = if collapsed {
             ("pan-end-symbolic", "Expand folder")

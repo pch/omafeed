@@ -5,7 +5,7 @@ use adw::prelude::*;
 use gtk::glib;
 use omafeed_core::{
     ingest::discovery::Candidate,
-    model::{Library, Scope, TreeItem},
+    model::{FeedId, FolderId, Library, Scope, TreeItem},
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -18,7 +18,7 @@ enum Action {
 }
 
 /// Folder choices as (id, "Parent / Child" path), starting with the top level.
-fn folder_paths(lib: &Library) -> Vec<(Option<i64>, String)> {
+fn folder_paths(lib: &Library) -> Vec<(Option<FolderId>, String)> {
     let mut out = vec![(None, "Top level".into())];
     let mut names: Vec<&str> = Vec::new();
     for item in lib.tree() {
@@ -38,11 +38,11 @@ fn folder_paths(lib: &Library) -> Vec<(Option<i64>, String)> {
 
 struct FolderPicker {
     dropdown: gtk::DropDown,
-    ids: Vec<Option<i64>>,
+    ids: Vec<Option<FolderId>>,
 }
 
 impl FolderPicker {
-    fn new(form: &Form, lib: &Library, selected: Option<i64>) -> Self {
+    fn new(form: &Form, lib: &Library, selected: Option<FolderId>) -> Self {
         let (ids, names): (Vec<_>, Vec<_>) = folder_paths(lib).into_iter().unzip();
         let names: Vec<&str> = names.iter().map(String::as_str).collect();
         let dropdown = gtk::DropDown::from_strings(&names);
@@ -52,7 +52,7 @@ impl FolderPicker {
         Self { dropdown, ids }
     }
 
-    fn selected(&self) -> Option<i64> {
+    fn selected(&self) -> Option<FolderId> {
         self.ids
             .get(self.dropdown.selected() as usize)
             .copied()
@@ -270,7 +270,12 @@ async fn remove(u: &Rc<Ui>, window: &gtk::Window, scope: Scope) {
 }
 
 /// Create a folder (`id` is `None`) or rename/move an existing one.
-async fn edit_folder(u: &Rc<Ui>, window: &gtk::Window, id: Option<i64>, parent: Option<i64>) {
+async fn edit_folder(
+    u: &Rc<Ui>,
+    window: &gtk::Window,
+    id: Option<FolderId>,
+    parent: Option<FolderId>,
+) {
     let form = Form::new(window, "Folder");
     let (name, parent) = {
         let lib = u.library.borrow();
@@ -301,7 +306,7 @@ async fn edit_folder(u: &Rc<Ui>, window: &gtk::Window, id: Option<i64>, parent: 
 }
 
 /// Subscribe (`id` is `None`) or edit a feed. New or changed URLs go through discovery.
-async fn edit_feed(u: &Rc<Ui>, window: &gtk::Window, id: Option<i64>, parent: Option<i64>) {
+async fn edit_feed(u: &Rc<Ui>, window: &gtk::Window, id: Option<FeedId>, parent: Option<FolderId>) {
     let form = Form::new(window, "Subscription");
     let (title, original_url, parent) = {
         let lib = u.library.borrow();

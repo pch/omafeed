@@ -1,6 +1,6 @@
 //! `settings.toml`: reading it leniently and writing it atomically.
 use super::Paths;
-use crate::model::Scope;
+use crate::model::{ArticleId, Scope};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::{ops::RangeInclusive, path::PathBuf};
@@ -40,7 +40,7 @@ pub struct Settings {
     pub list_width: i32,
     #[serde(deserialize_with = "scope")]
     pub scope: Scope,
-    pub selected_article: Option<i64>,
+    pub selected_article: Option<ArticleId>,
     pub unread_only: bool,
 }
 
@@ -143,6 +143,7 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{FeedId, FolderId};
 
     #[test]
     fn legacy_and_invalid_values_fall_back_without_losing_other_settings() {
@@ -150,21 +151,21 @@ mod tests {
             toml::from_str("font_size = 20\ntheme = \"sepia\"\nscope = '{\"Feed\":18}'\n").unwrap();
         assert_eq!(s.font_size, 20);
         assert_eq!(s.theme, Theme::Omarchy);
-        assert_eq!(s.scope, Scope::Feed(18));
+        assert_eq!(s.scope, Scope::Feed(FeedId(18)));
     }
 
     #[test]
     fn settings_round_trip() {
         let s = Settings {
-            scope: Scope::Folder(3),
+            scope: Scope::Folder(FolderId(3)),
             theme: Theme::Dark,
-            selected_article: Some(9),
+            selected_article: Some(ArticleId(9)),
             ..Default::default()
         };
         let back: Settings = toml::from_str(&toml::to_string_pretty(&s).unwrap()).unwrap();
-        assert_eq!(back.scope, Scope::Folder(3));
+        assert_eq!(back.scope, Scope::Folder(FolderId(3)));
         assert_eq!(back.theme, Theme::Dark);
-        assert_eq!(back.selected_article, Some(9));
+        assert_eq!(back.selected_article, Some(ArticleId(9)));
     }
 
     #[test]

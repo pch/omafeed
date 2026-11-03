@@ -5,7 +5,9 @@ use omafeed_core::{
     Db, Error, Paths, Settings,
     content::{one_line, readable},
     ingest::{Progress, Refresher},
-    model::{Article, Library, ParseScopeError, Query, Scope, StatePatch},
+    model::{
+        Article, ArticleId, FeedId, FolderId, Library, ParseScopeError, Query, Scope, StatePatch,
+    },
     store::PAGE_SIZE,
 };
 use serde_json::{Value, json};
@@ -334,7 +336,7 @@ fn day(timestamp: i64) -> String {
 }
 
 /// A folder's name with its parents, such as `Work/Blogs`; empty for no folder.
-fn folder_path(lib: &Library, id: Option<i64>) -> String {
+fn folder_path(lib: &Library, id: Option<FolderId>) -> String {
     lib.folder_path(id)
         .iter()
         .map(|f| one_line(&f.name))
@@ -511,6 +513,7 @@ async fn articles(db: &Db, scope: Scope, search: String, list: List) -> Result<(
 }
 
 async fn article(db: &Db, id: i64, html: bool, json: bool) -> Result<()> {
+    let id = ArticleId(id);
     let a = db
         .call(move |s| s.article_if_exists(id))
         .await?
@@ -548,6 +551,7 @@ async fn set_state(
     message: &str,
     patch: StatePatch,
 ) -> Result<()> {
+    let ids: Vec<ArticleId> = ids.into_iter().map(ArticleId).collect();
     let changed = db.call(move |s| s.set_article_states(&ids, patch)).await?;
     if json {
         let articles: Vec<_> = changed
@@ -581,7 +585,7 @@ async fn subscribe(
     let feed_url = pick.url.clone();
     let (add_name, add_url) = (name.clone(), feed_url.clone());
     let id = db
-        .call(move |s| s.add_feed(&add_name, &add_url, folder))
+        .call(move |s| s.add_feed(&add_name, &add_url, folder.map(FolderId)))
         .await?;
     if !json {
         println!(
@@ -601,6 +605,7 @@ async fn subscribe(
 }
 
 async fn unsubscribe(db: &Db, id: i64, yes: bool, json: bool) -> Result<()> {
+    let id = FeedId(id);
     // One transaction, so the counts reported are exactly what is deleted.
     let (title, url, total, starred) = db
         .call(move |s| {
@@ -692,8 +697,8 @@ mod tests {
         assert_eq!(parse_scope("today"), Ok(Scope::Today));
         assert_eq!(parse_scope("starred"), Ok(Scope::Starred));
         assert_eq!(parse_scope("all"), Ok(Scope::All));
-        assert_eq!(parse_scope("feed:12"), Ok(Scope::Feed(12)));
-        assert_eq!(parse_scope("folder:3"), Ok(Scope::Folder(3)));
+        assert_eq!(parse_scope("feed:12"), Ok(Scope::Feed(FeedId(12))));
+        assert_eq!(parse_scope("folder:3"), Ok(Scope::Folder(FolderId(3))));
     }
 
     #[test]
@@ -720,8 +725,8 @@ mod tests {
 
     fn folder(id: i64, parent: Option<i64>, name: &str) -> Folder {
         Folder {
-            id,
-            parent,
+            id: FolderId(id),
+            parent: parent.map(FolderId),
             name: name.into(),
         }
     }
@@ -739,12 +744,12 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(folder_path(&folders, None), "");
-        assert_eq!(folder_path(&folders, Some(1)), "Work");
-        assert_eq!(folder_path(&folders, Some(2)), "Work/Blogs");
-        assert_eq!(folder_path(&folders, Some(3)), "Orphan");
-        assert_eq!(folder_path(&folders, Some(404)), "");
+        assert_eq!(folder_path(&folders, Some(FolderId(1))), "Work");
+        assert_eq!(folder_path(&folders, Some(FolderId(2))), "Work/Blogs");
+        assert_eq!(folder_path(&folders, Some(FolderId(3))), "Orphan");
+        assert_eq!(folder_path(&folders, Some(FolderId(404))), "");
         // A cycle cannot happen in a real library, but must not hang the command.
-        assert!(!folder_path(&folders, Some(4)).is_empty());
+        assert!(!folder_path(&folders, Some(FolderId(4))).is_empty());
     }
 
     #[test]

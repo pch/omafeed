@@ -14,7 +14,7 @@ Run without a command, `omafeed` opens the reader window; with a command (`omafe
 
 | Module | Contents |
 | --- | --- |
-| `model` | The data types shared by everything else: `Folder`, `Feed`, `Article`, `Library` (with lookups and a folder tree walk), `Scope` (written and read as `unread`, `feed:12`, …), `Query`, `StatePatch` (a read and/or star change), `ImportReport`, and a feed download on its way into storage (`Download`, `Update`, `Entry`). |
+| `model` | The data types shared by everything else: the row IDs `FolderId`, `FeedId` and `ArticleId` (each an `i64` that serializes, prints and parses as the number), `Folder`, `Feed`, `Article`, `Library` (with lookups and a folder tree walk), `Scope` (written and read as `unread`, `feed:12`, …), `Query`, `StatePatch` (a read and/or star change), `ImportReport`, and a feed download on its way into storage (`Download`, `Update`, `Entry`). |
 | `error` | `Error`, the failures callers handle themselves: an article or feed that does not exist, a duplicate feed URL, a database from a newer version, and invalid input. Everything else is an `anyhow::Error` with context. |
 | `store` | `Store` (one SQLite connection) and `Db` (a handle to the database worker thread). `schema` holds the migrations; `folders`, `feeds` (library listing, subscriptions, refresh results, OPML import/export), `articles` (listing and read/star state) and `search` (query predicates) each add their methods to `Store`; `worker` is the thread. |
 | `fuzzy` | Forgiving search: turns typed words into an FTS5 query using the index's own vocabulary (typos, plurals, prefix of the last word). Private to the crate. |

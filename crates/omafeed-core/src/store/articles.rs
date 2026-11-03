@@ -1,6 +1,6 @@
 //! Articles: listing, reading, and read/star state.
 use super::{PAGE_SIZE, Store};
-use crate::model::{Article, Query, StatePatch};
+use crate::model::{Article, ArticleId, Query, StatePatch};
 use anyhow::Result;
 use rusqlite::{OptionalExtension, params};
 
@@ -49,7 +49,7 @@ impl Store {
         })
     }
 
-    pub fn article(&self, id: i64) -> Result<Article> {
+    pub fn article(&self, id: ArticleId) -> Result<Article> {
         let sql = format!(
             "SELECT {} {ARTICLE_JOINS} WHERE a.id = ?1",
             Self::article_columns(true)
@@ -58,7 +58,7 @@ impl Store {
     }
 
     /// Look up an article without treating deletion as a database error.
-    pub fn article_if_exists(&self, id: i64) -> Result<Option<Article>> {
+    pub fn article_if_exists(&self, id: ArticleId) -> Result<Option<Article>> {
         let sql = format!(
             "SELECT {} {ARTICLE_JOINS} WHERE a.id = ?1",
             Self::article_columns(true)
@@ -71,11 +71,19 @@ impl Store {
 
     /// Change every article in `ids` as `patch` says, or none of them if one does not exist
     /// or a write fails. Returns each article changed with its title, in ID order.
-    pub fn set_article_states(&self, ids: &[i64], patch: StatePatch) -> Result<Vec<(i64, String)>> {
+    pub fn set_article_states(
+        &self,
+        ids: &[ArticleId],
+        patch: StatePatch,
+    ) -> Result<Vec<(ArticleId, String)>> {
         self.immediate(|s| s.set_article_states_now(ids, patch))
     }
 
-    fn set_article_states_now(&self, ids: &[i64], patch: StatePatch) -> Result<Vec<(i64, String)>> {
+    fn set_article_states_now(
+        &self,
+        ids: &[ArticleId],
+        patch: StatePatch,
+    ) -> Result<Vec<(ArticleId, String)>> {
         let tx = &self.conn;
         let mut ids = ids.to_vec();
         ids.sort_unstable();
@@ -102,7 +110,7 @@ impl Store {
     }
 
     /// Change one article as `patch` says. An article that no longer exists is left alone.
-    pub fn set_state(&self, id: i64, patch: StatePatch) -> Result<()> {
+    pub fn set_state(&self, id: ArticleId, patch: StatePatch) -> Result<()> {
         self.conn.execute(
             "UPDATE article_state SET read = COALESCE(?1, read), starred = COALESCE(?2, starred) WHERE article_id = ?3",
             params![patch.read, patch.starred, id],
@@ -110,7 +118,7 @@ impl Store {
         Ok(())
     }
 
-    pub fn set_read(&self, id: i64, read: bool) -> Result<()> {
+    pub fn set_read(&self, id: ArticleId, read: bool) -> Result<()> {
         self.conn.execute(
             "UPDATE article_state SET read = ?1 WHERE article_id = ?2",
             params![read, id],
@@ -118,7 +126,7 @@ impl Store {
         Ok(())
     }
 
-    pub fn set_starred(&self, id: i64, value: bool) -> Result<()> {
+    pub fn set_starred(&self, id: ArticleId, value: bool) -> Result<()> {
         self.conn.execute(
             "UPDATE article_state SET starred = ?1 WHERE article_id = ?2",
             params![value, id],
@@ -127,7 +135,7 @@ impl Store {
     }
 
     /// Mark every unread article matching `q` read, returning the changed IDs for undo.
-    pub fn mark_read(&self, q: &Query) -> Result<Vec<i64>> {
+    pub fn mark_read(&self, q: &Query) -> Result<Vec<ArticleId>> {
         let (predicate, values) = self.predicate(q)?;
         let sql = format!(
             "UPDATE article_state SET read = 1
@@ -138,10 +146,10 @@ impl Store {
             .conn
             .prepare(&sql)?
             .query_map(rusqlite::params_from_iter(values), |r| r.get(0))?
-            .collect::<Result<Vec<i64>, _>>()?)
+            .collect::<Result<Vec<ArticleId>, _>>()?)
     }
 
-    pub fn undo_read(&self, ids: &[i64]) -> Result<()> {
+    pub fn undo_read(&self, ids: &[ArticleId]) -> Result<()> {
         self.conn.execute(
             "UPDATE article_state SET read = 0 WHERE article_id IN (SELECT value FROM json_each(?1))",
             [serde_json::to_string(ids)?],

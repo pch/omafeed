@@ -241,7 +241,13 @@ fn report(store: &mut Store, title: &str, queries: &[&str]) {
             };
             let revision = store.library().unwrap().feeds[0].revision;
             store
-                .commit_download(1, revision, Download::Updated(update), now(), now() + 1800)
+                .commit_download(
+                    omafeed_core::model::FeedId(1),
+                    revision,
+                    Download::Updated(update),
+                    now(),
+                    now() + 1800,
+                )
                 .unwrap();
             timed(|| search(store, query, false))
         });

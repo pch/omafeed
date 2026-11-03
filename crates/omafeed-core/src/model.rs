@@ -2,17 +2,57 @@
 //! downloads on their way into storage.
 use serde::{Deserialize, Serialize};
 
+/// Declare a row ID type: an `i64` that serializes, prints and parses as the number itself.
+macro_rules! id {
+    ($(#[$doc:meta])* $name:ident) => {
+        $(#[$doc])*
+        #[derive(
+            Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+        )]
+        #[serde(transparent)]
+        pub struct $name(pub i64);
+
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                self.0.fmt(f)
+            }
+        }
+
+        impl std::str::FromStr for $name {
+            type Err = std::num::ParseIntError;
+
+            fn from_str(text: &str) -> Result<Self, Self::Err> {
+                text.parse().map(Self)
+            }
+        }
+    };
+}
+
+id!(
+    /// A folder's row ID.
+    FolderId
+);
+id!(
+    /// A feed's row ID. SQLite may give the ID of a deleted feed to a new one; see
+    /// [`Feed::revision`].
+    FeedId
+);
+id!(
+    /// An article's row ID.
+    ArticleId
+);
+
 #[derive(Clone, Debug)]
 pub struct Folder {
-    pub id: i64,
-    pub parent: Option<i64>,
+    pub id: FolderId,
+    pub parent: Option<FolderId>,
     pub name: String,
 }
 
 #[derive(Clone, Debug)]
 pub struct Feed {
-    pub id: i64,
-    pub folder: Option<i64>,
+    pub id: FeedId,
+    pub folder: Option<FolderId>,
     pub title: String,
     pub url: String,
     pub site_url: String,
@@ -41,8 +81,8 @@ impl Feed {
 
 #[derive(Clone, Debug, Default)]
 pub struct Article {
-    pub id: i64,
-    pub feed_id: i64,
+    pub id: ArticleId,
+    pub feed_id: FeedId,
     pub feed_title: String,
     pub title: String,
     pub url: String,
@@ -61,8 +101,8 @@ pub enum Scope {
     Today,
     Starred,
     All,
-    Folder(i64),
-    Feed(i64),
+    Folder(FolderId),
+    Feed(FeedId),
 }
 
 impl Scope {
@@ -116,8 +156,8 @@ impl std::str::FromStr for Scope {
             "starred" => Ok(Scope::Starred),
             "all" => Ok(Scope::All),
             _ => match text.split_once(':') {
-                Some(("feed", n)) => Ok(Scope::Feed(id(n)?)),
-                Some(("folder", n)) => Ok(Scope::Folder(id(n)?)),
+                Some(("feed", n)) => Ok(Scope::Feed(FeedId(id(n)?))),
+                Some(("folder", n)) => Ok(Scope::Folder(FolderId(id(n)?))),
                 _ => Err(ParseScopeError(format!(
                     "unknown scope '{text}'; use unread, today, starred, all, feed:ID or folder:ID"
                 ))),
@@ -193,16 +233,16 @@ pub enum TreeItem<'a> {
 }
 
 impl Library {
-    pub fn feed(&self, id: i64) -> Option<&Feed> {
+    pub fn feed(&self, id: FeedId) -> Option<&Feed> {
         self.feeds.iter().find(|f| f.id == id)
     }
 
-    pub fn folder(&self, id: i64) -> Option<&Folder> {
+    pub fn folder(&self, id: FolderId) -> Option<&Folder> {
         self.folders.iter().find(|f| f.id == id)
     }
 
     /// Feeds directly in `folder`, or at the top level for `None`, in library order.
-    pub fn feeds_in(&self, folder: Option<i64>) -> impl Iterator<Item = &Feed> {
+    pub fn feeds_in(&self, folder: Option<FolderId>) -> impl Iterator<Item = &Feed> {
         self.feeds.iter().filter(move |f| f.folder == folder)
     }
 
@@ -211,7 +251,7 @@ impl Library {
     pub fn tree(&self) -> Vec<TreeItem<'_>> {
         fn walk<'a>(
             lib: &'a Library,
-            parent: Option<i64>,
+            parent: Option<FolderId>,
             depth: usize,
             out: &mut Vec<TreeItem<'a>>,
         ) {
@@ -231,7 +271,7 @@ impl Library {
 
     /// The folder `id` and the folders above it, outermost first; empty for `None` or an
     /// unknown folder. Stops rather than loops if the parents form a cycle.
-    pub fn folder_path(&self, id: Option<i64>) -> Vec<&Folder> {
+    pub fn folder_path(&self, id: Option<FolderId>) -> Vec<&Folder> {
         let mut path = Vec::new();
         let mut next = id;
         while let Some(id) = next {
@@ -281,16 +321,16 @@ mod tests {
 
     fn folder(id: i64, parent: Option<i64>, name: &str) -> Folder {
         Folder {
-            id,
-            parent,
+            id: FolderId(id),
+            parent: parent.map(FolderId),
             name: name.into(),
         }
     }
 
     fn feed(id: i64, folder: Option<i64>, title: &str) -> Feed {
         Feed {
-            id,
-            folder,
+            id: FeedId(id),
+            folder: folder.map(FolderId),
             title: title.into(),
             url: String::new(),
             site_url: String::new(),
@@ -335,13 +375,13 @@ mod tests {
             ]
         );
         let path: Vec<&str> = lib
-            .folder_path(Some(2))
+            .folder_path(Some(FolderId(2)))
             .iter()
             .map(|f| f.name.as_str())
             .collect();
         assert_eq!(path, ["Work", "Sub"]);
-        assert_eq!(lib.feed(3).map(|f| f.title.as_str()), Some("Mid"));
-        assert!(lib.folder(9).is_none());
+        assert_eq!(lib.feed(FeedId(3)).map(|f| f.title.as_str()), Some("Mid"));
+        assert!(lib.folder(FolderId(9)).is_none());
     }
 
     #[test]
@@ -351,11 +391,11 @@ mod tests {
             Scope::Today,
             Scope::Starred,
             Scope::All,
-            Scope::Feed(12),
-            Scope::Folder(3),
+            Scope::Feed(FeedId(12)),
+            Scope::Folder(FolderId(3)),
         ] {
             assert_eq!(scope.to_string().parse::<Scope>(), Ok(scope));
         }
-        assert_eq!(Scope::Feed(-4).to_string(), "feed:-4");
+        assert_eq!(Scope::Feed(FeedId(-4)).to_string(), "feed:-4");
     }
 }

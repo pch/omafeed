@@ -2,7 +2,7 @@
 use super::Store;
 use crate::{
     Error,
-    model::{Download, Feed, Folder, ImportReport, Library},
+    model::{Download, Feed, FeedId, Folder, FolderId, ImportReport, Library},
     opml,
     util::validate_url,
 };
@@ -95,7 +95,7 @@ impl Store {
         })
     }
 
-    pub fn add_feed(&self, title: &str, url: &str, folder: Option<i64>) -> Result<i64> {
+    pub fn add_feed(&self, title: &str, url: &str, folder: Option<FolderId>) -> Result<FeedId> {
         let url = validate_url(url)?;
         let title = if title.trim().is_empty() {
             &url
@@ -109,11 +109,17 @@ impl Store {
                     params![title, url, folder, Self::next_revision(&s.conn)?],
                 )
                 .map_err(Error::duplicate_feed)?;
-            Ok(s.conn.last_insert_rowid())
+            Ok(FeedId(s.conn.last_insert_rowid()))
         })
     }
 
-    pub fn update_feed(&self, id: i64, title: &str, url: &str, folder: Option<i64>) -> Result<()> {
+    pub fn update_feed(
+        &self,
+        id: FeedId,
+        title: &str,
+        url: &str,
+        folder: Option<FolderId>,
+    ) -> Result<()> {
         let url = validate_url(url)?;
         let title = Self::name(title)?;
         self.immediate(|s| {
@@ -126,7 +132,7 @@ impl Store {
     }
 
     /// Stored articles for a feed, and how many of them are starred.
-    pub fn feed_article_counts(&self, id: i64) -> Result<(i64, i64)> {
+    pub fn feed_article_counts(&self, id: FeedId) -> Result<(i64, i64)> {
         Ok(self.conn.query_row(
             "SELECT count(*), COALESCE(SUM(s.starred), 0)
              FROM articles a JOIN article_state s ON s.article_id = a.id
@@ -136,7 +142,7 @@ impl Store {
         )?)
     }
 
-    pub fn delete_feed(&self, id: i64) -> Result<()> {
+    pub fn delete_feed(&self, id: FeedId) -> Result<()> {
         self.conn.execute("DELETE FROM feeds WHERE id = ?1", [id])?;
         self.articles_changed();
         Ok(())
@@ -147,7 +153,7 @@ impl Store {
     /// content. Nothing is stored if the feed was deleted or is no longer at that revision.
     pub fn commit_download(
         &self,
-        feed_id: i64,
+        feed_id: FeedId,
         revision: i64,
         download: Download,
         now: i64,
@@ -164,7 +170,7 @@ impl Store {
     /// Store a download as `commit_download` does; returns whether any article text changed.
     fn commit_download_now(
         &self,
-        feed_id: i64,
+        feed_id: FeedId,
         revision: i64,
         download: Download,
         now: i64,
@@ -173,7 +179,7 @@ impl Store {
         let tx = &self.conn;
         let current: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM feeds WHERE id = ?1 AND revision = ?2)",
-            [feed_id, revision],
+            params![feed_id, revision],
             |r| r.get(0),
         )?;
         if !current {
@@ -214,7 +220,7 @@ impl Store {
     /// longer at that revision.
     pub fn record_failure(
         &self,
-        feed_id: i64,
+        feed_id: FeedId,
         revision: i64,
         error: &str,
         now: i64,
@@ -240,7 +246,7 @@ impl Store {
     fn import_outlines(
         conn: &Connection,
         outlines: &[opml::Outline],
-        parent: Option<i64>,
+        parent: Option<FolderId>,
         report: &mut ImportReport,
         depth: usize,
     ) -> Result<()> {
@@ -255,7 +261,7 @@ impl Store {
                 } else {
                     o.name()
                 })?;
-                let existing: Option<i64> = conn
+                let existing: Option<FolderId> = conn
                     .query_row(
                         "SELECT id FROM folders WHERE parent IS ?1 AND name = ?2",
                         params![parent, name],
@@ -269,7 +275,7 @@ impl Store {
                             "INSERT INTO folders(name, parent) VALUES(?1, ?2)",
                             params![name, parent],
                         )?;
-                        conn.last_insert_rowid()
+                        FolderId(conn.last_insert_rowid())
                     }
                 };
                 Self::import_outlines(conn, &o.children, Some(id), report, depth + 1)?;
