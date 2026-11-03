@@ -183,13 +183,26 @@ impl Pass {
     async fn refresh_feed(&self, feed: Feed) -> (String, Option<String>) {
         let result = {
             let _permit = self.hosts[&host(&feed.url)].acquire().await;
-            download(&self.client, &feed).await
+            download_from(&self.client, &feed).await
         };
-        let site_url = match &result {
-            Ok(Download::Updated(u)) => u.site_url.clone().filter(|s| !s.is_empty()),
+        // The website's icon is fetched below. Where its address came from decides whether it
+        // may be local: the feed as finally served (after redirects) when it named it now, the
+        // address the user entered when there is none, and unknown for one stored earlier (a
+        // 304 says nothing about which response named it).
+        let fresh = match &result {
+            Ok((Download::Updated(u), from)) => u
+                .site_url
+                .clone()
+                .filter(|s| !s.is_empty())
+                .map(|site| (site, from.clone())),
             _ => None,
-        }
-        .unwrap_or_else(|| feed.website().to_owned());
+        };
+        let (site_url, source) = match fresh {
+            Some((site, from)) => (site, Some(from)),
+            None if feed.site_url.is_empty() => (feed.url.clone(), Some(feed.url.clone())),
+            None => (feed.site_url.clone(), None),
+        };
+        let result = result.map(|(download, _)| download);
         // The feed may be edited or deleted while it downloads; the store then drops the result.
         let (id, revision) = (feed.id, feed.revision);
         let error = match result {
@@ -221,7 +234,14 @@ impl Pass {
         if let Some(cache) = &self.cache {
             let target = crate::icons::path(cache, &site_url);
             if self.icons.lock().unwrap().insert(target) {
-                crate::icons::cache(&self.client, cache, &site_url, self.force).await;
+                crate::icons::cache(
+                    &self.client,
+                    cache,
+                    &site_url,
+                    source.as_deref(),
+                    self.force,
+                )
+                .await;
             }
         }
         (feed.title, error)
@@ -253,6 +273,11 @@ fn retry_after(value: &str) -> i64 {
 }
 
 pub async fn download(client: &Client, feed: &Feed) -> Result<Download> {
+    Ok(download_from(client, feed).await?.0)
+}
+
+/// Download `feed`, also returning the URL it was finally served from, after redirects.
+async fn download_from(client: &Client, feed: &Feed) -> Result<(Download, String)> {
     let mut request = client.get(&feed.url);
     if let Some(etag) = &feed.etag {
         request = request.header(header::IF_NONE_MATCH, etag);
@@ -262,8 +287,9 @@ pub async fn download(client: &Client, feed: &Feed) -> Result<Download> {
     }
     let response = request.send().await.context("Download feed")?;
     let status = response.status();
+    let served_from = response.url().to_string();
     if status == StatusCode::NOT_MODIFIED {
-        return Ok(Download::NotModified);
+        return Ok((Download::NotModified, served_from));
     }
     if matches!(
         status,
@@ -289,12 +315,15 @@ pub async fn download(client: &Client, feed: &Feed) -> Result<Download> {
     let data = http::read_limited(response, BODY_LIMIT).await?;
     let (entries, site_url) =
         tokio::task::spawn_blocking(move || parse_document(&data, &base)).await??;
-    Ok(Download::Updated(Update {
-        site_url,
-        entries,
-        etag,
-        modified,
-    }))
+    Ok((
+        Download::Updated(Update {
+            site_url,
+            entries,
+            etag,
+            modified,
+        }),
+        served_from,
+    ))
 }
 
 pub fn parse(data: &[u8], base: &str) -> Result<Vec<Entry>> {
@@ -402,4 +431,103 @@ fn parse_document(data: &[u8], base: &str) -> Result<(Vec<Entry>, Option<String>
         });
     let entries = feed.entries.into_iter().map(|e| entry(e, base)).collect();
     Ok((entries, site_url))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::http::tests::{client, ok, server};
+
+    /// Refresh one feed at `url` with a client that sees `remote` names as remote hosts.
+    async fn refresh(url: String, remote: &[(&str, std::net::SocketAddr)]) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(dir.path().join("test.db")).unwrap();
+        db.call(move |s| s.add_feed("Feed", &url, None))
+            .await
+            .unwrap();
+        let refresher = Refresher {
+            client: client(remote),
+            busy: Arc::default(),
+            cache: Some(dir.path().join("cache")),
+        };
+        let (tx, _rx) = async_channel::unbounded();
+        refresher.refresh(db, true, 30, tx).await.unwrap();
+    }
+
+    fn feed_naming(site: &str) -> String {
+        format!(
+            r#"<rss version="2.0"><channel><title>Feed</title><link>{site}</link></channel></rss>"#
+        )
+    }
+
+    #[tokio::test]
+    async fn a_remote_feed_reached_through_a_local_redirect_cannot_name_a_local_site() {
+        let (site, hits) = server(|_| ok("text/html", "<html></html>")).await;
+        let body = feed_naming(&format!("http://{site}/"));
+        let (remote, _) = server(move |_| ok("application/rss+xml", &body)).await;
+        let location = format!("http://remote.test:{}/feed", remote.port());
+        let (local, _) = server(move |_| {
+            format!("HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+        })
+        .await;
+        refresh(format!("http://{local}/feed"), &[("remote.test", remote)]).await;
+        assert!(
+            hits.lock().unwrap().is_empty(),
+            "the local site was requested"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stored_website_is_not_trusted_because_its_feed_is_unchanged() {
+        let (site, hits) = server(|_| ok("text/html", "<html></html>")).await;
+        let body = feed_naming(&format!("http://{site}/"));
+        let (remote, _) = server(move |_| ok("application/rss+xml", &body)).await;
+        let location = format!("http://remote.test:{}/feed", remote.port());
+        // First a redirect to the remote feed, then "not modified" from the local address.
+        let answered = std::sync::atomic::AtomicBool::new(false);
+        let (local, _) = server(move |_| {
+            if answered.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                "HTTP/1.1 304 Not Modified\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into()
+            } else {
+                format!("HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            }
+        })
+        .await;
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(dir.path().join("test.db")).unwrap();
+        let url = format!("http://{local}/feed");
+        db.call(move |s| s.add_feed("Feed", &url, None))
+            .await
+            .unwrap();
+        let refresher = Refresher {
+            client: client(&[("remote.test", remote)]),
+            busy: Arc::default(),
+            cache: Some(dir.path().join("cache")),
+        };
+        for _ in 0..2 {
+            let (tx, _rx) = async_channel::unbounded();
+            refresher.refresh(db.clone(), true, 30, tx).await.unwrap();
+        }
+        let stored = db
+            .call(|s| Ok(s.library()?.feeds[0].site_url.clone()))
+            .await
+            .unwrap();
+        assert_eq!(stored, format!("http://{site}/"));
+        assert!(
+            hits.lock().unwrap().is_empty(),
+            "the local site was requested"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_local_feed_may_name_a_local_site() {
+        let (site, hits) = server(|_| ok("text/html", "<html></html>")).await;
+        let body = feed_naming(&format!("http://{site}/"));
+        let (local, _) = server(move |_| ok("application/rss+xml", &body)).await;
+        refresh(format!("http://{local}/feed"), &[]).await;
+        assert!(
+            !hits.lock().unwrap().is_empty(),
+            "the local site's icon was not looked for"
+        );
+    }
 }

@@ -43,25 +43,46 @@ pub fn resolve_http(base: &str, href: &str) -> Option<String> {
     matches!(url.scheme(), "http" | "https").then(|| url.to_string())
 }
 
-/// True for `localhost` and loopback, private, link-local, or unspecified IP literals.
+/// True for `localhost` (and names below it) and loopback, private, link-local, or unspecified
+/// IP literals. Other names are not resolved, so one that resolves to a local address passes.
 pub fn is_local_host(url: &Url) -> bool {
     let ip = match url.host() {
-        Some(Host::Domain(d)) => return d.eq_ignore_ascii_case("localhost"),
+        Some(Host::Domain(d)) => {
+            let d = d.strip_suffix('.').unwrap_or(d).to_ascii_lowercase();
+            return d == "localhost" || d.ends_with(".localhost");
+        }
         Some(Host::Ipv4(ip)) => IpAddr::V4(ip),
         Some(Host::Ipv6(ip)) => IpAddr::V6(ip),
         None => return false,
     };
     match ip.to_canonical() {
         IpAddr::V4(v4) => {
-            v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
+            // 100.64.0.0/10 is carrier-grade NAT, often a VPN's own network.
+            let [a, b, ..] = v4.octets();
+            let shared = a == 100 && (b & 0xc0) == 64;
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || shared
         }
         IpAddr::V6(v6) => {
+            // fec0::/10 is the deprecated site-local range, still routed on some networks.
+            let site_local = (v6.segments()[0] & 0xffc0) == 0xfec0;
             v6.is_loopback()
                 || v6.is_unspecified()
                 || v6.is_unique_local()
                 || v6.is_unicast_link_local()
+                || site_local
         }
     }
+}
+
+/// Whether a request to `target` may be made because of content or a redirect from `source`.
+/// Addresses the user typed may be local, but a site on the internet must not point Omafeed at
+/// the local network: only content that itself came from a local host may.
+pub(crate) fn may_request(source: &Url, target: &Url) -> bool {
+    !is_local_host(target) || is_local_host(source)
 }
 
 #[cfg(test)]
@@ -69,19 +90,56 @@ mod tests {
     use super::*;
 
     #[test]
+    fn only_local_content_may_lead_to_local_hosts() {
+        let url = |u: &str| Url::parse(u).unwrap();
+        let remote = url("https://example.org/feed");
+        let local = url("http://127.0.0.1:8080/feed");
+        assert!(may_request(&remote, &url("https://other.example.net/")));
+        assert!(!may_request(&remote, &url("http://127.0.0.1/")));
+        assert!(!may_request(&remote, &url("http://localhost:631/")));
+        assert!(!may_request(&remote, &url("http://192.168.1.1/admin")));
+        assert!(!may_request(&remote, &url("http://[::ffff:10.0.0.1]/")));
+        assert!(may_request(&local, &url("http://127.0.0.1:9000/icon.png")));
+        assert!(may_request(&local, &url("http://localhost/")));
+        assert!(may_request(&local, &remote));
+    }
+
+    #[test]
     fn local_hosts_are_detected() {
         for local in [
             "http://localhost/",
+            "http://LOCALHOST./",
+            "http://printer.localhost/",
+            "http://0.0.0.0/",
             "http://127.0.0.1/",
             "http://10.1.2.3/",
             "http://192.168.1.1/",
             "http://169.254.169.254/",
             "http://[::1]/",
             "http://[fd00::1]/",
+            "http://[fe80::1]/",
+            "http://[fec0::1]/",
+            "http://[feff::1]/",
+            "http://100.64.0.1/",
+            "http://100.127.255.254/",
+            "http://[::ffff:192.168.0.1]/",
+            "http://2130706433/",
+            "http://0x7f.1/",
         ] {
             assert!(is_local_host(&Url::parse(local).unwrap()), "{local}");
         }
         assert!(!is_local_host(&Url::parse("https://example.org/").unwrap()));
         assert!(!is_local_host(&Url::parse("http://8.8.8.8/").unwrap()));
+        assert!(!is_local_host(
+            &Url::parse("http://localhost.example.org/").unwrap()
+        ));
+        for remote in [
+            "http://100.63.255.255/",
+            "http://100.128.0.1/",
+            "http://[ff00::1]/",
+            "http://[2001:db8::1]/",
+        ] {
+            assert!(!is_local_host(&Url::parse(remote).unwrap()), "{remote}");
+        }
     }
 }

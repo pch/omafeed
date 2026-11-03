@@ -58,6 +58,21 @@ asked for.
 The window notices changes made by other programs (such as `omafeed star 3` in a terminal)
 by polling SQLite's `PRAGMA data_version` every two seconds and reloading when it moves.
 
+## Network policy
+
+Addresses the user enters (subscribe, discover, OPML import, editing a feed) may be on the
+local network, so local feeds work. Anything a remote site supplies must not lead to the local
+network: `util::may_request(source, target)` allows a request to a local target only if the
+content or redirect that produced it came from a local host. It is applied to every redirect
+(a custom `reqwest` redirect policy in `http`), to feed links found by discovery, to the website
+a feed names (whose icon is fetched; its source is the address the feed was finally served
+from, after redirects; a website stored by an earlier refresh counts as remote), and to icon
+links on that website. Only `localhost`, names below it, and IP literals count as local
+(loopback, private, link-local, unspecified, `100.64.0.0/10`, IPv6 unique-local and
+site-local): names are not resolved first, so a public name
+pointing at a private address is not caught. Images in articles are loaded by WebKit, not by
+this client, and are not covered.
+
 ## Storage
 
 The library is `omafeed.db` in the data directory (`$XDG_DATA_HOME/omafeed`, or

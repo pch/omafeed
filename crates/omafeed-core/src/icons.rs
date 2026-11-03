@@ -175,9 +175,17 @@ fn save(target: &Path, bytes: &[u8]) -> bool {
     false
 }
 
-/// Download, normalize, and cache the icon for `site_url`. Fresh icons and recent
-/// misses are skipped unless `force` is set (which retries misses only).
-pub async fn cache(client: &reqwest::Client, root: &Path, site_url: &str, force: bool) {
+/// Download, normalize, and cache the icon for `site_url`, which was found in (or is) the feed
+/// at `source`, or came from somewhere unknown with `None`. Fresh icons and recent misses are
+/// skipped unless `force` is set (which retries misses only). Only a local source may make
+/// this request a local address.
+pub async fn cache(
+    client: &reqwest::Client,
+    root: &Path,
+    site_url: &str,
+    source: Option<&str>,
+    force: bool,
+) {
     let target = path(root, site_url);
     let failed = target.with_extension("failed");
     if recent(&target, ICON_MAX_AGE) || (!force && recent(&failed, MISS_MAX_AGE)) {
@@ -186,7 +194,11 @@ pub async fn cache(client: &reqwest::Client, root: &Path, site_url: &str, force:
     let Ok(mut site) = url::Url::parse(site_url) else {
         return;
     };
-    if !matches!(site.scheme(), "http" | "https") {
+    let allowed = match source.and_then(|s| url::Url::parse(s).ok()) {
+        Some(source) => crate::util::may_request(&source, &site),
+        None => !crate::util::is_local_host(&site),
+    };
+    if !matches!(site.scheme(), "http" | "https") || !allowed {
         return;
     }
     if site.path().ends_with(".xml")
@@ -218,10 +230,7 @@ pub async fn cache(client: &reqwest::Client, root: &Path, site_url: &str, force:
         }
     }
     // Page markup must not point requests at the local network unless the site lives there.
-    candidates.retain(|c| {
-        url::Url::parse(c)
-            .is_ok_and(|u| u.host_str() == site.host_str() || !crate::util::is_local_host(&u))
-    });
+    candidates.retain(|c| url::Url::parse(c).is_ok_and(|u| crate::util::may_request(&site, &u)));
     for url in candidates {
         let Some((_, bytes)) = get(client, &url, ICON_LIMIT, false).await else {
             continue;
@@ -265,5 +274,83 @@ pub fn prune(root: &Path) {
         if total > CACHE_LIMIT {
             let _ = std::fs::remove_file(path);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::http::tests::{client, ok, server};
+
+    const SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16" fill="red"/></svg>"#;
+
+    #[tokio::test]
+    async fn a_remote_site_cannot_point_icon_requests_at_the_local_network() {
+        let (local, hits) = server(|_| ok("image/svg+xml", SVG)).await;
+        let page = format!(
+            r#"<html><head><link rel="icon" href="http://{local}/icon.svg"></head></html>"#
+        );
+        let (site, _) = server(move |line| {
+            if line.starts_with("GET / ") {
+                ok("text/html", &page)
+            } else {
+                "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into()
+            }
+        })
+        .await;
+        let dir = tempfile::tempdir().unwrap();
+        let site_url = format!("http://remote.test:{}/", site.port());
+        cache(
+            &client(&[("remote.test", site)]),
+            dir.path(),
+            &site_url,
+            Some(&site_url),
+            false,
+        )
+        .await;
+        assert!(
+            hits.lock().unwrap().is_empty(),
+            "the local icon was requested"
+        );
+        assert!(!path(dir.path(), &site_url).exists());
+    }
+
+    #[tokio::test]
+    async fn a_remote_feed_cannot_name_a_local_website() {
+        let (local, hits) = server(|_| ok("text/html", "<html></html>")).await;
+        let dir = tempfile::tempdir().unwrap();
+        let site_url = format!("http://{local}/");
+        cache(
+            &client(&[]),
+            dir.path(),
+            &site_url,
+            Some("https://example.org/feed"),
+            false,
+        )
+        .await;
+        // Nor can a website whose source is unknown.
+        cache(&client(&[]), dir.path(), &site_url, None, false).await;
+        assert!(
+            hits.lock().unwrap().is_empty(),
+            "the local site was requested"
+        );
+        // A feed that is itself local may.
+        let feed = format!("http://{local}/feed.xml");
+        cache(&client(&[]), dir.path(), &site_url, Some(&feed), false).await;
+        assert!(!hits.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_local_site_may_use_icons_elsewhere_on_the_local_network() {
+        let (local, hits) = server(|_| ok("image/svg+xml", SVG)).await;
+        let page = format!(
+            r#"<html><head><link rel="icon" href="http://{local}/icon.svg"></head></html>"#
+        );
+        let (site, _) = server(move |_| ok("text/html", &page)).await;
+        let dir = tempfile::tempdir().unwrap();
+        let site_url = format!("http://{site}/");
+        cache(&client(&[]), dir.path(), &site_url, Some(&site_url), false).await;
+        assert_eq!(hits.lock().unwrap().len(), 1);
+        assert!(path(dir.path(), &site_url).exists());
     }
 }

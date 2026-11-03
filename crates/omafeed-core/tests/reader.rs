@@ -408,9 +408,9 @@ async fn favicon_is_discovered_cached_and_not_downloaded_again() {
     .await;
     let dir = tempfile::tempdir().unwrap();
     let client = reqwest::Client::new();
-    omafeed_core::icons::cache(&client, dir.path(), &url, false).await;
+    omafeed_core::icons::cache(&client, dir.path(), &url, Some(&url), false).await;
     assert!(omafeed_core::icons::path(dir.path(), &url).exists());
-    omafeed_core::icons::cache(&client, dir.path(), &url, false).await;
+    omafeed_core::icons::cache(&client, dir.path(), &url, Some(&url), false).await;
     let requests = handle.await.unwrap();
     assert_eq!(requests.len(), 2);
     assert!(requests[1].starts_with("GET /brand.ico"));
