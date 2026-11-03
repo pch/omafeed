@@ -1,5 +1,8 @@
 //! Refresh passes: which feeds are due, how many download at once, and storing the results.
-use super::download::{MAX_BACKOFF_SECONDS, RetryDelay, download_from};
+use super::{
+    download::{RetryDelay, download_from},
+    schedule,
+};
 use crate::{
     Db, http,
     model::{Download, Feed},
@@ -182,21 +185,23 @@ impl Pass {
             Ok(download) => {
                 let minutes = self.minutes;
                 self.db
-                    .call(move |s| s.commit_download(id, revision, download, minutes))
+                    .call(move |s| {
+                        let now = chrono::Utc::now().timestamp();
+                        let next = schedule::after_success(now, minutes);
+                        s.commit_download(id, revision, download, now, next)
+                    })
                     .await
                     .err()
                     .map(|e| format!("{e:#}"))
             }
             Err(e) => {
                 let message = format!("{e:#}");
-                let delay = e.downcast_ref::<RetryDelay>().map_or_else(
-                    || (60 * 2_i64.pow(feed.failures.clamp(0, 9) as u32)).min(MAX_BACKOFF_SECONDS),
-                    |r| r.0,
-                );
+                let asked = e.downcast_ref::<RetryDelay>().map(|r| r.0);
                 let (error, now) = (message.clone(), self.now);
+                let next = schedule::after_failure(now, feed.failures, asked);
                 let saved = self
                     .db
-                    .call(move |s| s.record_failure(id, revision, &error, now, delay))
+                    .call(move |s| s.record_failure(id, revision, &error, now, next))
                     .await;
                 Some(match saved {
                     Ok(()) => message,

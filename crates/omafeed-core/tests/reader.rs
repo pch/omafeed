@@ -28,6 +28,10 @@ fn revision(s: &Store, feed: i64) -> i64 {
         .unwrap()
         .revision
 }
+/// The current time, as a refresh would record it.
+fn now() -> i64 {
+    chrono::Utc::now().timestamp()
+}
 fn all() -> Query {
     Query {
         scope: Scope::All,
@@ -105,13 +109,13 @@ fn repeated_downloads_preserve_state_and_content_updates_are_searchable() {
     let body = rss(
         "<item><guid>1</guid><title>First title</title><description>old body</description></item>",
     );
-    s.commit_download(f, revision(&s, f), download(&body), 30)
+    s.commit_download(f, revision(&s, f), download(&body), now(), now() + 1800)
         .unwrap();
     let a = s.articles(&all()).unwrap().remove(0);
     s.set_read(a.id, true).unwrap();
     s.set_starred(a.id, true).unwrap();
     let body = body.replace("old body", "new searchable content");
-    s.commit_download(f, revision(&s, f), download(&body), 30)
+    s.commit_download(f, revision(&s, f), download(&body), now(), now() + 1800)
         .unwrap();
     let articles = s.articles(&all()).unwrap();
     assert_eq!(articles.len(), 1);
@@ -130,8 +134,14 @@ fn repeated_downloads_preserve_state_and_content_updates_are_searchable() {
         .is_empty()
     );
     let original_date = articles[0].published;
-    s.commit_download(f, revision(&s, f), Download::NotModified, 30)
-        .unwrap();
+    s.commit_download(
+        f,
+        revision(&s, f),
+        Download::NotModified,
+        now(),
+        now() + 1800,
+    )
+    .unwrap();
     assert_eq!(s.articles(&all()).unwrap()[0].published, original_date);
     assert_eq!(s.library().unwrap().feeds[0].etag.as_deref(), Some("v1"));
 }
@@ -150,7 +160,8 @@ fn state_survives_reopen_and_feed_moves() {
             f,
             revision(&s, f),
             download(&rss("<item><guid>1</guid><title>A</title></item>")),
-            30,
+            now(),
+            now() + 1800,
         )
         .unwrap();
         id = s.articles(&all()).unwrap()[0].id;
@@ -214,7 +225,8 @@ fn bulk_mark_includes_descendants_and_undo_is_scoped() {
             id,
             revision(&s, id),
             download(&rss("<item><guid>x</guid><title>test</title></item>")),
-            30,
+            now(),
+            now() + 1800,
         )
         .unwrap();
     }
@@ -298,7 +310,8 @@ fn invalid_search_is_literal_and_removing_feed_cleans_fts() {
         f,
         revision(&s, f),
         download(&rss("<item><guid>1</guid><title>Hello</title></item>")),
-        30,
+        now(),
+        now() + 1800,
     )
     .unwrap();
     assert!(
@@ -327,7 +340,8 @@ fn correcting_feed_url_preserves_history_and_resets_validators() {
         id,
         revision(&s, id),
         download(&rss("<item><guid>1</guid><title>A</title></item>")),
-        30,
+        now(),
+        now() + 1800,
     )
     .unwrap();
     let a = s.articles(&all()).unwrap()[0].id;
@@ -504,8 +518,7 @@ fn upgrading_a_version_1_database_reextracts_article_text() {
             f, revision(&s, f),
             download(&rss(
                 "<item><guid>1</guid><title>A</title><description>&lt;p&gt;On &lt;a href=\"https://x.org\"&gt;Spotify&lt;/a&gt;, Apple&lt;/p&gt;</description></item>",
-            )),
-            30,
+            )), now(), now() + 1800,
         )
         .unwrap();
     }
@@ -534,10 +547,10 @@ fn feed_article_counts_report_articles_and_stars_per_feed() {
     let two = rss(
         "<item><guid>1</guid><title>One</title></item><item><guid>2</guid><title>Two</title></item>",
     );
-    s.commit_download(a, revision(&s, a), download(&two), 30)
+    s.commit_download(a, revision(&s, a), download(&two), now(), now() + 1800)
         .unwrap();
     let one = rss("<item><guid>3</guid><title>Three</title></item>");
-    s.commit_download(b, revision(&s, b), download(&one), 30)
+    s.commit_download(b, revision(&s, b), download(&one), now(), now() + 1800)
         .unwrap();
     assert_eq!(s.feed_article_counts(a).unwrap(), (2, 0));
     let in_a = Query {
@@ -583,7 +596,7 @@ fn batch_state_changes_roll_back_on_invalid_ids_and_write_failures() {
     let feed = s
         .add_feed("Test", "https://example.org/feed", None)
         .unwrap();
-    s.commit_download(feed, revision(&s, feed), download(&rss("<item><guid>1</guid><title>One</title></item><item><guid>2</guid><title>Two</title></item>")), 30).unwrap();
+    s.commit_download(feed, revision(&s, feed), download(&rss("<item><guid>1</guid><title>One</title></item><item><guid>2</guid><title>Two</title></item>")), now(), now() + 1800).unwrap();
     let mut ids: Vec<_> = s.articles(&all()).unwrap().iter().map(|a| a.id).collect();
     ids.sort();
     assert!(
@@ -636,8 +649,14 @@ fn add(s: &mut Store, feed: i64, articles: &[(&str, &str)]) {
         .iter()
         .map(|(title, body)| article(&format!("{title}-{body}"), title, body))
         .collect();
-    s.commit_download(feed, revision(s, feed), download(&rss(&items)), 30)
-        .unwrap();
+    s.commit_download(
+        feed,
+        revision(s, feed),
+        download(&rss(&items)),
+        now(),
+        now() + 1800,
+    )
+    .unwrap();
 }
 
 fn titles(s: &Store, search: &str, exact: bool) -> Vec<String> {
@@ -904,7 +923,7 @@ fn the_word_list_is_read_again_only_when_articles_change() {
     assert_eq!(found(&s, "thrid"), ["Three"]);
     assert_eq!(s.vocabulary_loads(), 2);
     let notmodified = Download::NotModified;
-    s.commit_download(feed, revision(&s, feed), notmodified, 30)
+    s.commit_download(feed, revision(&s, feed), notmodified, now(), now() + 1800)
         .unwrap();
     found(&s, "thrid");
     assert_eq!(
@@ -1018,8 +1037,7 @@ fn upgrading_a_version_2_database_separates_words_at_block_ends() {
             f, revision(&s, f),
             download(&rss(
                 "<item><guid>1</guid><title>A</title><description>&lt;details&gt;&lt;summary&gt;Changes&lt;/summary&gt;Fixed&lt;/details&gt;</description></item>",
-            )),
-            30,
+            )), now(), now() + 1800,
         )
         .unwrap();
     }

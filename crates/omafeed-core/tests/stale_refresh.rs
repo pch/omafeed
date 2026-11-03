@@ -25,6 +25,10 @@ fn stale_download() -> Download {
     })
 }
 
+/// The current time, as a refresh would record it.
+fn now() -> i64 {
+    chrono::Utc::now().timestamp()
+}
 fn feed(s: &Store, id: i64) -> Feed {
     s.library()
         .unwrap()
@@ -55,9 +59,9 @@ fn untouched(s: &Store, id: i64) {
 
 /// Deliver a late success and a late failure for the snapshot `(id, revision)`.
 fn deliver_late_results(s: &mut Store, id: i64, revision: i64) {
-    s.commit_download(id, revision, stale_download(), 30)
+    s.commit_download(id, revision, stale_download(), now(), now() + 1800)
         .unwrap();
-    s.record_failure(id, revision, "Old URL failed", 1_700_000_000, 600)
+    s.record_failure(id, revision, "Old URL failed", 1_700_000_000, 1_700_000_600)
         .unwrap();
 }
 
@@ -87,10 +91,11 @@ fn renaming_or_moving_a_feed_keeps_its_refresh() {
     s.update_feed(id, "Renamed", "https://old.example.org/feed", Some(folder))
         .unwrap();
     assert_eq!(feed(&s, id).revision, before);
-    s.commit_download(id, before, stale_download(), 30).unwrap();
+    s.commit_download(id, before, stale_download(), now(), now() + 1800)
+        .unwrap();
     assert_eq!(article_count(&s), 1);
     assert_eq!(feed(&s, id).etag.as_deref(), Some("\"old\""));
-    s.record_failure(id, before, "Failed", 1_700_000_000, 600)
+    s.record_failure(id, before, "Failed", 1_700_000_000, 1_700_000_600)
         .unwrap();
     assert_eq!(feed(&s, id).failures, 1);
 }

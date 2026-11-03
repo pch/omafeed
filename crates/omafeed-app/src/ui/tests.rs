@@ -45,6 +45,10 @@ fn form_button(text: &str) -> gtk::Button {
         .find(|b| b.label().as_deref() == Some(text))
         .unwrap_or_else(|| panic!("Missing form button {text}"))
 }
+/// The current time, as a refresh would record it.
+fn now() -> i64 {
+    chrono::Utc::now().timestamp()
+}
 pub(crate) fn desktop_smoke() {
     adw::init().unwrap();
     let dir = tempfile::tempdir().unwrap();
@@ -81,7 +85,8 @@ pub(crate) fn desktop_smoke() {
                     modified: None,
                     site_url: Some("https://example.invalid/".into()),
                 }),
-                1440,
+                now(),
+                now() + 86400,
             )?;
             Ok(s.articles(&Query {
                 scope: Scope::All,

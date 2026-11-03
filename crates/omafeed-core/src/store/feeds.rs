@@ -140,17 +140,17 @@ impl Store {
         Ok(())
     }
 
-    /// Store a successful download of the feed `feed_id` at `revision`; validators are only
-    /// saved with committed content. Nothing is stored if the feed was deleted or is no
-    /// longer at that revision.
+    /// Store a successful download of the feed `feed_id` at `revision`, made at `now`, and
+    /// schedule the next one at `next_fetch`; validators are only saved with committed
+    /// content. Nothing is stored if the feed was deleted or is no longer at that revision.
     pub fn commit_download(
         &mut self,
         feed_id: i64,
         revision: i64,
         download: Download,
-        minutes: u32,
+        now: i64,
+        next_fetch: i64,
     ) -> Result<()> {
-        let now = chrono::Utc::now().timestamp();
         let tx = self.conn.transaction()?;
         let current: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM feeds WHERE id = ?1 AND revision = ?2)",
@@ -185,7 +185,7 @@ impl Store {
         tx.execute(
             "UPDATE feeds SET last_attempt = ?1, last_success = ?1, next_fetch = ?2, error = NULL, failures = 0
              WHERE id = ?3",
-            params![now, now + i64::from(minutes) * 60, feed_id],
+            params![now, next_fetch, feed_id],
         )?;
         tx.commit()?;
         if changes_articles {
@@ -194,21 +194,21 @@ impl Store {
         Ok(())
     }
 
-    /// Record a failed refresh of the feed `feed_id` at `revision` and schedule the next
-    /// attempt `delay` seconds from `now`. Nothing is recorded if the feed was deleted or is
-    /// no longer at that revision.
+    /// Record a refresh of the feed `feed_id` at `revision` that failed at `now`, and schedule
+    /// the next attempt at `next_fetch`. Nothing is recorded if the feed was deleted or is no
+    /// longer at that revision.
     pub fn record_failure(
         &self,
         feed_id: i64,
         revision: i64,
         error: &str,
         now: i64,
-        delay: i64,
+        next_fetch: i64,
     ) -> Result<()> {
         self.conn.execute(
             "UPDATE feeds SET error = ?1, failures = failures + 1, last_attempt = ?2, next_fetch = ?3
              WHERE id = ?4 AND revision = ?5",
-            params![error, now, now + delay, feed_id, revision],
+            params![error, now, next_fetch, feed_id, revision],
         )?;
         Ok(())
     }
