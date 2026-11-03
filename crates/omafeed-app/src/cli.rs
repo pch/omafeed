@@ -659,13 +659,19 @@ async fn subscribe(
 }
 
 async fn unsubscribe(db: &Db, id: i64, yes: bool, json: bool) -> Result<()> {
+    // One transaction, so the counts reported are exactly what is deleted.
     let (title, url, total, starred) = db
         .call(move |s| {
-            let Some(feed) = s.library()?.feeds.into_iter().find(|f| f.id == id) else {
-                bail!("No feed with id {id}");
-            };
-            let (total, starred) = s.feed_article_counts(id)?;
-            Ok((feed.title, feed.url, total, starred))
+            s.immediate(|s| {
+                let Some(feed) = s.library()?.feeds.into_iter().find(|f| f.id == id) else {
+                    bail!("No feed with id {id}");
+                };
+                let (total, starred) = s.feed_article_counts(id)?;
+                if yes {
+                    s.delete_feed(id)?;
+                }
+                Ok((feed.title, feed.url, total, starred))
+            })
         })
         .await?;
     if !yes {
@@ -673,7 +679,6 @@ async fn unsubscribe(db: &Db, id: i64, yes: bool, json: bool) -> Result<()> {
             "Not removed. This would permanently delete \"{title}\" and its {total} articles ({starred} starred). Run again with --yes to confirm."
         );
     }
-    db.call(move |s| s.delete_feed(id)).await?;
     if !json {
         println!(
             "Removed \"{}\" and its {total} articles ({starred} starred)",
