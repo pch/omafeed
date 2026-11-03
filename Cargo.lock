@@ -1670,6 +1670,7 @@ dependencies = [
  "libadwaita",
  "libc",
  "omafeed-core",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",
