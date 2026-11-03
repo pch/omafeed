@@ -53,6 +53,31 @@ fn import_hierarchy_roundtrip_and_reimport_preserves_moves() {
     assert_eq!(other.library().unwrap().feeds[0].title, "Custom");
 }
 #[test]
+fn reimporting_folders_with_surrounding_spaces_reuses_them() {
+    let mut s = Store::open(":memory:").unwrap();
+    let opml = r#"<opml version="2.0"><body><outline text=" Work "><outline text="  "><outline text="Feed" xmlUrl="https://example.org/feed"/></outline></outline></body></opml>"#;
+    assert_eq!(s.import(opml).unwrap().added, 1);
+    let again = s.import(opml).unwrap();
+    assert_eq!((again.added, again.skipped), (0, 1));
+    let mut names: Vec<_> = s
+        .library()
+        .unwrap()
+        .folders
+        .into_iter()
+        .map(|f| f.name)
+        .collect();
+    names.sort();
+    assert_eq!(names, ["Untitled", "Work"]);
+    // A folder made by hand is found by its trimmed name too.
+    let mut s = Store::open(":memory:").unwrap();
+    let work = s.add_folder("Work", None).unwrap();
+    s.import(opml).unwrap();
+    let lib = s.library().unwrap();
+    assert_eq!(lib.folders.iter().filter(|f| f.name == "Work").count(), 1);
+    let untitled = lib.folders.iter().find(|f| f.name == "Untitled").unwrap();
+    assert_eq!(untitled.parent, Some(work));
+}
+#[test]
 fn folder_moves_reject_cycles_and_delete_preserves_contents() {
     let mut s = Store::open(":memory:").unwrap();
     let a = s.add_folder("A", None).unwrap();

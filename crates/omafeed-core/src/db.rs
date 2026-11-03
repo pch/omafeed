@@ -633,11 +633,12 @@ impl Store {
         }
         for o in outlines {
             let Some(url) = &o.url else {
-                let name = if o.name().trim().is_empty() {
+                // Look the folder up by the name it is stored under, so " Work " finds "Work".
+                let name = Self::name(if o.name().trim().is_empty() {
                     "Untitled"
                 } else {
                     o.name()
-                };
+                })?;
                 let existing: Option<i64> = conn
                     .query_row(
                         "SELECT id FROM folders WHERE parent IS ?1 AND name = ?2",
@@ -650,7 +651,7 @@ impl Store {
                     None => {
                         conn.execute(
                             "INSERT INTO folders(name, parent) VALUES(?1, ?2)",
-                            params![Self::name(name)?, parent],
+                            params![name, parent],
                         )?;
                         conn.last_insert_rowid()
                     }
