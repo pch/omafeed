@@ -111,26 +111,26 @@ pub(crate) fn desktop_smoke() {
         runtime.clone(),
         Refresher::new().unwrap(),
     );
-    pump_until(|| !u.articles.borrow().is_empty());
+    pump_until(|| !u.view.borrow().articles().is_empty());
     // The search box forgives typos. Changing the text first clears the box, which GTK reports
     // at once, so wait until the new text has been applied, then until the database has
     // answered, before looking at the list.
     let search = |text: &str| {
         u.header.search.set_text(text);
-        pump_until(|| *u.query.borrow().search == *text);
+        pump_until(|| u.view.borrow().query.search == text);
         runtime.block_on(db.call(|_| Ok(()))).unwrap();
         std::thread::sleep(Duration::from_millis(50));
         pump_until(|| true);
     };
     search("zzzzzzzz");
-    assert!(u.articles.borrow().is_empty());
+    assert!(u.view.borrow().articles().is_empty());
     search("fixtre contnt");
     assert!(
-        u.articles.borrow().iter().any(|a| a.id == id),
+        u.view.borrow().articles().iter().any(|a| a.id == id),
         "a misspelled search should still find the article"
     );
     search("");
-    assert!(u.articles.borrow().iter().any(|a| a.id == id));
+    assert!(u.view.borrow().articles().iter().any(|a| a.id == id));
     assert!(!u.list.previous.is_sensitive());
     assert!(!u.list.next.is_sensitive());
     let expander = widgets(&u.side.list.clone().upcast())
@@ -160,27 +160,27 @@ pub(crate) fn desktop_smoke() {
     // Changes show at once; wait until the database has them too.
     let settled = || {
         pump_until(|| {
-            let changes = u.changes.borrow();
-            changes.unfinished(id, changes::Field::Read).is_none()
-                && changes.unfinished(id, changes::Field::Starred).is_none()
+            let view = u.view.borrow();
+            view.unfinished(id, changes::Field::Read).is_none()
+                && view.unfinished(id, changes::Field::Starred).is_none()
         });
     };
     u.select(id);
-    pump_until(|| u.selected.borrow().as_ref().is_some_and(|a| a.read));
+    pump_until(|| u.view.borrow().open().is_some_and(|a| a.read));
     settled();
     u.toggle_star();
-    assert!(u.selected.borrow().as_ref().is_some_and(|a| a.starred));
+    assert!(u.view.borrow().open().is_some_and(|a| a.starred));
     settled();
     u.toggle_read();
-    assert!(u.selected.borrow().as_ref().is_some_and(|a| !a.read));
+    assert!(u.view.borrow().open().is_some_and(|a| !a.read));
     settled();
     // Each quick toggle flips what the one before it showed, before any write has finished,
     // and the last one is what gets saved.
     u.toggle_star();
     u.toggle_star();
-    assert!(u.selected.borrow().as_ref().is_some_and(|a| a.starred));
+    assert!(u.view.borrow().open().is_some_and(|a| a.starred));
     settled();
-    assert!(u.selected.borrow().as_ref().is_some_and(|a| a.starred));
+    assert!(u.view.borrow().open().is_some_and(|a| a.starred));
     assert!(
         runtime
             .block_on(db.call(move |s| s.article(id)))
@@ -189,7 +189,7 @@ pub(crate) fn desktop_smoke() {
     );
     // Marking the view read and undoing it updates the open article both times.
     u.mark_all();
-    pump_until(|| u.selected.borrow().as_ref().is_some_and(|a| a.read));
+    pump_until(|| u.view.borrow().open().is_some_and(|a| a.read));
     assert!(
         runtime
             .block_on(db.call(move |s| s.article(id)))
@@ -198,8 +198,12 @@ pub(crate) fn desktop_smoke() {
     );
     u.undo();
     pump_until(|| {
-        u.selected.borrow().as_ref().is_some_and(|a| !a.read)
-            && u.articles.borrow().iter().any(|a| a.id == id && !a.read)
+        u.view.borrow().open().is_some_and(|a| !a.read)
+            && u.view
+                .borrow()
+                .articles()
+                .iter()
+                .any(|a| a.id == id && !a.read)
     });
     assert!(
         !runtime
@@ -231,14 +235,24 @@ pub(crate) fn desktop_smoke() {
     );
     // Another program (the command line) changing the library shows up without any action
     // in the window. A second connection to the same file stands in for that program.
-    assert!(u.articles.borrow().iter().any(|a| a.id == id && !a.read));
+    assert!(
+        u.view
+            .borrow()
+            .articles()
+            .iter()
+            .any(|a| a.id == id && !a.read)
+    );
     let outsider = Db::open(&db_path).unwrap();
     runtime
         .block_on(outsider.call(move |s| s.set_read(id, true)))
         .unwrap();
     pump_until(|| {
-        u.articles.borrow().iter().all(|a| a.id != id || a.read)
-            && u.selected.borrow().as_ref().is_some_and(|a| a.read)
+        u.view
+            .borrow()
+            .articles()
+            .iter()
+            .all(|a| a.id != id || a.read)
+            && u.view.borrow().open().is_some_and(|a| a.read)
     });
     assert!(
         widgets(&u.reader.root.clone().upcast())
@@ -248,19 +262,25 @@ pub(crate) fn desktop_smoke() {
     runtime
         .block_on(outsider.call(move |s| s.set_read(id, false)))
         .unwrap();
-    pump_until(|| u.articles.borrow().iter().any(|a| a.id == id && !a.read));
-    pump_until(|| u.selected.borrow().as_ref().is_some_and(|a| !a.read));
+    pump_until(|| {
+        u.view
+            .borrow()
+            .articles()
+            .iter()
+            .any(|a| a.id == id && !a.read)
+    });
+    pump_until(|| u.view.borrow().open().is_some_and(|a| !a.read));
     runtime
         .block_on(outsider.call(move |s| s.set_starred(id, false)))
         .unwrap();
-    pump_until(|| u.selected.borrow().as_ref().is_some_and(|a| !a.starred));
+    pump_until(|| u.view.borrow().open().is_some_and(|a| !a.starred));
     assert!(
         widgets(&u.reader.root.clone().upcast())
             .iter()
             .any(|w| w.tooltip_text().as_deref() == Some("Star (S)"))
     );
     u.toggle_star();
-    assert!(u.selected.borrow().as_ref().is_some_and(|a| a.starred));
+    assert!(u.view.borrow().open().is_some_and(|a| a.starred));
     settled();
     assert!(
         runtime
@@ -279,7 +299,7 @@ pub(crate) fn desktop_smoke() {
         .list
         .select_row(u.side.list.row_at_index(starred as i32).as_ref());
     pump_until(|| u.list.heading.text() == "Starred");
-    assert!(u.selected.borrow().is_none());
+    assert!(u.view.borrow().open().is_none());
     assert!(u.settings.borrow().selected_article.is_none());
     crate::dialogs::library(u.clone());
     let window = Rc::new(RefCell::new(None::<gtk::Window>));
@@ -452,12 +472,12 @@ pub(crate) fn desktop_smoke() {
     pump_until(|| !library.is_visible());
     // Persisted state and actual WebKit rendering were verified above.
     u.select(id);
-    pump_until(|| u.selected.borrow().as_ref().is_some_and(|a| a.id == id));
-    let feed = u.selected.borrow().as_ref().unwrap().feed_id;
+    pump_until(|| u.view.borrow().open().is_some_and(|a| a.id == id));
+    let feed = u.view.borrow().open().unwrap().feed_id;
     runtime
         .block_on(outsider.call(move |s| s.delete_feed(feed)))
         .unwrap();
-    pump_until(|| u.selected.borrow().is_none());
+    pump_until(|| u.view.borrow().open().is_none());
     assert!(u.settings.borrow().selected_article.is_none());
     assert!(
         widgets(&u.reader.root.clone().upcast())

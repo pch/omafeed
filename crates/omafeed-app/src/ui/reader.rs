@@ -167,8 +167,8 @@ impl Ui {
     }
 
     pub(super) fn render(&self) {
-        let selected = self.selected.borrow();
-        let Some(a) = selected.as_ref() else {
+        let view = self.view.borrow();
+        let Some(a) = view.open() else {
             self.reader.stack.set_visible_child_name("empty");
             return;
         };
@@ -196,11 +196,14 @@ impl Ui {
             s.font_size,
             s.remote_images,
         );
-        self.reader.stack.set_visible_child_name("article");
-        self.reader.web.load_html(&html, Some("about:blank"));
+        drop(s);
         self.reader.open.set_sensitive(!a.url.is_empty());
         self.reader.copy.set_sensitive(!a.url.is_empty());
         self.update_buttons(a);
+        // Loading signals may change the view, so nothing of it stays borrowed here.
+        drop(view);
+        self.reader.stack.set_visible_child_name("article");
+        self.reader.web.load_html(&html, Some("about:blank"));
     }
 
     pub(super) fn update_buttons(&self, a: &Article) {
@@ -223,28 +226,21 @@ impl Ui {
 
     /// Mark the article read once its content has loaded (not on re-renders).
     fn mark_opened(self: &Rc<Self>) {
-        let Some(loaded) = self.pending_mark.take() else {
-            return;
-        };
-        let unread = self
-            .selected
-            .borrow()
-            .as_ref()
-            .is_some_and(|a| a.id == loaded && !a.read);
+        let loaded = self.view.borrow_mut().take_pending_mark();
         // Shown at once and put back if the write fails, like any other change.
-        if unread {
-            self.set_state(loaded, omafeed_core::model::StatePatch::read(true));
+        if let Some(id) = loaded {
+            self.set_state(id, omafeed_core::model::StatePatch::read(true));
         }
     }
 
     pub(super) fn open_original(&self) {
-        if let Some(a) = self.selected.borrow().as_ref() {
+        if let Some(a) = self.view.borrow().open() {
             open_uri(&a.url);
         }
     }
 
     fn copy_link(&self) {
-        if let Some(a) = self.selected.borrow().as_ref()
+        if let Some(a) = self.view.borrow().open()
             && !a.url.is_empty()
         {
             self.window.clipboard().set_text(&a.url);

@@ -34,7 +34,7 @@ Run without a command, `omafeed` opens the reader window; with a command (`omafe
 | --- | --- |
 | `lib` | Argument parsing (`main`), which dispatches to `cli::run` or builds the GTK application. `main.rs` only calls it. With the `test-support` feature, `test_support` exposes the desktop smoke test to `tests/desktop_smoke.rs`. |
 | `cli` | Every command: argument definitions, text and JSON output. |
-| `ui` | The main window. `Ui` owns the panes (`Header`, `SidebarPane`, `ListPane`, `ReaderPane`) and the view state; `articles`, `sidebar`, `reader`, `keys` and `theme` add methods to it. `widgets` has small constructors. `changes` tracks read/star changes not yet confirmed. `tests` holds the desktop smoke test (only with `test-support`). |
+| `ui` | The main window. `Ui` coordinates: it owns the panes (`Header`, `SidebarPane`, `ListPane`, `ReaderPane`), each holding its own widgets, and a `View` (`view.rs`) with what is shown: view and page, the articles on it, the open article, collapsed folders, and the read/star changes (`changes.rs`) and undo in flight. `View` has no GTK and decides what each late database result may change; it is unit-tested on its own. `articles`, `sidebar`, `reader`, `keys` and `theme` add methods to `Ui`; `widgets` has small constructors; `tests` holds the desktop smoke test (only with `test-support`). |
 | `dialogs` | Library manager, subscription and folder forms, OPML import/export, settings, shortcuts and about. |
 
 ## Data flow
@@ -50,7 +50,7 @@ its status bar, `omafeed refresh` prints them. Feeds finish in any order, so the
 lines come in completion order.
 
 The window shows read and star changes at once and writes them in the background
-(`ui/changes.rs`). Each change of an article's read or star state gets a sequence number, and
+(`ui/view.rs`, `ui/changes.rs`). Each change of an article's read or star state gets a sequence number, and
 so does each "mark all read" or undo when it is sent. Every database read remembers where the
 sequence stood when it was sent, and a field changed since then, or still being written, keeps
 the window's value. A write's result, and the reload that shows the saved state after a failed
