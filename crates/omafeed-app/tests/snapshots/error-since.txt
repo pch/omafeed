@@ -1,0 +1,7 @@
+$ omafeed articles --since soon
+exit: 2
+--- stdout
+--- stderr
+error: invalid value 'soon' for '--since <SINCE>': expected a duration like 90m, 24h, 2d or 1w, got 'soon'
+
+For more information, try '--help'.

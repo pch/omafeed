@@ -249,6 +249,8 @@ Tests use temporary SQLite databases and a localhost HTTP server; they do not de
 
 The workspace contains `omafeed-core` (database worker, migrations, OPML, fetch scheduling, sanitization) and `omafeed-app` (GTK interface and CLI). Database work runs on a dedicated worker; HTTP work runs on Tokio. The GTK thread receives results asynchronously.
 
+Command output is checked byte for byte against transcripts in `crates/omafeed-app/tests/snapshots/`, because scripts and agents parse it. After an intended change to the output, rewrite them with `OMAFEED_BLESS=1 cargo test -p omafeed --test cli_output` and review the diff. [ARCHITECTURE.md](ARCHITECTURE.md) describes the modules, data flow, storage, and known limits.
+
 ## Releases
 
 CI runs formatting, Clippy, tests, the headless desktop smoke test, an Arch package build, and `cargo deny`. To release, bump `version` in `Cargo.toml` and the `<releases>` entry in `data/io.github.pch.Omafeed.metainfo.xml`, commit, then push a matching tag (`git tag v0.2.0 && git push origin v0.2.0`). The release workflow reruns CI, builds a binary tarball and a checksummed `PKGBUILD`, and publishes them as a GitHub release.

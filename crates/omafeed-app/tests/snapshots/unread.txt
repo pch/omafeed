@@ -1,0 +1,6 @@
+$ omafeed unread 1
+exit: 0
+--- stdout
+Marked 1 article unread
+1	First
+--- stderr

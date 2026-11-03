@@ -1,0 +1,5 @@
+$ omafeed unread 2 3 --json
+exit: 0
+--- stdout
+{"articles":[{"id":2,"title":"Second"},{"id":3,"title":"Third"}],"updated":2}
+--- stderr

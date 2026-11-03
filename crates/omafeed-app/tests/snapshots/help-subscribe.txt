@@ -1,0 +1,16 @@
+$ omafeed subscribe --help
+exit: 0
+--- stdout
+Subscribe to a website or feed URL; run `refresh` afterwards to fetch articles
+
+Usage: omafeed subscribe [OPTIONS] <URL>
+
+Arguments:
+  <URL>  
+
+Options:
+      --folder <FOLDER>  Folder ID from `feeds`
+      --title <TITLE>    Name to use instead of the feed's own title
+      --json             Print JSON instead of text
+  -h, --help             Print help
+--- stderr

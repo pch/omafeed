@@ -1,0 +1,7 @@
+# Values outside the supported ranges are clamped, not rejected.
+refresh_minutes = 1
+font_size = 99
+width = 10
+height = 99999
+sidebar_width = 1
+list_width = 5000

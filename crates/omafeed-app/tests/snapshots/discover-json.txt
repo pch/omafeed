@@ -1,0 +1,5 @@
+$ omafeed discover {server}/ --json
+exit: 0
+--- stdout
+{"feeds":[{"title":"Extra","url":"{server}/extra.xml"},{"title":"Other Feed","url":"{server}/other.xml"}]}
+--- stderr

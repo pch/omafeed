@@ -1,0 +1,15 @@
+$ omafeed article --help
+exit: 0
+--- stdout
+Print one article's text (or sanitized HTML with --html)
+
+Usage: omafeed article [OPTIONS] <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --html  
+      --json  Print JSON instead of text
+  -h, --help  Print help
+--- stderr

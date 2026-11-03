@@ -1,0 +1,6 @@
+$ omafeed status
+exit: 0
+--- stdout
+4 feeds · 2 folders · 4 unread · 0 starred
+Missing: HTTP status client error (404 Not Found) for url ({server}/missing.xml)
+--- stderr

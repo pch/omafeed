@@ -1,0 +1,5 @@
+# Unknown enum values fall back to their defaults without losing other settings.
+theme = "sepia"
+scope = { Galaxy = 1 }
+font_size = 14
+unknown_key = true

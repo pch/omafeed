@@ -1,0 +1,11 @@
+$ omafeed refresh --help
+exit: 0
+--- stdout
+Refresh every feed now
+
+Usage: omafeed refresh [OPTIONS]
+
+Options:
+      --json  Print one line of JSON when done instead of progress text
+  -h, --help  Print help
+--- stderr

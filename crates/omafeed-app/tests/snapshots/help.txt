@@ -1,0 +1,32 @@
+$ omafeed --help
+exit: 0
+--- stdout
+omafeed {version}
+Omafeed — a local RSS reader. Run without a command to open the reader.
+
+Usage: omafeed [COMMAND]
+
+Commands:
+  import       Import subscriptions from an OPML file
+  export       Export subscriptions to an OPML file
+  refresh      Refresh every feed now
+  status       Show library totals and feed errors
+  discover     List the feeds a website advertises
+  feeds        List folders, feeds, unread counts and feed errors
+  articles     List articles, newest first
+  search       Search articles for words, e.g. omafeed search "agentic engineering"
+  article      Print one article's text (or sanitized HTML with --html)
+  read         Mark articles read
+  unread       Mark articles unread
+  star         Star articles
+  unstar       Remove the star from articles
+  subscribe    Subscribe to a website or feed URL; run `refresh` afterwards to fetch articles
+  unsubscribe  Delete a feed and all its articles, starred ones included (requires --yes)
+  help         Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help     Print help
+  -V, --version  Print version
+
+OMAFEED_HOME overrides the data, config, and cache directories for testing.
+--- stderr

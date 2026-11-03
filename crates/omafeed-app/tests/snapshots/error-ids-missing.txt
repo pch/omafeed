@@ -1,0 +1,10 @@
+$ omafeed read
+exit: 2
+--- stdout
+--- stderr
+error: the following required arguments were not provided:
+  <IDS>...
+
+Usage: omafeed read <IDS>...
+
+For more information, try '--help'.

@@ -1,0 +1,4 @@
+# Early versions stored the scope as a JSON string.
+font_size = 20
+scope = '{"Feed":18}'
+selected_article = 7

@@ -1,0 +1,11 @@
+$ omafeed feeds --help
+exit: 0
+--- stdout
+List folders, feeds, unread counts and feed errors
+
+Usage: omafeed feeds [OPTIONS]
+
+Options:
+      --json  Print JSON instead of text
+  -h, --help  Print help
+--- stderr

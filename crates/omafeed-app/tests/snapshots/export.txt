@@ -1,0 +1,5 @@
+$ omafeed export {home}/out.opml
+exit: 0
+--- stdout
+Exported {home}/out.opml
+--- stderr

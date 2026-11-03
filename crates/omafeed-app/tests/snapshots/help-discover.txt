@@ -1,0 +1,14 @@
+$ omafeed discover --help
+exit: 0
+--- stdout
+List the feeds a website advertises
+
+Usage: omafeed discover [OPTIONS] <URL>
+
+Arguments:
+  <URL>  
+
+Options:
+      --json  Print JSON instead of tab-separated text
+  -h, --help  Print help
+--- stderr

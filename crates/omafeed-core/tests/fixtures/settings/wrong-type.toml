@@ -1,0 +1,3 @@
+# A value of the wrong type rejects the whole file, which then falls back to defaults.
+font_size = "big"
+theme = "dark"

@@ -1,0 +1,9 @@
+$ omafeed feeds --yaml
+exit: 2
+--- stdout
+--- stderr
+error: unexpected argument '--yaml' found
+
+Usage: omafeed feeds [OPTIONS]
+
+For more information, try '--help'.

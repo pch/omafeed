@@ -87,13 +87,16 @@ impl Cli {
         (cli, url)
     }
 
-    /// The command, in UTC so text dates do not depend on where the tests run.
+    /// The command, in UTC so text dates do not depend on where the tests run, and never through
+    /// a proxy, which could not reach the local server.
     fn command(&self, args: &[&str]) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_omafeed"));
         command
             .args(args)
             .env("OMAFEED_HOME", self.0.path())
-            .env("TZ", "UTC");
+            .env("TZ", "UTC")
+            .env("NO_PROXY", "*")
+            .env("no_proxy", "*");
         command
     }
 

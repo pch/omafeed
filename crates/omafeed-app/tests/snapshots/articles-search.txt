@@ -1,0 +1,5 @@
+$ omafeed articles --search goodby
+exit: 0
+--- stdout
+2	unread	-	2024-01-02	Local Feed	Second
+--- stderr

@@ -1,0 +1,14 @@
+$ omafeed star --help
+exit: 0
+--- stdout
+Star articles
+
+Usage: omafeed star [OPTIONS] <IDS>...
+
+Arguments:
+  <IDS>...  
+
+Options:
+      --json  Print JSON instead of text
+  -h, --help  Print help
+--- stderr

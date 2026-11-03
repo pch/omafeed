@@ -1,0 +1,14 @@
+$ omafeed read --help
+exit: 0
+--- stdout
+Mark articles read
+
+Usage: omafeed read [OPTIONS] <IDS>...
+
+Arguments:
+  <IDS>...  
+
+Options:
+      --json  Print JSON instead of text
+  -h, --help  Print help
+--- stderr

@@ -1,0 +1,13 @@
+$ omafeed import --help
+exit: 0
+--- stdout
+Import subscriptions from an OPML file
+
+Usage: omafeed import <FILE>
+
+Arguments:
+  <FILE>  
+
+Options:
+  -h, --help  Print help
+--- stderr

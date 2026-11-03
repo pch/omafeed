@@ -1,0 +1,6 @@
+$ omafeed subscribe {server}/ --folder 2 --title Named
+exit: 0
+--- stdout
+Subscribed to "Named" (feed 3). Run omafeed refresh to fetch its articles.
+Also found: Other Feed	{server}/other.xml
+--- stderr

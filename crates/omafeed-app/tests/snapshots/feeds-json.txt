@@ -1,0 +1,5 @@
+$ omafeed feeds --json
+exit: 0
+--- stdout
+{"feeds":[{"error":null,"folder":2,"id":1,"site_url":"{server}/","title":"Local Feed","unread":3,"url":"{server}/local.xml"},{"error":null,"folder":null,"id":2,"site_url":"{server}/","title":"Other Feed","unread":1,"url":"{server}/other.xml"}],"folders":[{"id":2,"name":"Sub","parent":1},{"id":1,"name":"Work","parent":null}],"starred":0,"unread":4}
+--- stderr

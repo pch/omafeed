@@ -1,0 +1,7 @@
+$ omafeed read 1 1 2
+exit: 0
+--- stdout
+Marked 2 articles read
+1	First
+2	Second
+--- stderr

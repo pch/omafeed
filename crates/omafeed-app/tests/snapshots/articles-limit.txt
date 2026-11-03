@@ -1,0 +1,6 @@
+$ omafeed articles --scope all --limit 1
+exit: 0
+--- stdout
+4	unread	-	2024-01-04	Other Feed	Elsewhere
+--- stderr
+More articles match; raise --limit or use --offset.

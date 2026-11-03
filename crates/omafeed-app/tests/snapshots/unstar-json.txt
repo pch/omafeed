@@ -1,0 +1,5 @@
+$ omafeed unstar 1 --json
+exit: 0
+--- stdout
+{"articles":[{"id":1,"title":"First"}],"updated":1}
+--- stderr

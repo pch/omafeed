@@ -1,0 +1,7 @@
+$ omafeed star abc
+exit: 2
+--- stdout
+--- stderr
+error: invalid value 'abc' for '<IDS>...': invalid digit found in string
+
+For more information, try '--help'.

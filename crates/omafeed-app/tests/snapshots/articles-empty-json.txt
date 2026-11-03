@@ -1,0 +1,5 @@
+$ omafeed articles --scope starred --json
+exit: 0
+--- stdout
+{"articles":[],"count":0,"truncated":false}
+--- stderr

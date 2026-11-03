@@ -1,0 +1,18 @@
+$ omafeed articles --help
+exit: 0
+--- stdout
+List articles, newest first
+
+Usage: omafeed articles [OPTIONS]
+
+Options:
+      --scope <SCOPE>    unread, today, starred, all, feed:ID or folder:ID [default: unread]
+      --search <SEARCH>  Search within the scope, as `search` does
+      --exact            Disable typo, plural and prefix expansion
+      --unread           Only unread articles
+      --since <SINCE>    Only articles published this recently, e.g. 90m, 24h, 2d or 1w
+      --limit <LIMIT>    [default: 50]
+      --offset <OFFSET>  [default: 0]
+      --json             Print JSON, with a preview of each article, instead of text
+  -h, --help             Print help
+--- stderr

@@ -1,0 +1,13 @@
+$ omafeed export --help
+exit: 0
+--- stdout
+Export subscriptions to an OPML file
+
+Usage: omafeed export <FILE>
+
+Arguments:
+  <FILE>  
+
+Options:
+  -h, --help  Print help
+--- stderr

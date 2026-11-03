@@ -1,0 +1,10 @@
+refresh_minutes = 30
+font_size = 18
+remote_images = false
+theme = "light"
+width = 1300
+height = 850
+sidebar_width = 240
+list_width = 340
+scope = "Unread"
+unread_only = false

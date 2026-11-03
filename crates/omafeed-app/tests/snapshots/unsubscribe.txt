@@ -1,0 +1,5 @@
+$ omafeed unsubscribe 3 --yes
+exit: 0
+--- stdout
+Removed "Named" and its 0 articles (0 starred)
+--- stderr

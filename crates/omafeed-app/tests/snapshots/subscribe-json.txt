@@ -1,0 +1,5 @@
+$ omafeed subscribe {server}/local.xml --json
+exit: 0
+--- stdout
+{"id":1,"other_feeds_found":[],"title":"Local Feed","url":"{server}/local.xml"}
+--- stderr

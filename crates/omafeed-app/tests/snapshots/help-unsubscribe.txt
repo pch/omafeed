@@ -1,0 +1,15 @@
+$ omafeed unsubscribe --help
+exit: 0
+--- stdout
+Delete a feed and all its articles, starred ones included (requires --yes)
+
+Usage: omafeed unsubscribe [OPTIONS] <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --yes   Confirm the permanent deletion
+      --json  Print JSON instead of text
+  -h, --help  Print help
+--- stderr
