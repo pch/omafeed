@@ -46,6 +46,15 @@ or `Store::record_failure`. Progress events go to an async channel: the window s
 its status bar, `omafeed refresh` prints them. Feeds finish in any order, so the command's
 lines come in completion order.
 
+The window shows read and star changes at once and writes them in the background
+(`ui/changes.rs`). Each change of an article's read or star state gets a sequence number, and
+so does each "mark all read" or undo when it is sent. Every database read remembers where the
+sequence stood when it was sent, and a field changed since then, or still being written, keeps
+the window's value. A write's result, and the reload that shows the saved state after a failed
+write, apply only while no newer change of that field was made. Undo restores the newest
+"mark all read" batch, and checks the open article when the undo finishes, not when it was
+asked for.
+
 The window notices changes made by other programs (such as `omafeed star 3` in a terminal)
 by polling SQLite's `PRAGMA data_version` every two seconds and reloading when it moves.
 

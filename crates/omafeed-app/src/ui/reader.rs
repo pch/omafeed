@@ -226,18 +226,15 @@ impl Ui {
         let Some(loaded) = self.pending_mark.take() else {
             return;
         };
-        let id = {
-            let mut selected = self.selected.borrow_mut();
-            match selected.as_mut() {
-                Some(a) if a.id == loaded && !a.read => {
-                    a.read = true;
-                    self.update_buttons(a);
-                    a.id
-                }
-                _ => return,
-            }
-        };
-        self.set_state(id, Some(true), None);
+        let unread = self
+            .selected
+            .borrow()
+            .as_ref()
+            .is_some_and(|a| a.id == loaded && !a.read);
+        // Shown at once and put back if the write fails, like any other change.
+        if unread {
+            self.set_state(loaded, Some(true), None);
+        }
     }
 
     pub(super) fn open_original(&self) {

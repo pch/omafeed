@@ -1,5 +1,6 @@
 //! Main window: a library sidebar, an article list, and a WebKit reader.
 mod articles;
+mod changes;
 mod keys;
 mod reader;
 mod sidebar;
@@ -238,7 +239,10 @@ pub struct Ui {
     collapsed: RefCell<HashSet<i64>>,
     /// Decoded favicons by cache path; `None` records a missing icon.
     favicons: RefCell<HashMap<PathBuf, Option<gdk::Texture>>>,
-    undo: RefCell<Vec<i64>>,
+    /// The last "mark all read", for Ctrl+Z.
+    undo: RefCell<changes::Undo>,
+    /// Read and star changes shown before the database confirmed them.
+    changes: RefCell<changes::Changes>,
     page: Cell<usize>,
     /// Incremented per request so stale async results are discarded.
     generation: Cell<u64>,
@@ -343,6 +347,7 @@ impl Ui {
             collapsed: RefCell::default(),
             favicons: RefCell::default(),
             undo: RefCell::default(),
+            changes: RefCell::default(),
             page: Cell::new(0),
             generation: Cell::new(0),
             selection_generation: Cell::new(0),
@@ -583,6 +588,7 @@ impl Ui {
         let selected = self.selected.borrow().as_ref().map(|a| a.id);
         let generation = self.selection_generation.get();
         let writes = self.state_writes.get();
+        let mark = self.changes.borrow().mark();
         glib::spawn_future_local(async move {
             let result =
                 u.db.call(move |s| {
@@ -606,6 +612,9 @@ impl Ui {
                                     a.read = old.read;
                                     a.starred = old.starred;
                                 }
+                                u.changes
+                                    .borrow()
+                                    .overlay(a.id, mark, &mut a.read, &mut a.starred);
                                 // State-only updates preserve the reader's scroll position.
                                 let render = u.selected.borrow().as_ref().is_some_and(|old| {
                                     old.html != a.html
