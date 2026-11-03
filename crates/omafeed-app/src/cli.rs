@@ -1,18 +1,17 @@
 //! Command-line operations that run without opening a window.
+mod json;
+
 use crate::DB_FILE;
 use anyhow::{Context, Result, bail};
 use omafeed_core::{
     Db, Error, Paths, Settings,
     content::{one_line, readable},
     ingest::{Progress, Refresher},
-    model::{
-        Article, ArticleId, FeedId, FolderId, Library, ParseScopeError, Query, Scope, StatePatch,
-    },
+    model::{ArticleId, FeedId, FolderId, Library, ParseScopeError, Query, Scope, StatePatch},
     reading,
     store::PAGE_SIZE,
     subscriptions::{self, Removal},
 };
-use serde_json::{Value, json};
 use std::path::PathBuf;
 
 /// Article IDs from `articles`, for the commands that change many articles at once.
@@ -222,7 +221,7 @@ async fn refresh(db: &Db, paths: &Paths, json: bool) -> Result<()> {
                             error.as_deref().unwrap_or("OK")
                         );
                     }
-                    feeds.push(json!({ "title": title, "error": error }));
+                    feeds.push(json::Refreshed { title, error });
                 }
                 Progress::Finished { total, failed } => {
                     if !json {
@@ -243,7 +242,11 @@ async fn refresh(db: &Db, paths: &Paths, json: bool) -> Result<()> {
     let (feeds, totals) = logger.await?;
     if json {
         let (total, failed) = totals.unwrap_or_default();
-        print_json(&json!({ "total": total, "failed": failed, "feeds": feeds }))?;
+        json::print(&json::Refresh {
+            total,
+            failed,
+            feeds,
+        })?;
     }
     Ok(())
 }
@@ -262,11 +265,9 @@ async fn status(db: &Db) -> Result<()> {
 async fn discover(url: &str, json: bool) -> Result<()> {
     let found = Refresher::new()?.discover(url).await?;
     if json {
-        let feeds: Vec<_> = found
-            .iter()
-            .map(|f| json!({ "title": f.title, "url": f.url }))
-            .collect();
-        return print_json(&json!({ "feeds": feeds }));
+        return json::print(&json::Discovered {
+            feeds: found.iter().map(json::Found::from).collect(),
+        });
     }
     for feed in found {
         println!("{}\t{}", feed.title, feed.url);
@@ -317,15 +318,6 @@ fn parse_duration(text: &str) -> Result<i64, String> {
     }
 }
 
-fn print_json(value: &Value) -> Result<()> {
-    println!("{}", serde_json::to_string(value)?);
-    Ok(())
-}
-
-fn iso(timestamp: i64) -> Option<String> {
-    chrono::DateTime::from_timestamp(timestamp, 0).map(|d| d.to_rfc3339())
-}
-
 /// The local date, matching `--scope today` and the reader's own dates.
 fn day(timestamp: i64) -> String {
     chrono::DateTime::from_timestamp(timestamp, 0)
@@ -361,20 +353,6 @@ fn plural(count: usize, noun: &str) -> String {
     format!("{count} {noun}{}", if count == 1 { "" } else { "s" })
 }
 
-fn summary(a: &Article) -> Value {
-    json!({
-        "id": a.id,
-        "feed_id": a.feed_id,
-        "feed": a.feed_title,
-        "title": a.title,
-        "url": a.url,
-        "author": a.author,
-        "published": iso(a.published),
-        "read": a.read,
-        "starred": a.starred,
-    })
-}
-
 async fn feeds(db: &Db, json: bool) -> Result<()> {
     let lib = db.call(|s| s.library()).await?;
     if !json {
@@ -407,32 +385,7 @@ async fn feeds(db: &Db, json: bool) -> Result<()> {
         }
         return Ok(());
     }
-    let folders: Vec<_> = lib
-        .folders
-        .iter()
-        .map(|f| json!({ "id": f.id, "parent": f.parent, "name": f.name }))
-        .collect();
-    let feeds: Vec<_> = lib
-        .feeds
-        .iter()
-        .map(|f| {
-            json!({
-                "id": f.id,
-                "folder": f.folder,
-                "title": f.title,
-                "url": f.url,
-                "site_url": f.site_url,
-                "unread": f.unread,
-                "error": f.error,
-            })
-        })
-        .collect();
-    print_json(&json!({
-        "unread": lib.unread,
-        "starred": lib.starred,
-        "folders": folders,
-        "feeds": feeds,
-    }))
+    json::print(&json::Feeds::from(&lib))
 }
 
 /// Newest-first articles, reading past one page when `limit` or `since` asks for more.
@@ -503,15 +456,11 @@ async fn articles(db: &Db, scope: Scope, search: String, list: List) -> Result<(
         }
         return Ok(());
     }
-    let items: Vec<_> = found
-        .iter()
-        .map(|a| {
-            let mut item = summary(a);
-            item["preview"] = json!(a.preview);
-            item
-        })
-        .collect();
-    print_json(&json!({ "count": items.len(), "truncated": truncated, "articles": items }))
+    json::print(&json::Articles {
+        count: found.len(),
+        truncated,
+        articles: found.iter().map(json::ArticleItem::listed).collect(),
+    })
 }
 
 async fn article(db: &Db, id: i64, html: bool, json: bool) -> Result<()> {
@@ -521,13 +470,12 @@ async fn article(db: &Db, id: i64, html: bool, json: bool) -> Result<()> {
         .await?
         .ok_or(Error::ArticleNotFound(id))?;
     if json {
-        let mut item = summary(&a);
-        if html {
-            item["html"] = json!(a.html);
+        let item = if html {
+            json::ArticleItem::with_html(&a)
         } else {
-            item["text"] = json!(readable(&a.html));
-        }
-        return print_json(&item);
+            json::ArticleItem::with_text(&a, readable(&a.html))
+        };
+        return json::print(&item);
     }
     let mut details = vec![one_line(&a.feed_title)];
     if !a.author.is_empty() {
@@ -556,11 +504,7 @@ async fn set_state(
     let ids: Vec<ArticleId> = ids.into_iter().map(ArticleId).collect();
     let changed = reading::change(db, ids, patch).await?;
     if json {
-        let articles: Vec<_> = changed
-            .iter()
-            .map(|(id, title)| json!({ "id": id, "title": title }))
-            .collect();
-        return print_json(&json!({ "updated": changed.len(), "articles": articles }));
+        return json::print(&json::Updated::from(changed.as_slice()));
     }
     println!(
         "{}",
@@ -597,21 +541,22 @@ async fn subscribe(
         }
         return Ok(());
     }
-    let others: Vec<_> = found[1..]
-        .iter()
-        .map(|c| json!({ "title": c.title, "url": c.url }))
-        .collect();
-    print_json(&json!({ "id": id, "title": name, "url": feed_url, "other_feeds_found": others }))
+    json::print(&json::Subscribed {
+        id,
+        title: name,
+        url: feed_url,
+        other_feeds_found: found[1..].iter().map(json::Found::from).collect(),
+    })
 }
 
 async fn unsubscribe(db: &Db, id: i64, yes: bool, json: bool) -> Result<()> {
+    let removal = subscriptions::unsubscribe(db, FeedId(id), yes).await?;
     let Removal {
-        id,
         title,
-        url,
         articles: total,
         starred,
-    } = subscriptions::unsubscribe(db, FeedId(id), yes).await?;
+        ..
+    } = &removal;
     if !yes {
         bail!(
             "Not removed. This would permanently delete \"{title}\" and its {total} articles ({starred} starred). Run again with --yes to confirm."
@@ -620,13 +565,11 @@ async fn unsubscribe(db: &Db, id: i64, yes: bool, json: bool) -> Result<()> {
     if !json {
         println!(
             "Removed \"{}\" and its {total} articles ({starred} starred)",
-            one_line(&title)
+            one_line(title)
         );
         return Ok(());
     }
-    print_json(&json!({
-        "removed": { "id": id, "title": title, "url": url, "articles": total, "starred": starred }
-    }))
+    json::print(&json::Unsubscribed::from(removal))
 }
 
 #[cfg(test)]

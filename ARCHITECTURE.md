@@ -33,7 +33,7 @@ Run without a command, `omafeed` opens the reader window; with a command (`omafe
 | Module | Contents |
 | --- | --- |
 | `lib` | Argument parsing (`main`), which dispatches to `cli::run` or builds the GTK application. `main.rs` only calls it. With the `test-support` feature, `test_support` exposes the desktop smoke test to `tests/desktop_smoke.rs`. |
-| `cli` | Every command: argument definitions, text and JSON output. |
+| `cli` | Every command: argument definitions and text output. `cli/json.rs` has one `Serialize` type per `--json` shape, printed through `serde_json::Value` so the keys stay sorted, byte for byte as before. |
 | `ui` | The main window. `Ui` coordinates: it owns the panes (`Header`, `SidebarPane`, `ListPane`, `ReaderPane`), each holding its own widgets, and a `View` (`view.rs`) with what is shown: view and page, the articles on it, the open article, collapsed folders, and the read/star changes (`changes.rs`) and undo in flight. `View` has no GTK and decides what each late database result may change; it is unit-tested on its own. `articles`, `sidebar`, `reader`, `keys` and `theme` add methods to `Ui`; `widgets` has small constructors; `tests` holds the desktop smoke test (only with `test-support`). |
 | `dialogs` | Library manager, subscription and folder forms, OPML import/export, settings, shortcuts and about. |
 
