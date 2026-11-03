@@ -1,0 +1,5 @@
+$ omafeed articles --json
+exit: 0
+--- stdout
+{"articles":[{"author":"","feed":"Other Feed","feed_id":2,"id":4,"preview":"News","published":"2024-01-04T08:00:00+00:00","read":false,"starred":false,"title":"Elsewhere","url":"http://localhost/9"},{"author":"(Ann)","feed":"Local Feed","feed_id":1,"id":3,"preview":"Notes See this. one two","published":"2024-01-03T12:30:00+00:00","read":false,"starred":false,"title":"Third","url":"http://localhost/3"},{"author":"","feed":"Local Feed","feed_id":1,"id":2,"preview":"Goodbye","published":"2024-01-02T00:00:00+00:00","read":false,"starred":false,"title":"Second","url":"http://localhost/2"},{"author":"","feed":"Local Feed","feed_id":1,"id":1,"preview":"Hello world","published":"2024-01-01T00:00:00+00:00","read":false,"starred":false,"title":"First","url":"http://localhost/1"}],"count":4,"truncated":false}
+--- stderr

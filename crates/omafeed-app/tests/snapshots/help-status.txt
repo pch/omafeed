@@ -1,0 +1,10 @@
+$ omafeed status --help
+exit: 0
+--- stdout
+Show library totals and feed errors
+
+Usage: omafeed status
+
+Options:
+  -h, --help  Print help
+--- stderr

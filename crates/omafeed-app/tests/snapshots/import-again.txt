@@ -1,0 +1,6 @@
+$ omafeed import {home}/subscriptions.opml
+exit: 0
+--- stdout
+Imported 0, skipped 1, invalid 1
+--- stderr
+bad: Feed URL must use HTTP or HTTPS

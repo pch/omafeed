@@ -1,0 +1,5 @@
+$ omafeed search hello
+exit: 0
+--- stdout
+1	unread	-	2024-01-01	Local Feed	First
+--- stderr

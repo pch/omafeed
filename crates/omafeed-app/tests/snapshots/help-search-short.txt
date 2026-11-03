@@ -1,0 +1,20 @@
+$ omafeed search -h
+exit: 0
+--- stdout
+Search articles for words, e.g. omafeed search "agentic engineering"
+
+Usage: omafeed search [OPTIONS] <QUERY>...
+
+Arguments:
+  <QUERY>...  Words to find, quoted or not; an article must match all of them, in any order. Like the app, a word also matches close misspellings and its plural or singular, and the last word matches longer words that start with it; --exact turns this off. Put `--` before a word that starts with a dash: omafeed search -- -word
+
+Options:
+      --scope <SCOPE>    unread, today, starred, all, feed:ID or folder:ID [default: all]
+      --exact            Disable typo, plural and prefix expansion
+      --unread           Only unread articles
+      --since <SINCE>    Only articles published this recently, e.g. 90m, 24h, 2d or 1w
+      --limit <LIMIT>    [default: 50]
+      --offset <OFFSET>  [default: 0]
+      --json             Print JSON, with a preview of each article, instead of text
+  -h, --help             Print help
+--- stderr

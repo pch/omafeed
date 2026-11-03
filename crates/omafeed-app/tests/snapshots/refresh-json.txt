@@ -1,0 +1,5 @@
+$ omafeed refresh --json
+exit: 0
+--- stdout
+{"failed":0,"feeds":[{"error":null,"title":"Local Feed"}],"total":1}
+--- stderr

@@ -1,0 +1,5 @@
+$ omafeed read 1 999
+exit: 1
+--- stdout
+--- stderr
+Omafeed: No article with id 999

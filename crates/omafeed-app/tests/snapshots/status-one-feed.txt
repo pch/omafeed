@@ -1,0 +1,5 @@
+$ omafeed status
+exit: 0
+--- stdout
+1 feeds · 0 folders · 3 unread · 0 starred
+--- stderr

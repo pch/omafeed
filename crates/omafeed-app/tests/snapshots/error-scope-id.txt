@@ -1,0 +1,7 @@
+$ omafeed articles --scope feed:x
+exit: 2
+--- stdout
+--- stderr
+error: invalid value 'feed:x' for '--scope <SCOPE>': expected a number in 'feed:x'
+
+For more information, try '--help'.

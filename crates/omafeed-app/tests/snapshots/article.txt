@@ -1,0 +1,14 @@
+$ omafeed article 3
+exit: 0
+--- stdout
+Third
+Local Feed · (Ann) · 2024-01-03 · unread
+http://localhost/3
+
+## Notes
+
+See this.
+
+- one
+- two
+--- stderr

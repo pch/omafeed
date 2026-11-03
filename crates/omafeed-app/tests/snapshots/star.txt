@@ -1,0 +1,7 @@
+$ omafeed star 2 1
+exit: 0
+--- stdout
+Starred 2 articles
+1	First
+2	Second
+--- stderr

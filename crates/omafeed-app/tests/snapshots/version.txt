@@ -1,0 +1,5 @@
+$ omafeed --version
+exit: 0
+--- stdout
+omafeed {version}
+--- stderr

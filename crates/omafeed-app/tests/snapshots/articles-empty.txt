@@ -1,0 +1,5 @@
+$ omafeed articles --scope starred
+exit: 0
+--- stdout
+--- stderr
+No articles match.

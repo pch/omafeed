@@ -1,0 +1,5 @@
+$ omafeed unsubscribe 2 --yes --json
+exit: 0
+--- stdout
+{"removed":{"articles":1,"id":2,"starred":0,"title":"Other Feed","url":"{server}/other.xml"}}
+--- stderr

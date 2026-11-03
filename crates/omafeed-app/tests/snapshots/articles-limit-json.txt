@@ -1,0 +1,5 @@
+$ omafeed articles --scope all --limit 1 --offset 1 --json
+exit: 0
+--- stdout
+{"articles":[{"author":"(Ann)","feed":"Local Feed","feed_id":1,"id":3,"preview":"Notes See this. one two","published":"2024-01-03T12:30:00+00:00","read":false,"starred":false,"title":"Third","url":"http://localhost/3"}],"count":1,"truncated":true}
+--- stderr

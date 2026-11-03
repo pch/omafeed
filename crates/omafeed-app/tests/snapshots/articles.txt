@@ -1,0 +1,8 @@
+$ omafeed articles
+exit: 0
+--- stdout
+4	unread	-	2024-01-04	Other Feed	Elsewhere
+3	unread	-	2024-01-03	Local Feed	Third
+2	unread	-	2024-01-02	Local Feed	Second
+1	unread	-	2024-01-01	Local Feed	First
+--- stderr

@@ -1,0 +1,5 @@
+$ omafeed search Hello World --json
+exit: 0
+--- stdout
+{"articles":[{"author":"","feed":"Local Feed","feed_id":1,"id":1,"preview":"Hello world","published":"2024-01-01T00:00:00+00:00","read":false,"starred":false,"title":"First","url":"http://localhost/1"}],"count":1,"truncated":false}
+--- stderr

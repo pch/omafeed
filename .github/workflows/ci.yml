@@ -53,6 +53,25 @@ jobs:
           desktop-file-validate data/io.github.pch.Omafeed.desktop
           appstreamcli validate --no-net data/io.github.pch.Omafeed.metainfo.xml
 
+  msrv:
+    name: Build with the minimum supported Rust version
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    timeout-minutes: 45
+    steps:
+      - name: Install dependencies
+        run: pacman -Syu --noconfirm --needed rustup git gtk4 libadwaita webkitgtk-6.0 pkgconf
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the toolchain named by rust-version
+        run: |
+          msrv=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)
+          rustup toolchain install "$msrv" --profile minimal
+          echo "MSRV=$msrv" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: msrv
+      - run: cargo "+$MSRV" build --workspace --all-targets --locked
+
   package:
     name: Build Arch package
     runs-on: ubuntu-latest

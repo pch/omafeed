@@ -1,0 +1,5 @@
+$ omafeed articles --scope feed:2 --json
+exit: 0
+--- stdout
+{"articles":[{"author":"","feed":"Other Feed","feed_id":2,"id":4,"preview":"News","published":"2024-01-04T08:00:00+00:00","read":false,"starred":false,"title":"Elsewhere","url":"http://localhost/9"}],"count":1,"truncated":false}
+--- stderr

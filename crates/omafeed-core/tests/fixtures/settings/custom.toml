@@ -1,0 +1,13 @@
+refresh_minutes = 60
+font_size = 21
+remote_images = false
+theme = "dark"
+width = 1000
+height = 700
+sidebar_width = 200
+list_width = 300
+selected_article = 42
+unread_only = true
+
+[scope]
+Folder = 3

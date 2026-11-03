@@ -1,0 +1,5 @@
+$ omafeed article 3 --json
+exit: 0
+--- stdout
+{"author":"(Ann)","feed":"Local Feed","feed_id":1,"id":3,"published":"2024-01-03T12:30:00+00:00","read":false,"starred":false,"text":"## Notes\n\nSee this.\n\n- one\n- two","title":"Third","url":"http://localhost/3"}
+--- stderr

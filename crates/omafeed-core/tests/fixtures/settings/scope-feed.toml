@@ -1,0 +1,12 @@
+refresh_minutes = 30
+font_size = 18
+remote_images = true
+theme = "omarchy"
+width = 1300
+height = 850
+sidebar_width = 240
+list_width = 340
+unread_only = false
+
+[scope]
+Feed = 18

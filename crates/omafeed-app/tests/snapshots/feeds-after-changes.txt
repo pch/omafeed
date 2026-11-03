@@ -1,0 +1,12 @@
+$ omafeed feeds
+exit: 0
+--- stdout
+1 feeds · 2 folders · 3 unread · 1 starred
+
+ID	FOLDER
+1	Work
+2	Work/Sub
+
+ID	UNREAD	FEED	FOLDER	ERROR
+1	3	Local Feed	Work/Sub	
+--- stderr

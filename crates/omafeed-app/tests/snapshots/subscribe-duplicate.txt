@@ -1,0 +1,5 @@
+$ omafeed subscribe {server}/extra.xml
+exit: 1
+--- stdout
+--- stderr
+Omafeed: UNIQUE constraint failed: feeds.url: Error code 2067: constraint failed

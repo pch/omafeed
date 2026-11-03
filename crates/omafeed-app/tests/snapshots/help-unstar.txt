@@ -1,0 +1,14 @@
+$ omafeed unstar --help
+exit: 0
+--- stdout
+Remove the star from articles
+
+Usage: omafeed unstar [OPTIONS] <IDS>...
+
+Arguments:
+  <IDS>...  
+
+Options:
+      --json  Print JSON instead of text
+  -h, --help  Print help
+--- stderr

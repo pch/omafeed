@@ -1,0 +1,7 @@
+$ omafeed refresh
+exit: 0
+--- stdout
+Refreshing 1 feeds
+[1/1] Local Feed: OK
+Finished: 1 feeds, 0 failed
+--- stderr

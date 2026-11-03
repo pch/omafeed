@@ -1,0 +1,5 @@
+$ omafeed subscribe ftp://example.org/feed
+exit: 1
+--- stdout
+--- stderr
+Omafeed: Enter a website or feed URL starting with https://: Feed URL must use HTTP or HTTPS

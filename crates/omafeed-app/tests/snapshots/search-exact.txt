@@ -1,0 +1,5 @@
+$ omafeed search hell --exact
+exit: 0
+--- stdout
+--- stderr
+No articles match.

@@ -1,0 +1,9 @@
+$ omafeed help --help
+exit: 2
+--- stdout
+--- stderr
+error: unrecognized subcommand '--help'
+
+Usage: omafeed [COMMAND]
+
+For more information, try '--help'.

@@ -1,0 +1,6 @@
+$ omafeed discover {server}/
+exit: 0
+--- stdout
+Extra	{server}/extra.xml
+Other Feed	{server}/other.xml
+--- stderr

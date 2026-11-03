@@ -1,0 +1,6 @@
+$ omafeed unstar 3
+exit: 0
+--- stdout
+Unstarred 1 article
+3	Third
+--- stderr
