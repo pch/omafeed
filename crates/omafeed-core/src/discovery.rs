@@ -103,8 +103,11 @@ pub async fn discover(client: &Client, input: &str) -> Result<Vec<Candidate>> {
     if let Ok(feed) = direct {
         return Ok(vec![feed]);
     }
+    // A page on the internet must not send us to the local network.
+    let page = Url::parse(&fallback_base)?;
+    urls.retain(|u| Url::parse(u).is_ok_and(|u| crate::util::may_request(&page, &u)));
     if urls.is_empty() {
-        let base = Url::parse(&fallback_base)?;
+        let base = &page;
         for suffix in [
             "/feed/",
             "/rss/",
@@ -142,4 +145,42 @@ pub async fn discover(client: &Client, input: &str) -> Result<Vec<Candidate>> {
         );
     }
     Ok(feeds)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::http::tests::{client, ok, server};
+
+    const RSS: &str = r#"<rss version="2.0"><channel><title>Found</title></channel></rss>"#;
+
+    #[tokio::test]
+    async fn a_remote_page_cannot_advertise_a_local_feed() {
+        let (local, hits) = server(|_| ok("application/rss+xml", RSS)).await;
+        let page = format!(
+            r#"<html><head><link rel="alternate" type="application/rss+xml" href="http://{local}/feed"></head></html>"#
+        );
+        let (site, _) = server(move |_| ok("text/html", &page)).await;
+        let client = client(&[("remote.test", site)]);
+        let found = discover(&client, &format!("http://remote.test:{}/", site.port())).await;
+        assert!(found.is_err(), "{found:?}");
+        assert!(
+            hits.lock().unwrap().is_empty(),
+            "the local feed was requested"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_local_page_may_advertise_a_local_feed() {
+        let (local, _) = server(|_| ok("application/rss+xml", RSS)).await;
+        let page = format!(
+            r#"<html><head><link rel="alternate" type="application/rss+xml" href="http://{local}/feed"></head></html>"#
+        );
+        let (site, _) = server(move |_| ok("text/html", &page)).await;
+        let found = discover(&client(&[]), &format!("http://{site}/"))
+            .await
+            .unwrap();
+        assert_eq!(found[0].url, format!("http://{local}/feed"));
+        assert_eq!(found[0].title, "Found");
+    }
 }
