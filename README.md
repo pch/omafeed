@@ -68,10 +68,10 @@ For a system-wide install, build as your user and install with `sudo make instal
 
 ### Option 3: Prebuilt binary
 
-Each [release](https://github.com/pch/omafeed/releases) includes `omafeed-VERSION-x86_64-linux.tar.gz`, built on Arch Linux. It needs `gtk4`, `libadwaita`, and `webkitgtk-6.0`, and is intended for up-to-date Arch-based systems. Extract it into `~/.local`:
+Each [release](https://github.com/pch/omafeed/releases) includes `omafeed-VERSION-x86_64-linux.tar.gz`, built on Arch Linux, and `omafeed-VERSION-aarch64-linux.tar.gz` for ARM, built on Debian 13. Both need `gtk4`, `libadwaita`, and `webkitgtk-6.0`, and are intended for up-to-date Arch-based systems. Extract the one for your architecture (`uname -m`) into `~/.local`:
 
 ```sh
-tar -xzf omafeed-*-x86_64-linux.tar.gz -C ~/.local --strip-components=1
+tar -xzf omafeed-*-$(uname -m)-linux.tar.gz -C ~/.local --strip-components=1
 ```
 
 After installing, open **Omafeed** from your launcher or run `omafeed`.
