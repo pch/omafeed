@@ -3,7 +3,7 @@
 Notable changes to Omafeed. Earlier versions are described in the
 [GitHub releases](https://github.com/pch/omafeed/releases).
 
-## Unreleased
+## 0.2.4 — 2026-11-03
 
 ### Upgrading
 
