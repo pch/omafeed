@@ -121,6 +121,7 @@ fn library(path: &Path, documents: &[String], extra_terms: usize) -> Store {
             text,
         });
     }
+    let revision = store.library().unwrap().feeds[0].revision;
     for chunk in entries.chunks(200) {
         let update = Update {
             entries: chunk.to_vec(),
@@ -129,7 +130,7 @@ fn library(path: &Path, documents: &[String], extra_terms: usize) -> Store {
             site_url: None,
         };
         store
-            .commit_download(feed, Download::Updated(update), 30)
+            .commit_download(feed, revision, Download::Updated(update), 30)
             .unwrap();
     }
     store
@@ -229,8 +230,9 @@ fn report(store: &mut Store, title: &str, queries: &[&str]) {
                 modified: None,
                 site_url: None,
             };
+            let revision = store.library().unwrap().feeds[0].revision;
             store
-                .commit_download(1, Download::Updated(update), 30)
+                .commit_download(1, revision, Download::Updated(update), 30)
                 .unwrap();
             timed(|| search(store, query, false))
         });

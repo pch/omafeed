@@ -190,12 +190,13 @@ impl Pass {
             _ => None,
         }
         .unwrap_or_else(|| feed.website().to_owned());
-        let id = feed.id;
+        // The feed may be edited or deleted while it downloads; the store then drops the result.
+        let (id, revision) = (feed.id, feed.revision);
         let error = match result {
             Ok(download) => {
                 let minutes = self.minutes;
                 self.db
-                    .call(move |s| s.commit_download(id, download, minutes))
+                    .call(move |s| s.commit_download(id, revision, download, minutes))
                     .await
                     .err()
                     .map(|e| format!("{e:#}"))
@@ -209,7 +210,7 @@ impl Pass {
                 let (error, now) = (message.clone(), self.now);
                 let saved = self
                     .db
-                    .call(move |s| s.record_failure(id, &error, now, delay))
+                    .call(move |s| s.record_failure(id, revision, &error, now, delay))
                     .await;
                 Some(match saved {
                     Ok(()) => message,
