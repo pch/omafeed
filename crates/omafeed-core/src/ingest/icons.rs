@@ -1,6 +1,8 @@
 //! Discover and decode website icons into small, validated PNGs for GTK.
-use crate::util::sha256_hex;
-use futures_util::StreamExt;
+use crate::{
+    http::{Body, read_limited},
+    util::sha256_hex,
+};
 use std::{
     io::Cursor,
     path::{Path, PathBuf},
@@ -34,7 +36,7 @@ async fn get(
     client: &reqwest::Client,
     url: &str,
     limit: usize,
-    prefix: bool,
+    body: Body,
 ) -> Option<(String, Vec<u8>)> {
     let response = client
         .get(url)
@@ -46,29 +48,7 @@ async fn get(
         return None;
     }
     let final_url = response.url().to_string();
-    let mut chunks = response.bytes_stream();
-    let mut bytes = Vec::new();
-    while let Some(chunk) = chunks.next().await {
-        let chunk = chunk.ok()?;
-        if bytes.len() + chunk.len() > limit {
-            if !prefix {
-                return None;
-            }
-            bytes.extend_from_slice(&chunk[..limit - bytes.len()]);
-            break;
-        }
-        // Only search the new data (plus a tag-sized overlap) for the end of <head>.
-        let search_from = bytes.len().saturating_sub(6);
-        bytes.extend_from_slice(&chunk);
-        // A large homepage body must not invalidate usable declarations in its head.
-        if prefix
-            && bytes[search_from..]
-                .windows(7)
-                .any(|w| w.eq_ignore_ascii_case(b"</head>"))
-        {
-            break;
-        }
-    }
+    let bytes = read_limited(response, limit, body).await.ok()?;
     Some((final_url, bytes))
 }
 pub fn discover(html: &str, base: &str) -> Vec<String> {
@@ -209,7 +189,7 @@ pub async fn cache(
         site.set_query(None);
     }
     let mut candidates = vec![];
-    if let Some((base, html)) = get(client, site.as_str(), HEAD_LIMIT, true).await {
+    if let Some((base, html)) = get(client, site.as_str(), HEAD_LIMIT, Body::Head).await {
         candidates = discover(&String::from_utf8_lossy(&html), &base);
         if let Ok(final_site) = url::Url::parse(&base) {
             site = final_site;
@@ -232,7 +212,7 @@ pub async fn cache(
     // Page markup must not point requests at the local network unless the site lives there.
     candidates.retain(|c| url::Url::parse(c).is_ok_and(|u| crate::util::may_request(&site, &u)));
     for url in candidates {
-        let Some((_, bytes)) = get(client, &url, ICON_LIMIT, false).await else {
+        let Some((_, bytes)) = get(client, &url, ICON_LIMIT, Body::Whole).await else {
             continue;
         };
         let target = target.clone();

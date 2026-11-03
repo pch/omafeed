@@ -3,6 +3,7 @@ use super::{Ui, changes::Field, widgets::label};
 use chrono::{DateTime, Datelike, Local};
 use gtk::{glib, prelude::*};
 use omafeed_core::{
+    content::one_line,
     model::{Article, Scope},
     store::PAGE_SIZE,
 };
@@ -57,7 +58,7 @@ impl ArticleRow {
         title.set_lines(3);
         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
         grid.attach(&title, 1, 1, 1, 1);
-        let text = a.preview.split_whitespace().collect::<Vec<_>>().join(" ");
+        let text = one_line(&a.preview);
         if !text.is_empty() {
             let preview = label(&text, "preview");
             preview.set_wrap(true);
@@ -128,9 +129,7 @@ impl Ui {
         }
         self.rebuilding.set(true);
         let list = &self.list.list;
-        while let Some(child) = list.first_child() {
-            list.remove(&child);
-        }
+        list.remove_all();
         self.list.next.set_sensitive(articles.len() == PAGE_SIZE);
         self.list.previous.set_sensitive(page > 0);
         let selected = self

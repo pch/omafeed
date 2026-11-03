@@ -4,7 +4,7 @@ mod library;
 use crate::ui::Ui;
 use adw::prelude::*;
 use gtk::{gio, glib};
-use omafeed_core::config::Theme;
+use omafeed_core::{Settings, config::Theme};
 use std::rc::Rc;
 
 pub use library::library;
@@ -183,13 +183,16 @@ pub fn settings(u: Rc<Ui>) {
     glib::spawn_future_local(async move {
         let form = Form::new(&u.window, "Settings");
         let current = u.settings.borrow().clone();
-        let refresh = gtk::SpinButton::with_range(5.0, 1440.0, 5.0);
+        let minutes = Settings::REFRESH_MINUTES;
+        let refresh =
+            gtk::SpinButton::with_range((*minutes.start()).into(), (*minutes.end()).into(), 5.0);
         refresh.set_value(current.refresh_minutes.into());
         form.labeled(
             "Refresh interval (minutes, while Omafeed is open)",
             &refresh,
         );
-        let font = gtk::SpinButton::with_range(12.0, 32.0, 1.0);
+        let sizes = Settings::FONT_SIZES;
+        let font = gtk::SpinButton::with_range((*sizes.start()).into(), (*sizes.end()).into(), 1.0);
         font.set_value(current.font_size.into());
         form.labeled("Article text size", &font);
         let images = gtk::CheckButton::with_label("Load remote images when reading online");

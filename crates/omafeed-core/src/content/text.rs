@@ -1,4 +1,6 @@
 //! Text from article HTML: one line for previews and search, or paragraphs for reading.
+use super::one_line;
+
 /// Elements that separate words; inline elements (links, emphasis) do not.
 const BLOCKS: &[&str] = &[
     "address",
@@ -68,7 +70,7 @@ pub fn plain(html: &str) -> String {
             _ => {}
         }
     }
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+    one_line(&text)
 }
 
 /// Text for reading, not searching: paragraphs stay separate, and headings, lists, quotes and
@@ -167,7 +169,7 @@ impl Readable {
                 self.blocks.push(("---".into(), None));
             }
             "img" => {
-                let alt = e.attr("alt").map(str_line).unwrap_or_default();
+                let alt = e.attr("alt").map(one_line).unwrap_or_default();
                 if !alt.is_empty() {
                     self.inline.push_str(&format!(" [image: {alt}] "));
                 }
@@ -316,7 +318,7 @@ impl Readable {
         let raw = std::mem::take(&mut self.inline);
         let lines: Vec<String> = raw
             .split('\n')
-            .map(str_line)
+            .map(one_line)
             .filter(|l| !l.is_empty())
             .collect();
         // With no text yet, keep the marker: `<li><p>text</p></li>` opens the paragraph
@@ -364,11 +366,6 @@ impl Readable {
         }
         out
     }
-}
-
-/// One line with runs of whitespace collapsed to a single space.
-fn str_line(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[cfg(test)]

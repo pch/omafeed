@@ -3,9 +3,9 @@ use crate::DB_FILE;
 use anyhow::{Context, Result, bail};
 use omafeed_core::{
     Db, Paths, Settings,
-    content::readable,
+    content::{one_line, readable},
     ingest::{Progress, Refresher},
-    model::{Article, Folder, Query, Scope},
+    model::{Article, Library, Query, Scope},
     store::PAGE_SIZE,
 };
 use serde_json::{Value, json};
@@ -17,6 +17,27 @@ pub struct Ids {
     #[arg(required = true)]
     ids: Vec<i64>,
     /// Print JSON instead of text
+    #[arg(long)]
+    json: bool,
+}
+
+/// How `articles` and `search` filter and print their list.
+#[derive(clap::Args)]
+pub struct List {
+    /// Disable typo, plural and prefix expansion
+    #[arg(long)]
+    exact: bool,
+    /// Only unread articles
+    #[arg(long)]
+    unread: bool,
+    /// Only articles published this recently, e.g. 90m, 24h, 2d or 1w
+    #[arg(long, value_parser = parse_duration)]
+    since: Option<i64>,
+    #[arg(long, default_value_t = 50, value_parser = parse_limit)]
+    limit: usize,
+    #[arg(long, default_value_t = 0)]
+    offset: usize,
+    /// Print JSON, with a preview of each article, instead of text
     #[arg(long)]
     json: bool,
 }
@@ -56,22 +77,8 @@ pub enum Command {
         /// Search within the scope, as `search` does
         #[arg(long)]
         search: Option<String>,
-        /// Disable typo, plural and prefix expansion
-        #[arg(long)]
-        exact: bool,
-        /// Only unread articles
-        #[arg(long)]
-        unread: bool,
-        /// Only articles published this recently, e.g. 90m, 24h, 2d or 1w
-        #[arg(long, value_parser = parse_duration)]
-        since: Option<i64>,
-        #[arg(long, default_value_t = 50, value_parser = parse_limit)]
-        limit: usize,
-        #[arg(long, default_value_t = 0)]
-        offset: usize,
-        /// Print JSON, with a preview of each article, instead of text
-        #[arg(long)]
-        json: bool,
+        #[command(flatten)]
+        list: List,
     },
     /// Search articles for words, e.g. omafeed search "agentic engineering"
     Search {
@@ -84,22 +91,8 @@ pub enum Command {
         /// unread, today, starred, all, feed:ID or folder:ID
         #[arg(long, default_value = "all", value_parser = parse_scope)]
         scope: Scope,
-        /// Disable typo, plural and prefix expansion
-        #[arg(long)]
-        exact: bool,
-        /// Only unread articles
-        #[arg(long)]
-        unread: bool,
-        /// Only articles published this recently, e.g. 90m, 24h, 2d or 1w
-        #[arg(long, value_parser = parse_duration)]
-        since: Option<i64>,
-        #[arg(long, default_value_t = 50, value_parser = parse_limit)]
-        limit: usize,
-        #[arg(long, default_value_t = 0)]
-        offset: usize,
-        /// Print JSON, with a preview of each article, instead of text
-        #[arg(long)]
-        json: bool,
+        #[command(flatten)]
+        list: List,
     },
     /// Print one article's text (or sanitized HTML with --html)
     Article {
@@ -158,42 +151,10 @@ pub fn run(command: Command) -> Result<()> {
             Command::Articles {
                 scope,
                 search,
-                unread,
-                exact,
-                since,
-                limit,
-                offset,
-                json,
-            } => {
-                let query = Query {
-                    scope,
-                    search: search.unwrap_or_default(),
-                    unread_only: unread,
-                    exact,
-                    offset,
-                };
-                let cutoff = since.map(|seconds| chrono::Utc::now().timestamp() - seconds);
-                articles(&db, query, limit, cutoff, json).await
-            }
-            Command::Search {
-                query,
-                scope,
-                unread,
-                exact,
-                since,
-                limit,
-                offset,
-                json,
-            } => {
-                let query = Query {
-                    scope,
-                    search: query.join(" "),
-                    unread_only: unread,
-                    exact,
-                    offset,
-                };
-                let cutoff = since.map(|seconds| chrono::Utc::now().timestamp() - seconds);
-                articles(&db, query, limit, cutoff, json).await
+                list,
+            } => articles(&db, scope, search.unwrap_or_default(), list).await,
+            Command::Search { query, scope, list } => {
+                articles(&db, scope, query.join(" "), list).await
             }
             Command::Article { id, html, json } => article(&db, id, html, json).await,
             Command::Read(i) => set_state(&db, i, "Marked {} read", Some(true), None).await,
@@ -281,13 +242,7 @@ async fn refresh(db: &Db, paths: &Paths, json: bool) -> Result<()> {
 
 async fn status(db: &Db) -> Result<()> {
     let lib = db.call(|s| s.library()).await?;
-    println!(
-        "{} feeds · {} folders · {} unread · {} starred",
-        lib.feeds.len(),
-        lib.folders.len(),
-        lib.unread,
-        lib.starred
-    );
+    println!("{}", totals(&lib));
     for f in lib.feeds {
         if let Some(e) = f.error {
             println!("{}: {e}", f.title);
@@ -333,7 +288,7 @@ fn parse_scope(text: &str) -> Result<Scope, String> {
 
 /// A search needs at least one word; an empty one would match every article.
 fn parse_query(text: &str) -> Result<String, String> {
-    let words = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let words = one_line(text);
     if words.is_empty() {
         return Err("search needs at least one word".into());
     }
@@ -379,11 +334,6 @@ fn iso(timestamp: i64) -> Option<String> {
     chrono::DateTime::from_timestamp(timestamp, 0).map(|d| d.to_rfc3339())
 }
 
-/// Feed content on one line, so tabs and newlines cannot break tab-separated output.
-fn line(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
 /// The local date, matching `--scope today` and the reader's own dates.
 fn day(timestamp: i64) -> String {
     chrono::DateTime::from_timestamp(timestamp, 0)
@@ -396,21 +346,23 @@ fn day(timestamp: i64) -> String {
 }
 
 /// A folder's name with its parents, such as `Work/Blogs`; empty for no folder.
-fn folder_path(folders: &[Folder], id: Option<i64>) -> String {
-    let mut names = Vec::new();
-    let mut next = id;
-    while let Some(id) = next {
-        let Some(folder) = folders.iter().find(|f| f.id == id) else {
-            break;
-        };
-        names.push(line(&folder.name));
-        next = folder.parent;
-        if names.len() > folders.len() {
-            break;
-        }
-    }
-    names.reverse();
-    names.join("/")
+fn folder_path(lib: &Library, id: Option<i64>) -> String {
+    lib.folder_path(id)
+        .iter()
+        .map(|f| one_line(&f.name))
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// The first line of `status` and `feeds`.
+fn totals(lib: &Library) -> String {
+    format!(
+        "{} feeds · {} folders · {} unread · {} starred",
+        lib.feeds.len(),
+        lib.folders.len(),
+        lib.unread,
+        lib.starred
+    )
 }
 
 fn plural(count: usize, noun: &str) -> String {
@@ -434,19 +386,13 @@ fn summary(a: &Article) -> Value {
 async fn feeds(db: &Db, json: bool) -> Result<()> {
     let lib = db.call(|s| s.library()).await?;
     if !json {
-        println!(
-            "{} feeds · {} folders · {} unread · {} starred",
-            lib.feeds.len(),
-            lib.folders.len(),
-            lib.unread,
-            lib.starred
-        );
+        println!("{}", totals(&lib));
         if !lib.folders.is_empty() {
             // Sorted by full path, so a folder comes right before its subfolders.
             let mut paths: Vec<_> = lib
                 .folders
                 .iter()
-                .map(|f| (folder_path(&lib.folders, Some(f.id)), f.id))
+                .map(|f| (folder_path(&lib, Some(f.id)), f.id))
                 .collect();
             paths.sort_by_key(|(path, id)| (path.to_lowercase(), *id));
             println!("\nID\tFOLDER");
@@ -461,9 +407,9 @@ async fn feeds(db: &Db, json: bool) -> Result<()> {
                     "{}\t{}\t{}\t{}\t{}",
                     f.id,
                     f.unread,
-                    line(&f.title),
-                    folder_path(&lib.folders, f.folder),
-                    f.error.as_deref().map(line).unwrap_or_default()
+                    one_line(&f.title),
+                    folder_path(&lib, f.folder),
+                    f.error.as_deref().map(one_line).unwrap_or_default()
                 );
             }
         }
@@ -498,13 +444,23 @@ async fn feeds(db: &Db, json: bool) -> Result<()> {
 }
 
 /// Newest-first articles, reading past one page when `limit` or `since` asks for more.
-async fn articles(
-    db: &Db,
-    query: Query,
-    limit: usize,
-    since: Option<i64>,
-    json: bool,
-) -> Result<()> {
+async fn articles(db: &Db, scope: Scope, search: String, list: List) -> Result<()> {
+    let List {
+        exact,
+        unread,
+        since,
+        limit,
+        offset,
+        json,
+    } = list;
+    let query = Query {
+        scope,
+        search,
+        unread_only: unread,
+        exact,
+        offset,
+    };
+    let since = since.map(|seconds| chrono::Utc::now().timestamp() - seconds);
     // All pages come from one snapshot, so the reader's writes cannot shift them.
     let mut found = db
         .call(move |s| {
@@ -543,8 +499,8 @@ async fn articles(
                 if a.read { "read" } else { "unread" },
                 if a.starred { "starred" } else { "-" },
                 day(a.published),
-                line(&a.feed_title),
-                line(&a.title)
+                one_line(&a.feed_title),
+                one_line(&a.title)
             );
         }
         if found.is_empty() {
@@ -580,16 +536,16 @@ async fn article(db: &Db, id: i64, html: bool, json: bool) -> Result<()> {
         }
         return print_json(&item);
     }
-    let mut details = vec![line(&a.feed_title)];
+    let mut details = vec![one_line(&a.feed_title)];
     if !a.author.is_empty() {
-        details.push(line(&a.author));
+        details.push(one_line(&a.author));
     }
     details.push(day(a.published));
     details.push(if a.read { "read" } else { "unread" }.into());
     if a.starred {
         details.push("starred".into());
     }
-    println!("{}\n{}", line(&a.title), details.join(" · "));
+    println!("{}\n{}", one_line(&a.title), details.join(" · "));
     if !a.url.is_empty() {
         println!("{}", a.url);
     }
@@ -620,7 +576,7 @@ async fn set_state(
         message.replace("{}", &plural(changed.len(), "article"))
     );
     for (id, title) in &changed {
-        println!("{id}\t{}", line(title));
+        println!("{id}\t{}", one_line(title));
     }
     Ok(())
 }
@@ -645,10 +601,10 @@ async fn subscribe(
     if !json {
         println!(
             "Subscribed to \"{}\" (feed {id}). Run omafeed refresh to fetch its articles.",
-            line(&name)
+            one_line(&name)
         );
         for other in &found[1..] {
-            println!("Also found: {}\t{}", line(&other.title), other.url);
+            println!("Also found: {}\t{}", one_line(&other.title), other.url);
         }
         return Ok(());
     }
@@ -664,14 +620,15 @@ async fn unsubscribe(db: &Db, id: i64, yes: bool, json: bool) -> Result<()> {
     let (title, url, total, starred) = db
         .call(move |s| {
             s.immediate(|s| {
-                let Some(feed) = s.library()?.feeds.into_iter().find(|f| f.id == id) else {
+                let lib = s.library()?;
+                let Some(feed) = lib.feed(id) else {
                     bail!("No feed with id {id}");
                 };
                 let (total, starred) = s.feed_article_counts(id)?;
                 if yes {
                     s.delete_feed(id)?;
                 }
-                Ok((feed.title, feed.url, total, starred))
+                Ok((feed.title.clone(), feed.url.clone(), total, starred))
             })
         })
         .await?;
@@ -683,7 +640,7 @@ async fn unsubscribe(db: &Db, id: i64, yes: bool, json: bool) -> Result<()> {
     if !json {
         println!(
             "Removed \"{}\" and its {total} articles ({starred} starred)",
-            line(&title)
+            one_line(&title)
         );
         return Ok(());
     }
@@ -696,6 +653,7 @@ async fn unsubscribe(db: &Db, id: i64, yes: bool, json: bool) -> Result<()> {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+    use omafeed_core::model::Folder;
 
     #[test]
     fn durations_accept_seconds_through_weeks() {
@@ -787,13 +745,16 @@ mod tests {
 
     #[test]
     fn folder_paths_join_parents_and_survive_bad_data() {
-        let folders = [
-            folder(1, None, "Work"),
-            folder(2, Some(1), "Blogs"),
-            folder(3, Some(99), "Orphan"),
-            folder(4, Some(5), "Loop A"),
-            folder(5, Some(4), "Loop B"),
-        ];
+        let folders = Library {
+            folders: vec![
+                folder(1, None, "Work"),
+                folder(2, Some(1), "Blogs"),
+                folder(3, Some(99), "Orphan"),
+                folder(4, Some(5), "Loop A"),
+                folder(5, Some(4), "Loop B"),
+            ],
+            ..Default::default()
+        };
         assert_eq!(folder_path(&folders, None), "");
         assert_eq!(folder_path(&folders, Some(1)), "Work");
         assert_eq!(folder_path(&folders, Some(2)), "Work/Blogs");
@@ -805,8 +766,8 @@ mod tests {
 
     #[test]
     fn feed_content_is_flattened_to_one_line() {
-        assert_eq!(line("a\tb\n  c\r\nd"), "a b c d");
-        assert_eq!(line("  "), "");
+        assert_eq!(one_line("a\tb\n  c\r\nd"), "a b c d");
+        assert_eq!(one_line("  "), "");
         // `day` prints the local date, so derive the timestamp from a local date
         // instead of asserting the UTC date of epoch 0.
         let local = chrono::Local

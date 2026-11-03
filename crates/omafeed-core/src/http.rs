@@ -66,19 +66,42 @@ pub(crate) fn builder() -> reqwest::ClientBuilder {
         .redirect(reqwest::redirect::Policy::custom(redirect))
 }
 
-/// Read the whole body, failing once it exceeds `limit` bytes.
-pub async fn read_limited(response: Response, limit: usize) -> Result<Vec<u8>> {
+/// How much of a body [`read_limited`] reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Body {
+    /// All of it, failing once it exceeds the limit.
+    Whole,
+    /// A web page up to the end of its `<head>`, cut at the limit instead of failing, so that a
+    /// large page does not lose the declarations in its head.
+    Head,
+}
+
+/// Read a response body of at most `limit` bytes.
+pub(crate) async fn read_limited(response: Response, limit: usize, body: Body) -> Result<Vec<u8>> {
     let mut data = Vec::new();
     let mut chunks = response.bytes_stream();
     while let Some(chunk) = chunks.next().await {
         let chunk = chunk?;
         if data.len() + chunk.len() > limit {
+            if body == Body::Head {
+                data.extend_from_slice(&chunk[..limit - data.len()]);
+                break;
+            }
             bail!(
                 "Response exceeds {} MB decompressed limit",
                 limit / 1024 / 1024
             );
         }
+        // Only search the new data (plus a tag-sized overlap) for the end of <head>.
+        let search_from = data.len().saturating_sub(6);
         data.extend_from_slice(&chunk);
+        if body == Body::Head
+            && data[search_from..]
+                .windows(7)
+                .any(|w| w.eq_ignore_ascii_case(b"</head>"))
+        {
+            break;
+        }
     }
     Ok(data)
 }
@@ -186,6 +209,35 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(response.status(), 200);
         assert_eq!(hits.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn bodies_are_read_whole_or_up_to_the_end_of_their_head() {
+        let page = format!(
+            "<html><head><title>T</title></head><body>{}</body></html>",
+            "x".repeat(5000)
+        );
+        let (site, _) = server(move |_| ok("text/html", &page)).await;
+        let url = format!("http://{site}/");
+        let get = || async { client(&[]).get(&url).send().await.unwrap() };
+        let whole = read_limited(get().await, 100_000, Body::Whole)
+            .await
+            .unwrap();
+        assert!(whole.ends_with(b"</html>"));
+        let error = read_limited(get().await, 100, Body::Whole)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Response exceeds 0 MB decompressed limit"
+        );
+        let head = read_limited(get().await, 100, Body::Head).await.unwrap();
+        assert_eq!(head.len(), 100, "cut at the limit");
+        let head = read_limited(get().await, 100_000, Body::Head)
+            .await
+            .unwrap();
+        let text = String::from_utf8(head).unwrap();
+        assert!(text.contains("</head>"));
     }
 
     #[tokio::test]

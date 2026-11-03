@@ -111,7 +111,7 @@ struct SidebarPane {
 impl SidebarPane {
     fn new() -> Self {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        root.set_width_request(180);
+        root.set_width_request(*Settings::SIDEBAR_WIDTHS.start());
         root.add_css_class("sidebar");
         let title = label("LIBRARY", "section-title");
         title.set_margin_start(18);
@@ -142,7 +142,7 @@ struct ListPane {
 impl ListPane {
     fn new(unread_only: bool) -> Self {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        root.set_width_request(270);
+        root.set_width_request(*Settings::LIST_WIDTHS.start());
         let header = gtk::Box::new(gtk::Orientation::Vertical, 8);
         margins(&header, 16);
         let heading = label("All Unread", "list-heading");
@@ -294,8 +294,8 @@ impl Ui {
             .title("Omafeed")
             .default_width(settings.width)
             .default_height(settings.height)
-            .width_request(360)
-            .height_request(400)
+            .width_request(*Settings::WIDTHS.start())
+            .height_request(*Settings::HEIGHTS.start())
             .content(&overlay)
             .build();
         let medium = breakpoint(MEDIUM_MAX_WIDTH);
