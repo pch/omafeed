@@ -13,9 +13,9 @@ use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use omafeed_core::{
     Db, Paths, Settings,
-    db::{Article, Library, Query, Scope},
-    fetch::{Progress, Refresher},
-    settings::Palette,
+    config::Palette,
+    ingest::{Progress, Refresher},
+    model::{Article, Library, Query, Scope},
 };
 use std::{
     cell::{Cell, RefCell},
@@ -785,7 +785,7 @@ impl Ui {
     pub async fn discover(
         &self,
         url: String,
-    ) -> anyhow::Result<Vec<omafeed_core::discovery::Candidate>> {
+    ) -> anyhow::Result<Vec<omafeed_core::ingest::discovery::Candidate>> {
         let refresher = self.refresher.clone();
         let task = self
             .runtime

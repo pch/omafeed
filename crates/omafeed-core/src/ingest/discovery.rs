@@ -28,7 +28,7 @@ fn candidate(data: &[u8], url: &str) -> Result<Candidate> {
     Ok(Candidate {
         title: feed
             .title
-            .map(|t| crate::article::plain(&t.content))
+            .map(|t| crate::content::plain(&t.content))
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| url.to_owned()),
         url: url.to_owned(),

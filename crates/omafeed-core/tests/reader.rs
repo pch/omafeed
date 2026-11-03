@@ -1,7 +1,7 @@
 use omafeed_core::{
-    Db, Store, article,
-    db::{Query, Scope},
-    fetch::{self, Download, Refresher, Update},
+    Db, Store, content,
+    ingest::{self, Refresher},
+    model::{Download, Query, Scope, Update},
 };
 fn rss(body: &str) -> String {
     format!(
@@ -11,7 +11,7 @@ fn rss(body: &str) -> String {
 fn download(body: &str) -> Download {
     Download::Updated(Update {
         site_url: Some("https://example.org/".into()),
-        entries: fetch::parse(body.as_bytes(), "https://example.org/feed").unwrap(),
+        entries: ingest::parse(body.as_bytes(), "https://example.org/feed").unwrap(),
         etag: Some("v1".into()),
         modified: None,
     })
@@ -169,7 +169,7 @@ fn fallback_identity_is_stable_on_body_edits() {
     let a = rss("<item><title>No ID</title><description>before</description></item>");
     let b = a.replace("before", "after");
     let identity = |body: &str| {
-        fetch::parse(body.as_bytes(), "https://example.org/feed").unwrap()[0]
+        ingest::parse(body.as_bytes(), "https://example.org/feed").unwrap()[0]
             .identity
             .clone()
     };
@@ -183,12 +183,12 @@ fn fallback_identity_is_stable_on_body_edits() {
 fn atom_json_and_sanitized_relative_links() {
     let atom=br#"<feed xmlns="http://www.w3.org/2005/Atom"><title>Test</title><id>urn:feed</id><entry><id>urn:entry</id><title>Atom</title><link href="https://example.org/post"/><content type="html">&lt;p&gt;hello&lt;/p&gt;</content></entry></feed>"#;
     assert_eq!(
-        fetch::parse(atom, "https://example.org").unwrap()[0].identity,
+        ingest::parse(atom, "https://example.org").unwrap()[0].identity,
         "urn:entry"
     );
     let json=br#"{"version":"https://jsonfeed.org/version/1.1","title":"JSON","items":[{"id":"json-1","content_html":"<p>JSON</p>"}]}"#;
-    assert_eq!(fetch::parse(json, "https://example.org").unwrap().len(), 1);
-    let clean = article::sanitize(
+    assert_eq!(ingest::parse(json, "https://example.org").unwrap().len(), 1);
+    let clean = content::sanitize(
         r#"<script>alert(1)</script><iframe src="https://evil.example"></iframe><img src="/photo.jpg" onerror="alert(1)"><a href="javascript:alert(1)">Bad</a><a href="file:///etc/passwd">File</a>"#,
         "https://example.org/post",
     );
@@ -353,12 +353,12 @@ async fn redirects_are_followed_and_oversized_feeds_are_rejected() {
     s.add_feed("Test", &url, None).unwrap();
     let f = s.library().unwrap().feeds.remove(0);
     let client = reqwest::Client::new();
-    let Download::Updated(update) = fetch::download(&client, &f).await.unwrap() else {
+    let Download::Updated(update) = ingest::download(&client, &f).await.unwrap() else {
         panic!("expected content");
     };
     assert_eq!(update.entries.len(), 1);
     assert!(
-        fetch::download(&client, &f)
+        ingest::download(&client, &f)
             .await
             .unwrap_err()
             .to_string()
@@ -387,7 +387,7 @@ fn folder_removal_handles_duplicate_child_names_without_losing_feeds() {
 fn favicon_discovery_resolves_relative_urls_and_rejects_unsafe_sources() {
     let html = r#"<link rel="stylesheet" href="/style.css"><link rel="shortcut icon" href="/brand.ico"><link rel="apple-touch-icon" href="images/apple.png"><link rel="icon" href="file:///etc/passwd"><link rel="icon" type="image/svg+xml" href="icon.svg">"#;
     assert_eq!(
-        omafeed_core::icons::discover(html, "https://example.org/blog/"),
+        omafeed_core::ingest::icons::discover(html, "https://example.org/blog/"),
         vec![
             "https://example.org/brand.ico",
             "https://example.org/blog/images/apple.png",
@@ -409,9 +409,9 @@ async fn favicon_is_discovered_cached_and_not_downloaded_again() {
     .await;
     let dir = tempfile::tempdir().unwrap();
     let client = reqwest::Client::new();
-    omafeed_core::icons::cache(&client, dir.path(), &url, Some(&url), false).await;
-    assert!(omafeed_core::icons::path(dir.path(), &url).exists());
-    omafeed_core::icons::cache(&client, dir.path(), &url, Some(&url), false).await;
+    omafeed_core::ingest::icons::cache(&client, dir.path(), &url, Some(&url), false).await;
+    assert!(omafeed_core::ingest::icons::path(dir.path(), &url).exists());
+    omafeed_core::ingest::icons::cache(&client, dir.path(), &url, Some(&url), false).await;
     let requests = handle.await.unwrap();
     assert_eq!(requests.len(), 2);
     assert!(requests[1].starts_with("GET /brand.ico"));
@@ -421,7 +421,7 @@ async fn favicon_is_discovered_cached_and_not_downloaded_again() {
 fn feed_links_resolve_base_deduplicate_and_reject_unsafe_urls() {
     let html = r#"<base href="/blog/"><link rel="alternate" type="application/rss+xml" href="rss.xml"><link rel="ALTERNATE" type="application/atom+xml; charset=utf-8" href="../atom.xml"><link rel="alternate" type="application/rss+xml" href="rss.xml"><link rel="alternate" type="application/rss+xml" href="file:///etc/passwd"><a href="feed.xml">RSS</a>"#;
     assert_eq!(
-        omafeed_core::discovery::links(html, "https://example.org/start"),
+        omafeed_core::ingest::discovery::links(html, "https://example.org/start"),
         vec![
             "https://example.org/blog/rss.xml",
             "https://example.org/atom.xml",
@@ -461,7 +461,7 @@ async fn direct_feed_discovery_and_invalid_advertisement() {
 }
 #[test]
 fn icon_normalization_supports_svg_and_rejects_invalid_or_external_content() {
-    use omafeed_core::icons::normalize;
+    use omafeed_core::ingest::icons::normalize;
     let png = normalize(br#"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"><rect width="20" height="10" fill="red"/></svg>"#).unwrap();
     assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
     assert!(normalize(b"\x00\x00\x01\x00garbage").is_none());
@@ -476,7 +476,7 @@ fn rss_enclosures_become_attachment_links_and_unsafe_article_links_are_dropped()
         r#"<item><guid>post</guid><title>Post</title><link>/posts/1#comments</link>"#,
         r#"<media:content xmlns:media="http://search.yahoo.com/mrss/" url="https://cdn.example.org/cover.jpg" medium="image" type="image/jpeg"/></item>"#,
     ));
-    let entries = fetch::parse(body.as_bytes(), "https://example.org/feed").unwrap();
+    let entries = ingest::parse(body.as_bytes(), "https://example.org/feed").unwrap();
     assert!(entries[0].html.contains("https://cdn.example.org/ep1.mp3"));
     assert!(entries[0].url.is_empty());
     assert!(!entries[1].html.contains("cover.jpg"));
@@ -903,7 +903,7 @@ fn the_word_list_is_read_again_only_when_articles_change() {
     add(&mut s, feed, &[("Three", "third article")]);
     assert_eq!(found(&s, "thrid"), ["Three"]);
     assert_eq!(s.vocabulary_loads(), 2);
-    let notmodified = fetch::Download::NotModified;
+    let notmodified = Download::NotModified;
     s.commit_download(feed, revision(&s, feed), notmodified, 30)
         .unwrap();
     found(&s, "thrid");
@@ -1040,7 +1040,10 @@ fn upgrading_a_version_2_database_separates_words_at_block_ends() {
 #[test]
 fn icon_cache_path_preserves_existing_sha256_names() {
     assert_eq!(
-        omafeed_core::icons::path(std::path::Path::new("cache"), "https://example.org/article"),
+        omafeed_core::ingest::icons::path(
+            std::path::Path::new("cache"),
+            "https://example.org/article"
+        ),
         std::path::Path::new(
             "cache/icons-v2/50d7a905e3046b88638362cc34a31a1ae534766ca55e3aa397951efe653b062b.png"
         )
@@ -1059,13 +1062,13 @@ fn feed_authors_use_names_or_email_and_skip_missing_contacts() {
             "<item><title>Post</title><author>{author}</author></item>"
         ));
         assert_eq!(
-            fetch::parse(body.as_bytes(), "https://example.org/feed").unwrap()[0].author,
+            ingest::parse(body.as_bytes(), "https://example.org/feed").unwrap()[0].author,
             expected
         );
     }
     let atom = br#"<feed xmlns="http://www.w3.org/2005/Atom"><title>Test</title><id>urn:feed</id><entry><id>urn:entry</id><title>Post</title><author><uri>https://example.org/</uri></author><author><name>Jane</name></author><author><email>john@example.org</email></author></entry></feed>"#;
     assert_eq!(
-        fetch::parse(atom, "https://example.org/feed").unwrap()[0].author,
+        ingest::parse(atom, "https://example.org/feed").unwrap()[0].author,
         "Jane, john@example.org"
     );
 }

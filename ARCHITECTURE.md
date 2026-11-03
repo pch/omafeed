@@ -14,14 +14,14 @@ Run without a command, `omafeed` opens the reader window; with a command (`omafe
 
 | Module | Contents |
 | --- | --- |
-| `db` | `Store` (one SQLite connection: schema migrations, library, articles, search, read/star state), `Db` (a handle to the database worker thread), and the data types `Folder`, `Feed`, `Article`, `Library`, `Scope`, `Query`, `ImportReport`. |
-| `fuzzy` | Forgiving search: turns typed words into an FTS5 query using the index's own vocabulary (typos, plurals, prefix of the last word). |
-| `fetch` | `Refresher` (one refresh pass over due feeds, with per-host and global concurrency limits), `download` (conditional GET), `parse` (feed-rs to `Entry`), and the `Download`/`Update`/`Entry`/`Progress` types. Retry backoff and `Retry-After` handling live here. |
-| `discovery` | Turns a website or feed URL into feed candidates. |
-| `icons` | Finds, downloads, normalizes (to 64×64 PNG) and caches website icons; prunes the cache. |
-| `article` | HTML sanitizing (`sanitize`), plain text for previews and search (`plain`), Markdown-like reading text for the command line (`readable`), and the reader's HTML document (`document`). |
+| `model` | The data types shared by everything else: `Folder`, `Feed`, `Article`, `Library`, `Scope`, `Query`, `ImportReport`, and a feed download on its way into storage (`Download`, `Update`, `Entry`). |
+| `store` | `Store` (one SQLite connection) and `Db` (a handle to the database worker thread). `schema` holds the migrations; `folders`, `feeds` (library listing, subscriptions, refresh results, OPML import/export), `articles` (listing and read/star state) and `search` (query predicates) each add their methods to `Store`; `worker` is the thread. |
+| `fuzzy` | Forgiving search: turns typed words into an FTS5 query using the index's own vocabulary (typos, plurals, prefix of the last word). Private to the crate. |
+| `ingest` | Getting feeds in. `refresh` has `Refresher` (one pass over due feeds, with per-host and global concurrency limits) and its `Progress` events; `download` the conditional GET, retry backoff and `Retry-After`; `parse` feed-rs to `Entry`; `discovery` turns a website or feed URL into feed candidates; `icons` finds, downloads, normalizes (to 64×64 PNG), caches and prunes website icons. |
+| `content` | Article HTML: `sanitize`, plain text for previews and search (`plain`), and Markdown-like reading text for the command line (`readable`). |
+| `render` | The reader's HTML document (`document`). |
 | `opml` | OPML parsing and export. |
-| `settings` | `Paths` (XDG or `OMAFEED_HOME`), `Settings` (`settings.toml`), `Theme`, and `Palette` (including the Omarchy `colors.toml` reader). |
+| `config` | `Paths` (XDG or `OMAFEED_HOME`), `Settings` (`settings.toml`) and `Theme`, and `Palette` (including the Omarchy `colors.toml` reader). |
 | `http` | The shared `reqwest` client, its redirect policy, and size-limited body reads. Private to the crate. |
 | `util` | URL validation, HTML escaping, SHA-256 hex, local-host detection. Private to the crate. |
 

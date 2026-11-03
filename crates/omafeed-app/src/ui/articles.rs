@@ -2,7 +2,10 @@
 use super::{Ui, changes::Field, widgets::label};
 use chrono::{DateTime, Datelike, Local};
 use gtk::{glib, prelude::*};
-use omafeed_core::db::{Article, PAGE_SIZE, Scope};
+use omafeed_core::{
+    model::{Article, Scope},
+    store::PAGE_SIZE,
+};
 use std::rc::Rc;
 
 /// Widgets that change when an article's read or star state changes.

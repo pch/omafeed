@@ -1,7 +1,7 @@
 //! Application CSS and live Omarchy palette following.
 use super::Ui;
 use gtk::{gio, glib, prelude::*};
-use omafeed_core::settings::Palette;
+use omafeed_core::config::Palette;
 use std::{rc::Rc, time::Duration};
 
 /// Theme switches touch several files; wait for them to settle before reloading.
