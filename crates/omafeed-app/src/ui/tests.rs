@@ -397,6 +397,23 @@ pub(crate) fn desktop_smoke() {
             }))
             .unwrap()
     });
+    pump_until(|| !all_widgets().iter().any(|w| w.is::<gtk::Entry>()));
+    // Subscribing to it again closes the form without adding anything.
+    button(&root, "Add feed").emit_clicked();
+    pump_until(|| all_widgets().iter().any(|w| w.is::<gtk::Entry>()));
+    let fields = all_widgets()
+        .into_iter()
+        .filter_map(|w| w.downcast::<gtk::Entry>().ok())
+        .collect::<Vec<_>>();
+    fields[1].set_text(&website);
+    form_button("Save").emit_clicked();
+    pump_until(|| !all_widgets().iter().any(|w| w.is::<gtk::Entry>()));
+    assert_eq!(
+        runtime
+            .block_on(db.call(|s| Ok(s.library()?.feeds.len())))
+            .unwrap(),
+        2
+    );
     server.abort();
     pump_until(|| {
         widgets(&root)

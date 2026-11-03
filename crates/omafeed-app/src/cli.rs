@@ -8,7 +8,9 @@ use omafeed_core::{
     model::{
         Article, ArticleId, FeedId, FolderId, Library, ParseScopeError, Query, Scope, StatePatch,
     },
+    reading,
     store::PAGE_SIZE,
+    subscriptions::{self, Removal},
 };
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -552,7 +554,7 @@ async fn set_state(
     patch: StatePatch,
 ) -> Result<()> {
     let ids: Vec<ArticleId> = ids.into_iter().map(ArticleId).collect();
-    let changed = db.call(move |s| s.set_article_states(&ids, patch)).await?;
+    let changed = reading::change(db, ids, patch).await?;
     if json {
         let articles: Vec<_> = changed
             .iter()
@@ -583,10 +585,8 @@ async fn subscribe(
     };
     let name = title.unwrap_or_else(|| pick.title.clone());
     let feed_url = pick.url.clone();
-    let (add_name, add_url) = (name.clone(), feed_url.clone());
-    let id = db
-        .call(move |s| s.add_feed(&add_name, &add_url, folder.map(FolderId)))
-        .await?;
+    let id =
+        subscriptions::subscribe(db, name.clone(), feed_url.clone(), folder.map(FolderId)).await?;
     if !json {
         println!(
             "Subscribed to \"{}\" (feed {id}). Run omafeed refresh to fetch its articles.",
@@ -605,21 +605,13 @@ async fn subscribe(
 }
 
 async fn unsubscribe(db: &Db, id: i64, yes: bool, json: bool) -> Result<()> {
-    let id = FeedId(id);
-    // One transaction, so the counts reported are exactly what is deleted.
-    let (title, url, total, starred) = db
-        .call(move |s| {
-            s.immediate(|s| {
-                let lib = s.library()?;
-                let feed = lib.feed(id).ok_or(Error::FeedNotFound(id))?;
-                let (total, starred) = s.feed_article_counts(id)?;
-                if yes {
-                    s.delete_feed(id)?;
-                }
-                Ok((feed.title.clone(), feed.url.clone(), total, starred))
-            })
-        })
-        .await?;
+    let Removal {
+        id,
+        title,
+        url,
+        articles: total,
+        starred,
+    } = subscriptions::unsubscribe(db, FeedId(id), yes).await?;
     if !yes {
         bail!(
             "Not removed. This would permanently delete \"{title}\" and its {total} articles ({starred} starred). Run again with --yes to confirm."
