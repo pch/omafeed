@@ -344,7 +344,12 @@ impl Store {
             .query_row("PRAGMA data_version", [], |r| r.get(0))?)
     }
 
+    /// Folders, feeds and totals, all read from one snapshot so they agree with each other.
     pub fn library(&self) -> Result<Library> {
+        self.snapshot(Self::read_library)
+    }
+
+    fn read_library(&self) -> Result<Library> {
         let folders = self
             .conn
             .prepare("SELECT id, parent, name FROM folders ORDER BY name COLLATE NOCASE")?
@@ -860,10 +865,26 @@ impl Store {
     }
 
     /// Run several reads against one snapshot of the library, so pages read one after another
-    /// neither repeat nor skip articles when another program writes in between.
+    /// neither repeat nor skip articles when another program writes in between. Inside another
+    /// snapshot or transaction, the reads simply join it.
     pub fn snapshot<T>(&self, reads: impl FnOnce(&Self) -> Result<T>) -> Result<T> {
+        if !self.conn.is_autocommit() {
+            return reads(self);
+        }
         let tx = self.conn.unchecked_transaction()?;
         let result = reads(self)?;
+        tx.commit()?;
+        Ok(result)
+    }
+
+    /// Run reads and writes in one transaction that takes the write lock at once, so nothing
+    /// another program writes can come between them. Nothing is kept if `work` fails.
+    pub fn immediate<T>(&self, work: impl FnOnce(&Self) -> Result<T>) -> Result<T> {
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        let result = work(self)?;
         tx.commit()?;
         Ok(result)
     }

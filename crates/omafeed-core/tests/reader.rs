@@ -1067,3 +1067,41 @@ fn feed_authors_use_names_or_email_and_skip_missing_contacts() {
         "Jane, john@example.org"
     );
 }
+
+#[test]
+fn reads_in_one_snapshot_agree_while_another_program_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("library.db");
+    let reader = Store::open(&path).unwrap();
+    let writer = Store::open(&path).unwrap();
+    writer
+        .add_feed("First", "https://example.org/1", None)
+        .unwrap();
+    let (before, after) = reader
+        .snapshot(|s| {
+            let before = s.library()?;
+            writer.add_feed("Second", "https://example.org/2", None)?;
+            writer.add_folder("Folder", None)?;
+            Ok((before, s.library()?))
+        })
+        .unwrap();
+    assert_eq!((before.feeds.len(), after.feeds.len()), (1, 1));
+    assert_eq!((before.folders.len(), after.folders.len()), (0, 0));
+    let now = reader.library().unwrap();
+    assert_eq!((now.feeds.len(), now.folders.len()), (2, 1));
+}
+
+#[test]
+fn immediate_work_is_kept_only_if_it_all_succeeds() {
+    let s = Store::open(":memory:").unwrap();
+    let id = s.add_feed("Feed", "https://example.org/", None).unwrap();
+    let failed = s.immediate(|s| -> anyhow::Result<()> {
+        assert_eq!(s.library()?.feeds.len(), 1, "reads join the transaction");
+        s.delete_feed(id)?;
+        anyhow::bail!("changed my mind")
+    });
+    assert_eq!(failed.unwrap_err().to_string(), "changed my mind");
+    assert_eq!(s.library().unwrap().feeds.len(), 1);
+    s.immediate(|s| s.delete_feed(id)).unwrap();
+    assert!(s.library().unwrap().feeds.is_empty());
+}

@@ -592,10 +592,13 @@ impl Ui {
         glib::spawn_future_local(async move {
             let result =
                 u.db.call(move |s| {
-                    Ok((
-                        s.library()?,
-                        selected.map(|id| s.article_if_exists(id)).transpose()?,
-                    ))
+                    // One snapshot, so the counts and the open article agree.
+                    s.snapshot(|s| {
+                        Ok((
+                            s.library()?,
+                            selected.map(|id| s.article_if_exists(id)).transpose()?,
+                        ))
+                    })
                 })
                 .await;
             match result {

@@ -72,6 +72,13 @@ started with, and `commit_download` and `record_failure` store nothing unless th
 has it. So a download that finishes after its feed was edited, deleted, or replaced by a new
 feed that reused the ID (SQLite reuses the highest deleted rowid) is dropped.
 
+Reads that must agree run in one snapshot (`Store::snapshot`): the library's folders, feeds
+and totals; the window's reload after another program's change, which reads the library and
+the open article together; and the command line's pages of articles. A snapshot inside another
+snapshot or transaction joins it. Work that reads and then writes on what it read, such as
+`omafeed unsubscribe` counting the articles it deletes, runs in one immediate transaction
+(`Store::immediate`).
+
 Articles are indexed in an FTS5 table kept in step by triggers. The search vocabulary is read
 from an `fts5vocab` view and cached per connection until articles change.
 
