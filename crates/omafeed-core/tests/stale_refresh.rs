@@ -1,8 +1,8 @@
 //! A refresh that finishes after its feed was edited, deleted or replaced must store nothing.
 use omafeed_core::{
     Db, Store,
-    db::{Feed, Query, Scope},
-    fetch::{self, Download, Refresher, Update},
+    fetch::{self, Refresher},
+    model::{Download, Feed, Query, Scope, Update},
 };
 
 fn rss(items: &str) -> String {

@@ -13,8 +13,8 @@ use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use omafeed_core::{
     Db, Paths, Settings,
-    db::{Article, Library, Query, Scope},
     fetch::{Progress, Refresher},
+    model::{Article, Library, Query, Scope},
     settings::Palette,
 };
 use std::{

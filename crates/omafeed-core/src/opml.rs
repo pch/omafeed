@@ -1,4 +1,4 @@
-use crate::{db::Library, util::escape};
+use crate::{model::Library, util::escape};
 use anyhow::{Result, bail};
 use serde::Deserialize;
 

@@ -4,7 +4,7 @@ use adw::prelude::*;
 use gtk::{gio, glib};
 use omafeed_core::{
     article::{Source, document},
-    db::Article,
+    model::Article,
 };
 use std::rc::Rc;
 use webkit6::prelude::*;

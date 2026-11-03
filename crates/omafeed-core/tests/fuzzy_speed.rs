@@ -9,8 +9,7 @@
 //! synthetic library of random words is used. Times are wall-clock milliseconds per search.
 use omafeed_core::{
     Store,
-    db::{Query, Scope},
-    fetch::{Download, Entry, Update},
+    model::{Download, Entry, Query, Scope, Update},
 };
 use std::{
     path::{Path, PathBuf},

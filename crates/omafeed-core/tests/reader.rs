@@ -1,7 +1,7 @@
 use omafeed_core::{
     Db, Store, article,
-    db::{Query, Scope},
-    fetch::{self, Download, Refresher, Update},
+    fetch::{self, Refresher},
+    model::{Download, Query, Scope, Update},
 };
 fn rss(body: &str) -> String {
     format!(
@@ -903,7 +903,7 @@ fn the_word_list_is_read_again_only_when_articles_change() {
     add(&mut s, feed, &[("Three", "third article")]);
     assert_eq!(found(&s, "thrid"), ["Three"]);
     assert_eq!(s.vocabulary_loads(), 2);
-    let notmodified = fetch::Download::NotModified;
+    let notmodified = Download::NotModified;
     s.commit_download(feed, revision(&s, feed), notmodified, 30)
         .unwrap();
     found(&s, "thrid");

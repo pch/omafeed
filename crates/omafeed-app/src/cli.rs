@@ -4,8 +4,9 @@ use anyhow::{Context, Result, bail};
 use omafeed_core::{
     Db, Paths, Settings,
     article::readable,
-    db::{Article, Folder, PAGE_SIZE, Query, Scope},
+    db::PAGE_SIZE,
     fetch::{Progress, Refresher},
+    model::{Article, Folder, Query, Scope},
 };
 use serde_json::{Value, json};
 use std::path::PathBuf;

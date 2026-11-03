@@ -67,8 +67,8 @@ pub(crate) fn desktop_smoke() {
             s.commit_download(
                 f,
                 revision,
-                omafeed_core::fetch::Download::Updated(omafeed_core::fetch::Update {
-                    entries: vec![omafeed_core::fetch::Entry {
+                omafeed_core::model::Download::Updated(omafeed_core::model::Update {
+                    entries: vec![omafeed_core::model::Entry {
                         identity: "one".into(),
                         title: "Fixture article".into(),
                         url: "https://example.invalid/post".into(),

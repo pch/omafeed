@@ -6,6 +6,7 @@ pub mod fetch;
 mod fuzzy;
 mod http;
 pub mod icons;
+pub mod model;
 pub mod opml;
 pub mod settings;
 mod util;

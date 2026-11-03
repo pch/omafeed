@@ -1,7 +1,7 @@
 //! Library sidebar: smart views, folders, and feeds with unread counts.
 use super::{Ui, widgets::icon, widgets::label};
 use gtk::{gdk, gio, glib, prelude::*};
-use omafeed_core::db::{Feed, Library, Scope};
+use omafeed_core::model::{Feed, Library, Scope};
 use std::rc::Rc;
 
 /// One sidebar entry before it becomes a widget.

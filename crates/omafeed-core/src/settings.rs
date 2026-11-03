@@ -1,4 +1,4 @@
-use crate::db::Scope;
+use crate::model::Scope;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;

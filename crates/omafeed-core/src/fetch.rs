@@ -1,7 +1,7 @@
 use crate::{
     Db, article,
-    db::Feed,
     http::{self, BODY_LIMIT},
+    model::{Download, Entry, Feed, Update},
     util::{escape, resolve_http, sha256_hex, validate_url},
 };
 use anyhow::{Context, Result};
@@ -21,32 +21,6 @@ use tokio::sync::Semaphore;
 const CONCURRENT_FEEDS: usize = 8;
 const CONCURRENT_PER_HOST: usize = 2;
 const MAX_BACKOFF_SECONDS: i64 = 86400;
-
-#[derive(Clone, Debug)]
-pub struct Entry {
-    pub identity: String,
-    pub title: String,
-    pub url: String,
-    pub author: String,
-    pub published: Option<i64>,
-    pub html: String,
-    pub text: String,
-}
-
-#[derive(Debug)]
-pub enum Download {
-    /// The server answered 304; cached articles stay as they are.
-    NotModified,
-    Updated(Update),
-}
-
-#[derive(Debug)]
-pub struct Update {
-    pub site_url: Option<String>,
-    pub entries: Vec<Entry>,
-    pub etag: Option<String>,
-    pub modified: Option<String>,
-}
 
 #[derive(Clone, Debug)]
 pub enum Progress {
