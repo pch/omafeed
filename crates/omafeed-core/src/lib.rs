@@ -6,6 +6,7 @@
 pub mod config;
 pub mod content;
 mod error;
+pub mod filters;
 mod fuzzy;
 mod http;
 pub mod ingest;

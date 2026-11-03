@@ -1,4 +1,5 @@
-//! Modal dialogs: library management, OPML import/export, settings, and help.
+//! Modal dialogs: library management, OPML import/export, content filters, settings, and help.
+mod filters;
 mod library;
 
 use crate::ui::Ui;
@@ -7,6 +8,7 @@ use gtk::{gio, glib};
 use omafeed_core::{Settings, config::Theme};
 use std::rc::Rc;
 
+pub use filters::filters;
 pub use library::{edit, library, remove};
 
 /// A Cancel/Save dialog around a box of form fields, reusable across attempts.

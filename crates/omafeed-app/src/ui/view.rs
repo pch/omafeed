@@ -132,6 +132,12 @@ impl View {
         self.page = 0;
     }
 
+    /// Start again from the first page, e.g. after the content filters change what a view
+    /// holds.
+    pub fn first_page(&mut self) {
+        self.page = 0;
+    }
+
     pub fn next_page(&mut self) {
         self.page += 1;
     }
@@ -524,6 +530,9 @@ mod tests {
         v.next_page();
         v.set_unread_only(true);
         assert!(!v.previous_page());
+        v.next_page();
+        v.first_page();
+        assert_eq!(v.request_page().query.offset, 0);
     }
 
     #[test]

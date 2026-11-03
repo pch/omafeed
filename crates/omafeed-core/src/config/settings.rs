@@ -61,6 +61,10 @@ pub struct Settings {
     pub selected_article: Option<ArticleId>,
     /// Whether the list showed only unread articles.
     pub unread_only: bool,
+    /// Content filters: words and `/regexes/` that hide matching articles. Written only when
+    /// there are some.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub filters: Vec<String>,
 }
 
 /// Fall back to the default instead of rejecting the whole settings file.
@@ -98,6 +102,7 @@ impl Default for Settings {
             scope: Scope::Unread,
             selected_article: None,
             unread_only: false,
+            filters: Vec::new(),
         }
     }
 }

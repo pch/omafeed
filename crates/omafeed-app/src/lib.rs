@@ -54,6 +54,7 @@ fn run_gui() -> Result<()> {
     let paths = Paths::discover()?;
     let db = Db::open(paths.data.join(DB_FILE))?;
     let settings = Settings::load(&paths);
+    db.set_filters(settings.filters.clone());
     let runtime = Arc::new(tokio::runtime::Runtime::new()?);
     let refresher = Refresher::new()?.with_cache(paths.cache.clone());
     let app = adw::Application::builder().application_id(APP_ID).build();

@@ -142,12 +142,14 @@ pub enum Command {
 pub fn run(command: Command) -> Result<()> {
     let paths = Paths::discover()?;
     let db = Db::open(paths.data.join(DB_FILE))?;
+    let settings = Settings::load(&paths);
+    db.set_filters(settings.filters);
     let runtime = tokio::runtime::Runtime::new()?;
     runtime.block_on(async {
         match command {
             Command::Import { file } => import(&db, &file).await,
             Command::Export { file } => export(&db, &file).await,
-            Command::Refresh { json } => refresh(&db, &paths, json).await,
+            Command::Refresh { json } => refresh(&db, &paths, settings.refresh_minutes, json).await,
             Command::Status => status(&db).await,
             Command::Discover { url, json } => discover(&url, json).await,
             Command::Feeds { json } => feeds(&db, json).await,
@@ -201,7 +203,7 @@ async fn export(db: &Db, file: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-async fn refresh(db: &Db, paths: &Paths, json: bool) -> Result<()> {
+async fn refresh(db: &Db, paths: &Paths, minutes: u32, json: bool) -> Result<()> {
     let (tx, rx) = async_channel::unbounded();
     let logger = tokio::spawn(async move {
         let mut feeds = Vec::new();
@@ -234,7 +236,6 @@ async fn refresh(db: &Db, paths: &Paths, json: bool) -> Result<()> {
         }
         (feeds, totals)
     });
-    let minutes = Settings::load(paths).refresh_minutes;
     Refresher::new()?
         .with_cache(paths.cache.clone())
         .refresh(db.clone(), true, minutes, tx)

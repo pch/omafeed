@@ -19,6 +19,7 @@ Run without a command, `omafeed` opens the reader window; with a command (`omafe
 | `store` | `Store` (one SQLite connection) and `Db` (a handle to the database worker thread). `schema` holds the migrations; `folders`, `feeds` (library listing, subscriptions, refresh results, OPML import/export), `articles` (listing and read/star state) and `search` (query predicates) each add their methods to `Store`; `worker` is the thread. |
 | `fuzzy` | Forgiving search: turns typed words into an FTS5 query using the index's own vocabulary (typos, plurals, prefix of the last word). Private to the crate. |
 | `subscriptions` | What the command line and the window both do with feeds: subscribe, update, unsubscribe (reporting exactly what it deletes), and the title of an existing subscription for a duplicate. Choosing among discovered candidates stays with the caller: the window asks, the command line takes the first. |
+| `filters` | `ContentFilters`: the words and `/regexes/` that hide articles, matched against title and preview, and `validate` for a new pattern. |
 | `reading` | Marking articles read, unread, starred or not: a batch that fails as a whole (command line), one article that may be gone (window), and a whole view with its undo. |
 | `ingest` | Getting feeds in. `refresh` has `Refresher` (one pass over due feeds, with per-host and global concurrency limits) and its `Progress` events; `download` the conditional GET; `schedule` when a feed is due next (the refresh interval, backoff after failures, and `Retry-After`) as pure functions of the time, so the store only records the timestamps they give; `parse` feed-rs to `Entry`; `discovery` turns a website or feed URL into feed candidates; `icons` finds, downloads, normalizes (to 64×64 PNG), caches and prunes website icons. |
 | `content` | Article HTML: `sanitize`, plain text for previews and search (`plain`), and Markdown-like reading text for the command line (`readable`). |
@@ -35,7 +36,7 @@ Run without a command, `omafeed` opens the reader window; with a command (`omafe
 | `lib` | Argument parsing (`main`), which dispatches to `cli::run` or builds the GTK application. `main.rs` only calls it. With the `test-support` feature, `test_support` exposes the desktop smoke test to `tests/desktop_smoke.rs`. |
 | `cli` | Every command: argument definitions and text output. `cli/json.rs` has one `Serialize` type per `--json` shape, printed through `serde_json::Value` so the keys stay sorted, byte for byte as before. |
 | `ui` | The main window. `Ui` coordinates: it owns the panes (`Header`, `SidebarPane`, `ListPane`, `ReaderPane`), each holding its own widgets, and a `View` (`view.rs`) with what is shown: view and page, the articles on it, the open article, collapsed folders, and the read/star changes (`changes.rs`) and undo in flight. `View` has no GTK and decides what each late database result may change, and what a removed feed or folder takes with it; it is unit-tested on its own. `articles`, `sidebar`, `reader`, `keys` and `theme` add methods to `Ui`. `sidebar` also builds the sidebar's context menu: which commands an entry has and which apply now is a pure function, unit-tested; the menu is one `gtk::PopoverMenu` filled from a `gio::Menu` with a fresh `sidebar.` action group each time it opens, closed with its actions dropped whenever the library is read again (an entry's ID may since belong to another feed or folder), and its edit and remove go through the library manager's forms and confirmations (`dialogs::edit`, `dialogs::remove`); `widgets` has small constructors; `tests` holds the desktop smoke test (only with `test-support`). |
-| `dialogs` | Library manager, subscription and folder forms, OPML import/export, settings, shortcuts and about. |
+| `dialogs` | Library manager, subscription and folder forms, OPML import/export, content filters, settings, shortcuts and about. |
 
 ## Data flow
 
@@ -103,6 +104,12 @@ snapshot or transaction joins it. Work that reads and then writes on what it rea
 
 Articles are indexed in an FTS5 table kept in step by triggers. The search vocabulary is read
 from an `fts5vocab` view and cached per connection until articles change.
+
+Content filters live in `settings.toml`, so `Store` holds no copy on disk: `Store::set_filters`
+(or `Db::set_filters`) registers a SQL function on the connection, and `predicate` and
+`library` use it only while filters are set. Lists, paging, unread counts and bulk mark-read
+therefore agree. Starred articles are never hidden, and `article` still opens a filtered
+article by ID.
 
 Settings are `settings.toml` in the config directory, written atomically (temporary file and
 rename). Missing keys take their defaults and numbers are clamped to their supported ranges.
