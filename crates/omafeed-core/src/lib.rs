@@ -9,8 +9,10 @@ mod http;
 pub mod ingest;
 pub mod model;
 pub mod opml;
+pub mod reading;
 pub mod render;
 pub mod store;
+pub mod subscriptions;
 mod util;
 
 pub use config::{Paths, Settings};

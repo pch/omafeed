@@ -4,8 +4,10 @@ use crate::ui::{Ui, widgets::margins};
 use adw::prelude::*;
 use gtk::glib;
 use omafeed_core::{
+    Error,
     ingest::discovery::Candidate,
     model::{FeedId, FolderId, Library, Scope, TreeItem},
+    subscriptions,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -256,13 +258,18 @@ async fn remove(u: &Rc<Ui>, window: &gtk::Window, scope: Scope) {
     if !confirm(window, heading, body).await {
         return;
     }
-    let result =
-        u.db.call(move |s| match scope {
-            Scope::Folder(id) => s.delete_folder(id),
-            Scope::Feed(id) => s.delete_feed(id),
-            _ => Ok(()),
-        })
-        .await;
+    let result = match scope {
+        Scope::Folder(id) => u.db.call(move |s| s.delete_folder(id)).await,
+        Scope::Feed(id) => subscriptions::unsubscribe(&u.db, id, true)
+            .await
+            .map(drop)
+            // Removed by another program meanwhile: it is gone either way.
+            .or_else(|e| match e.downcast_ref::<Error>() {
+                Some(Error::FeedNotFound(_)) => Ok(()),
+                _ => Err(e),
+            }),
+        _ => Ok(()),
+    };
     match result {
         Ok(()) => u.reset_selection(),
         Err(e) => u.error(e),
@@ -336,28 +343,26 @@ async fn edit_feed(u: &Rc<Ui>, window: &gtk::Window, id: Option<FeedId>, parent:
             if name.trim().is_empty() {
                 name = feed.title;
             }
-            let duplicate = u
-                .library
-                .borrow()
-                .feeds
-                .iter()
-                .find(|f| f.url == url && Some(f.id) != id)
-                .map(|f| f.title.clone());
-            if let Some(title) = duplicate {
-                u.toast(&format!("Already subscribed to {title}"));
-                return;
-            }
         }
-        let result =
-            u.db.call(move |s| match id {
-                Some(id) => s.update_feed(id, &name, &url, parent),
-                None => s.add_feed(&name, &url, parent).map(drop),
-            })
-            .await;
+        let result = match id {
+            Some(id) => subscriptions::update(&u.db, id, name, url.clone(), parent).await,
+            None => subscriptions::subscribe(&u.db, name, url.clone(), parent)
+                .await
+                .map(drop),
+        };
         match result {
             Ok(()) => {
                 u.reload();
                 u.start_refresh(true);
+                return;
+            }
+            Err(e) if matches!(e.downcast_ref::<Error>(), Some(Error::DuplicateFeed(_))) => {
+                let title = subscriptions::subscribed_title(&u.db, url.clone())
+                    .await
+                    .ok()
+                    .flatten()
+                    .unwrap_or(url);
+                u.toast(&format!("Already subscribed to {title}"));
                 return;
             }
             Err(e) => form.show_error(&e.to_string()),

@@ -5,6 +5,7 @@ use gtk::{glib, prelude::*};
 use omafeed_core::{
     content::one_line,
     model::{Article, ArticleId, Scope, StatePatch},
+    reading,
     store::PAGE_SIZE,
 };
 use std::rc::Rc;
@@ -226,7 +227,7 @@ impl Ui {
         self.show_state(id, patch);
         let u = self.clone();
         glib::spawn_future_local(async move {
-            let result = u.db.call(move |s| s.set_state(id, patch)).await;
+            let result = reading::change_one(&u.db, id, patch).await;
             let mut newest = false;
             for (field, sequence) in started {
                 newest |= u.changes.borrow_mut().finish(id, field, sequence);
@@ -307,7 +308,7 @@ impl Ui {
         let sequence = self.changes.borrow_mut().start_bulk();
         let u = self.clone();
         glib::spawn_future_local(async move {
-            match u.db.call(move |s| s.mark_read(&q)).await {
+            match reading::mark_view_read(&u.db, q).await {
                 Ok(ids) => {
                     u.toast(&format!(
                         "Marked {} articles read · Ctrl+Z to undo",
@@ -330,8 +331,7 @@ impl Ui {
         let sequence = self.changes.borrow_mut().start_bulk();
         let u = self.clone();
         glib::spawn_future_local(async move {
-            let ids = batch.articles.clone();
-            match u.db.call(move |s| s.undo_read(&ids)).await {
+            match reading::undo_read(&u.db, batch.articles.clone()).await {
                 Ok(()) => {
                     // Whatever is open now, not what was open when undo was pressed.
                     u.bulk_read_done(&batch.articles, false, sequence);
