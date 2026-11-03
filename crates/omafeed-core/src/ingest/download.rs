@@ -1,13 +1,12 @@
 //! Conditional feed downloads and the server's requests to wait.
-use super::parse::parse_document;
+use super::{parse::parse_document, schedule};
 use crate::{
     http::{self, BODY_LIMIT},
     model::{Download, Feed, Update},
 };
 use anyhow::{Context, Result};
 use reqwest::{Client, StatusCode, header};
-
-pub(super) const MAX_BACKOFF_SECONDS: i64 = 86400;
+use std::time::SystemTime;
 
 #[derive(Debug)]
 pub(super) struct RetryDelay(pub(super) i64);
@@ -19,19 +18,6 @@ impl std::fmt::Display for RetryDelay {
 }
 
 impl std::error::Error for RetryDelay {}
-
-fn retry_after(value: &str) -> i64 {
-    value
-        .parse::<i64>()
-        .ok()
-        .or_else(|| {
-            let date = httpdate::parse_http_date(value).ok()?;
-            let wait = date.duration_since(std::time::SystemTime::now()).ok()?;
-            Some(wait.as_secs() as i64)
-        })
-        .unwrap_or(300)
-        .clamp(1, MAX_BACKOFF_SECONDS)
-}
 
 pub async fn download(client: &Client, feed: &Feed) -> Result<Download> {
     Ok(download_from(client, feed).await?.0)
@@ -60,7 +46,7 @@ pub(super) async fn download_from(client: &Client, feed: &Feed) -> Result<(Downl
         .get(header::RETRY_AFTER)
         .and_then(|v| v.to_str().ok())
     {
-        return Err(RetryDelay(retry_after(value)).into());
+        return Err(RetryDelay(schedule::retry_after(value, SystemTime::now())).into());
     }
     let response = response.error_for_status()?;
     let header = |name| {

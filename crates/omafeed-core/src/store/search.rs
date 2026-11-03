@@ -88,7 +88,7 @@ impl Store {
             }
             Scope::Feed(id) => {
                 terms.push("a.feed_id = ?");
-                values.push(id.into());
+                values.push(id.0.into());
             }
             Scope::Folder(id) => {
                 terms.push(
@@ -97,7 +97,7 @@ impl Store {
                          SELECT folders.id FROM folders JOIN tree ON folders.parent = tree.id
                      ) SELECT id FROM tree)",
                 );
-                values.push(id.into());
+                values.push(id.0.into());
             }
             Scope::All => {}
         }

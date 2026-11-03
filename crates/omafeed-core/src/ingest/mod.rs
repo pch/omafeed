@@ -4,6 +4,7 @@ mod download;
 pub mod icons;
 mod parse;
 mod refresh;
+pub mod schedule;
 
 pub use download::download;
 pub use parse::parse;

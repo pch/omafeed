@@ -1,7 +1,8 @@
 //! Feeds: the library listing, subscriptions, refresh results, and OPML import and export.
 use super::Store;
 use crate::{
-    model::{Download, Feed, Folder, ImportReport, Library},
+    Error,
+    model::{Download, Feed, FeedId, Folder, FolderId, ImportReport, Library},
     opml,
     util::validate_url,
 };
@@ -94,37 +95,44 @@ impl Store {
         })
     }
 
-    pub fn add_feed(&self, title: &str, url: &str, folder: Option<i64>) -> Result<i64> {
+    pub fn add_feed(&self, title: &str, url: &str, folder: Option<FolderId>) -> Result<FeedId> {
         let url = validate_url(url)?;
         let title = if title.trim().is_empty() {
             &url
         } else {
             Self::name(title)?
         };
-        let tx = self.conn.unchecked_transaction()?;
-        tx.execute(
-            "INSERT INTO feeds(title, url, folder, revision) VALUES(?1, ?2, ?3, ?4)",
-            params![title, url, folder, Self::next_revision(&tx)?],
-        )?;
-        let id = tx.last_insert_rowid();
-        tx.commit()?;
-        Ok(id)
+        self.immediate(|s| {
+            s.conn
+                .execute(
+                    "INSERT INTO feeds(title, url, folder, revision) VALUES(?1, ?2, ?3, ?4)",
+                    params![title, url, folder, Self::next_revision(&s.conn)?],
+                )
+                .map_err(Error::duplicate_feed)?;
+            Ok(FeedId(s.conn.last_insert_rowid()))
+        })
     }
 
-    pub fn update_feed(&self, id: i64, title: &str, url: &str, folder: Option<i64>) -> Result<()> {
+    pub fn update_feed(
+        &self,
+        id: FeedId,
+        title: &str,
+        url: &str,
+        folder: Option<FolderId>,
+    ) -> Result<()> {
         let url = validate_url(url)?;
-        let tx = self.conn.unchecked_transaction()?;
-        let revision = Self::next_revision(&tx)?;
-        tx.execute(
-            UPDATE_FEED,
-            params![Self::name(title)?, folder, url, id, revision],
-        )?;
-        tx.commit()?;
-        Ok(())
+        let title = Self::name(title)?;
+        self.immediate(|s| {
+            let revision = Self::next_revision(&s.conn)?;
+            s.conn
+                .execute(UPDATE_FEED, params![title, folder, url, id, revision])
+                .map_err(Error::duplicate_feed)?;
+            Ok(())
+        })
     }
 
     /// Stored articles for a feed, and how many of them are starred.
-    pub fn feed_article_counts(&self, id: i64) -> Result<(i64, i64)> {
+    pub fn feed_article_counts(&self, id: FeedId) -> Result<(i64, i64)> {
         Ok(self.conn.query_row(
             "SELECT count(*), COALESCE(SUM(s.starred), 0)
              FROM articles a JOIN article_state s ON s.article_id = a.id
@@ -134,31 +142,48 @@ impl Store {
         )?)
     }
 
-    pub fn delete_feed(&self, id: i64) -> Result<()> {
+    pub fn delete_feed(&self, id: FeedId) -> Result<()> {
         self.conn.execute("DELETE FROM feeds WHERE id = ?1", [id])?;
         self.articles_changed();
         Ok(())
     }
 
-    /// Store a successful download of the feed `feed_id` at `revision`; validators are only
-    /// saved with committed content. Nothing is stored if the feed was deleted or is no
-    /// longer at that revision.
+    /// Store a successful download of the feed `feed_id` at `revision`, made at `now`, and
+    /// schedule the next one at `next_fetch`; validators are only saved with committed
+    /// content. Nothing is stored if the feed was deleted or is no longer at that revision.
     pub fn commit_download(
-        &mut self,
-        feed_id: i64,
+        &self,
+        feed_id: FeedId,
         revision: i64,
         download: Download,
-        minutes: u32,
+        now: i64,
+        next_fetch: i64,
     ) -> Result<()> {
-        let now = chrono::Utc::now().timestamp();
-        let tx = self.conn.transaction()?;
+        let changed = self
+            .immediate(|s| s.commit_download_now(feed_id, revision, download, now, next_fetch))?;
+        if changed {
+            self.articles_changed();
+        }
+        Ok(())
+    }
+
+    /// Store a download as `commit_download` does; returns whether any article text changed.
+    fn commit_download_now(
+        &self,
+        feed_id: FeedId,
+        revision: i64,
+        download: Download,
+        now: i64,
+        next_fetch: i64,
+    ) -> Result<bool> {
+        let tx = &self.conn;
         let current: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM feeds WHERE id = ?1 AND revision = ?2)",
-            [feed_id, revision],
+            params![feed_id, revision],
             |r| r.get(0),
         )?;
         if !current {
-            return Ok(());
+            return Ok(false);
         }
         let changes_articles = matches!(download, Download::Updated(_));
         if let Download::Updated(update) = download {
@@ -185,47 +210,43 @@ impl Store {
         tx.execute(
             "UPDATE feeds SET last_attempt = ?1, last_success = ?1, next_fetch = ?2, error = NULL, failures = 0
              WHERE id = ?3",
-            params![now, now + i64::from(minutes) * 60, feed_id],
+            params![now, next_fetch, feed_id],
         )?;
-        tx.commit()?;
-        if changes_articles {
-            self.articles_changed();
-        }
-        Ok(())
+        Ok(changes_articles)
     }
 
-    /// Record a failed refresh of the feed `feed_id` at `revision` and schedule the next
-    /// attempt `delay` seconds from `now`. Nothing is recorded if the feed was deleted or is
-    /// no longer at that revision.
+    /// Record a refresh of the feed `feed_id` at `revision` that failed at `now`, and schedule
+    /// the next attempt at `next_fetch`. Nothing is recorded if the feed was deleted or is no
+    /// longer at that revision.
     pub fn record_failure(
         &self,
-        feed_id: i64,
+        feed_id: FeedId,
         revision: i64,
         error: &str,
         now: i64,
-        delay: i64,
+        next_fetch: i64,
     ) -> Result<()> {
         self.conn.execute(
             "UPDATE feeds SET error = ?1, failures = failures + 1, last_attempt = ?2, next_fetch = ?3
              WHERE id = ?4 AND revision = ?5",
-            params![error, now, now + delay, feed_id, revision],
+            params![error, now, next_fetch, feed_id, revision],
         )?;
         Ok(())
     }
 
-    pub fn import(&mut self, text: &str) -> Result<ImportReport> {
+    pub fn import(&self, text: &str) -> Result<ImportReport> {
         let doc = opml::parse(text)?;
-        let tx = self.conn.transaction()?;
-        let mut report = ImportReport::default();
-        Self::import_outlines(&tx, &doc.body.outlines, None, &mut report, 0)?;
-        tx.commit()?;
-        Ok(report)
+        self.immediate(|s| {
+            let mut report = ImportReport::default();
+            Self::import_outlines(&s.conn, &doc.body.outlines, None, &mut report, 0)?;
+            Ok(report)
+        })
     }
 
     fn import_outlines(
         conn: &Connection,
         outlines: &[opml::Outline],
-        parent: Option<i64>,
+        parent: Option<FolderId>,
         report: &mut ImportReport,
         depth: usize,
     ) -> Result<()> {
@@ -240,7 +261,7 @@ impl Store {
                 } else {
                     o.name()
                 })?;
-                let existing: Option<i64> = conn
+                let existing: Option<FolderId> = conn
                     .query_row(
                         "SELECT id FROM folders WHERE parent IS ?1 AND name = ?2",
                         params![parent, name],
@@ -254,7 +275,7 @@ impl Store {
                             "INSERT INTO folders(name, parent) VALUES(?1, ?2)",
                             params![name, parent],
                         )?;
-                        conn.last_insert_rowid()
+                        FolderId(conn.last_insert_rowid())
                     }
                 };
                 Self::import_outlines(conn, &o.children, Some(id), report, depth + 1)?;

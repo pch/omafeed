@@ -15,7 +15,7 @@ use omafeed_core::{
     Db, Paths, Settings,
     config::Palette,
     ingest::{Progress, Refresher},
-    model::{Article, Library, Query, Scope},
+    model::{Article, ArticleId, FolderId, Library, Query, Scope},
 };
 use std::{
     cell::{Cell, RefCell},
@@ -235,7 +235,7 @@ pub struct Ui {
     articles: RefCell<Vec<Article>>,
     article_rows: RefCell<Vec<articles::ArticleRow>>,
     sidebar_rows: RefCell<Vec<sidebar::Row>>,
-    collapsed: RefCell<HashSet<i64>>,
+    collapsed: RefCell<HashSet<FolderId>>,
     /// Decoded favicons by cache path; `None` records a missing icon.
     favicons: RefCell<HashMap<PathBuf, Option<gdk::Texture>>>,
     /// The last "mark all read", for Ctrl+Z.
@@ -249,7 +249,7 @@ pub struct Ui {
     /// Counts this window's own read/star changes, so a reload that raced one keeps it.
     state_writes: Cell<u64>,
     /// Article to mark read once WebKit finishes loading it.
-    pending_mark: Cell<Option<i64>>,
+    pending_mark: Cell<Option<ArticleId>>,
     /// Suppresses selection signals while lists are repopulated.
     rebuilding: Cell<bool>,
     busy: Cell<bool>,

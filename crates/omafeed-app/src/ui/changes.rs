@@ -4,6 +4,7 @@
 //! but their results arrive later, possibly after the user changed the same article again,
 //! so every result is checked against what has happened since it was started.
 
+use omafeed_core::model::ArticleId;
 use std::collections::HashMap;
 
 /// A part of an article's state that can be changed on its own.
@@ -24,12 +25,12 @@ struct Change {
 #[derive(Debug, Default)]
 pub(super) struct Changes {
     last: u64,
-    newest: HashMap<(i64, Field), Change>,
+    newest: HashMap<(ArticleId, Field), Change>,
 }
 
 impl Changes {
     /// Record a change about to be written; returns its sequence number.
-    pub fn start(&mut self, id: i64, field: Field, value: bool) -> u64 {
+    pub fn start(&mut self, id: ArticleId, field: Field, value: bool) -> u64 {
         self.last += 1;
         self.newest.insert(
             (id, field),
@@ -44,7 +45,7 @@ impl Changes {
 
     /// Record that the write of change `sequence` finished, successfully or not. Returns
     /// whether it is still the newest change of its field, so that its outcome may be shown.
-    pub fn finish(&mut self, id: i64, field: Field, sequence: u64) -> bool {
+    pub fn finish(&mut self, id: ArticleId, field: Field, sequence: u64) -> bool {
         match self.newest.get_mut(&(id, field)) {
             Some(change) if change.sequence == sequence => {
                 change.finished = true;
@@ -63,7 +64,7 @@ impl Changes {
 
     /// Record that bulk change `sequence` set `field` of article `id` to `value`, unless a
     /// newer change has set it since. Returns whether it did.
-    pub fn finish_bulk(&mut self, id: i64, field: Field, value: bool, sequence: u64) -> bool {
+    pub fn finish_bulk(&mut self, id: ArticleId, field: Field, value: bool, sequence: u64) -> bool {
         if self
             .newest
             .get(&(id, field))
@@ -89,7 +90,7 @@ impl Changes {
 
     /// The value an unfinished change is writing.
     #[cfg(any(test, feature = "test-support"))]
-    pub fn unfinished(&self, id: i64, field: Field) -> Option<bool> {
+    pub fn unfinished(&self, id: ArticleId, field: Field) -> Option<bool> {
         self.newest
             .get(&(id, field))
             .filter(|c| !c.finished)
@@ -98,7 +99,7 @@ impl Changes {
 
     /// Correct `(read, starred)` as read from the database by a read sent at `mark`: a field
     /// changed since then, or still being written, shows that change instead.
-    pub fn overlay(&self, id: i64, mark: u64, read: &mut bool, starred: &mut bool) {
+    pub fn overlay(&self, id: ArticleId, mark: u64, read: &mut bool, starred: &mut bool) {
         for (field, value) in [(Field::Read, read), (Field::Starred, starred)] {
             if let Some(change) = self.newest.get(&(id, field))
                 && (change.sequence > mark || !change.finished)
@@ -113,7 +114,7 @@ impl Changes {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Batch {
     id: u64,
-    pub articles: Vec<i64>,
+    pub articles: Vec<ArticleId>,
 }
 
 /// The batch Ctrl+Z restores. Only the newest batch can be undone.
@@ -125,7 +126,7 @@ pub(super) struct Undo {
 
 impl Undo {
     /// Make `articles` the batch to undo, replacing any older one.
-    pub fn push(&mut self, articles: Vec<i64>) {
+    pub fn push(&mut self, articles: Vec<ArticleId>) {
         self.last += 1;
         self.batch = Some(Batch {
             id: self.last,
@@ -153,35 +154,35 @@ mod tests {
     #[test]
     fn an_earlier_result_never_overrides_a_later_change() {
         let mut c = Changes::default();
-        let star = c.start(1, Field::Starred, true);
-        let unstar = c.start(1, Field::Starred, false);
-        assert!(!c.finish(1, Field::Starred, star), "superseded");
-        assert_eq!(c.unfinished(1, Field::Starred), Some(false));
-        assert!(c.finish(1, Field::Starred, unstar));
-        assert_eq!(c.unfinished(1, Field::Starred), None);
+        let star = c.start(ArticleId(1), Field::Starred, true);
+        let unstar = c.start(ArticleId(1), Field::Starred, false);
+        assert!(!c.finish(ArticleId(1), Field::Starred, star), "superseded");
+        assert_eq!(c.unfinished(ArticleId(1), Field::Starred), Some(false));
+        assert!(c.finish(ArticleId(1), Field::Starred, unstar));
+        assert_eq!(c.unfinished(ArticleId(1), Field::Starred), None);
     }
 
     #[test]
     fn fields_and_articles_are_tracked_separately() {
         let mut c = Changes::default();
-        let read = c.start(1, Field::Read, true);
-        let star = c.start(1, Field::Starred, true);
-        let other = c.start(2, Field::Read, false);
-        assert!(c.finish(1, Field::Read, read));
-        assert!(c.finish(2, Field::Read, other));
-        assert_eq!(c.unfinished(1, Field::Starred), Some(true));
-        assert!(c.finish(1, Field::Starred, star));
+        let read = c.start(ArticleId(1), Field::Read, true);
+        let star = c.start(ArticleId(1), Field::Starred, true);
+        let other = c.start(ArticleId(2), Field::Read, false);
+        assert!(c.finish(ArticleId(1), Field::Read, read));
+        assert!(c.finish(ArticleId(2), Field::Read, other));
+        assert_eq!(c.unfinished(ArticleId(1), Field::Starred), Some(true));
+        assert!(c.finish(ArticleId(1), Field::Starred, star));
     }
 
     #[test]
     fn unfinished_changes_are_shown_over_any_read() {
         let mut c = Changes::default();
-        c.start(1, Field::Starred, true);
+        c.start(ArticleId(1), Field::Starred, true);
         let (mut read, mut starred) = (false, false);
-        c.overlay(1, c.mark(), &mut read, &mut starred);
+        c.overlay(ArticleId(1), c.mark(), &mut read, &mut starred);
         assert_eq!((read, starred), (false, true));
         let (mut read, mut starred) = (true, false);
-        c.overlay(2, c.mark(), &mut read, &mut starred);
+        c.overlay(ArticleId(2), c.mark(), &mut read, &mut starred);
         assert_eq!((read, starred), (true, false));
     }
 
@@ -189,14 +190,14 @@ mod tests {
     fn a_read_arriving_after_a_newer_write_finished_keeps_the_write() {
         let mut c = Changes::default();
         let sent = c.mark();
-        let star = c.start(1, Field::Starred, true);
-        c.finish(1, Field::Starred, star);
+        let star = c.start(ArticleId(1), Field::Starred, true);
+        c.finish(ArticleId(1), Field::Starred, star);
         let (mut read, mut starred) = (false, false);
-        c.overlay(1, sent, &mut read, &mut starred);
+        c.overlay(ArticleId(1), sent, &mut read, &mut starred);
         assert!(starred, "the read was sent before the star");
         // A read sent after the write finished already has it, and is trusted.
         let (mut read, mut starred) = (false, false);
-        c.overlay(1, c.mark(), &mut read, &mut starred);
+        c.overlay(ArticleId(1), c.mark(), &mut read, &mut starred);
         assert!(!starred);
     }
 
@@ -205,15 +206,15 @@ mod tests {
         let mut c = Changes::default();
         let sent = c.mark();
         let bulk = c.start_bulk();
-        assert!(c.finish_bulk(1, Field::Read, true, bulk));
-        assert_eq!(c.unfinished(1, Field::Read), None);
+        assert!(c.finish_bulk(ArticleId(1), Field::Read, true, bulk));
+        assert_eq!(c.unfinished(ArticleId(1), Field::Read), None);
         let (mut read, mut starred) = (false, false);
-        c.overlay(1, sent, &mut read, &mut starred);
+        c.overlay(ArticleId(1), sent, &mut read, &mut starred);
         assert!(read, "a read sent before the bulk change must not undo it");
         // A toggle after the bulk change wins over it.
-        c.start(1, Field::Read, false);
+        c.start(ArticleId(1), Field::Read, false);
         let (mut read, mut starred) = (true, false);
-        c.overlay(1, sent, &mut read, &mut starred);
+        c.overlay(ArticleId(1), sent, &mut read, &mut starred);
         assert!(!read);
     }
 
@@ -223,38 +224,42 @@ mod tests {
         // Undo, then mark all read, both sent before either finished.
         let undo = c.start_bulk();
         let mark_all = c.start_bulk();
-        assert!(c.finish_bulk(1, Field::Read, false, undo));
-        assert!(c.finish_bulk(1, Field::Read, true, mark_all));
+        assert!(c.finish_bulk(ArticleId(1), Field::Read, false, undo));
+        assert!(c.finish_bulk(ArticleId(1), Field::Read, true, mark_all));
         let (mut read, mut starred) = (false, false);
-        c.overlay(1, 0, &mut read, &mut starred);
+        c.overlay(ArticleId(1), 0, &mut read, &mut starred);
         assert!(read);
         // Results in the other order leave the later one in place.
         let mut c = Changes::default();
         let first = c.start_bulk();
         let second = c.start_bulk();
-        assert!(c.finish_bulk(1, Field::Read, true, second));
-        assert!(!c.finish_bulk(1, Field::Read, false, first));
+        assert!(c.finish_bulk(ArticleId(1), Field::Read, true, second));
+        assert!(!c.finish_bulk(ArticleId(1), Field::Read, false, first));
         // A toggle sent between a bulk change and its result wins over it.
         let mut c = Changes::default();
         let bulk = c.start_bulk();
-        c.start(1, Field::Read, false);
-        assert!(!c.finish_bulk(1, Field::Read, true, bulk));
-        assert_eq!(c.unfinished(1, Field::Read), Some(false));
+        c.start(ArticleId(1), Field::Read, false);
+        assert!(!c.finish_bulk(ArticleId(1), Field::Read, true, bulk));
+        assert_eq!(c.unfinished(ArticleId(1), Field::Read), Some(false));
     }
 
     #[test]
     fn a_failed_undo_returns_its_batch_unless_a_newer_one_exists() {
         let mut u = Undo::default();
         assert_eq!(u.take(), None);
-        u.push(vec![1, 2]);
+        u.push(vec![ArticleId(1), ArticleId(2)]);
         let batch = u.take().unwrap();
-        assert_eq!(batch.articles, [1, 2]);
+        assert_eq!(batch.articles, [ArticleId(1), ArticleId(2)]);
         assert_eq!(u.take(), None, "taken once");
         u.give_back(batch.clone());
         assert_eq!(u.take(), Some(batch.clone()));
-        u.push(vec![3]);
+        u.push(vec![ArticleId(3)]);
         u.give_back(batch);
-        assert_eq!(u.take().unwrap().articles, [3], "the newer batch stays");
+        assert_eq!(
+            u.take().unwrap().articles,
+            [ArticleId(3)],
+            "the newer batch stays"
+        );
         u.push(vec![]);
         assert_eq!(u.take(), None, "nothing to undo");
     }
@@ -262,9 +267,9 @@ mod tests {
     #[test]
     fn a_failed_undo_is_not_returned_after_a_newer_batch_was_undone() {
         let mut u = Undo::default();
-        u.push(vec![1]);
+        u.push(vec![ArticleId(1)]);
         let old = u.take().unwrap();
-        u.push(vec![2]);
+        u.push(vec![ArticleId(2)]);
         let new = u.take().unwrap();
         u.give_back(old);
         assert_eq!(u.take(), None);

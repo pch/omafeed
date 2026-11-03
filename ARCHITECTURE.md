@@ -14,10 +14,11 @@ Run without a command, `omafeed` opens the reader window; with a command (`omafe
 
 | Module | Contents |
 | --- | --- |
-| `model` | The data types shared by everything else: `Folder`, `Feed`, `Article`, `Library`, `Scope`, `Query`, `ImportReport`, and a feed download on its way into storage (`Download`, `Update`, `Entry`). |
+| `model` | The data types shared by everything else: the row IDs `FolderId`, `FeedId` and `ArticleId` (each an `i64` that serializes, prints and parses as the number), `Folder`, `Feed`, `Article`, `Library` (with lookups and a folder tree walk), `Scope` (written and read as `unread`, `feed:12`, …), `Query`, `StatePatch` (a read and/or star change), `ImportReport`, and a feed download on its way into storage (`Download`, `Update`, `Entry`). |
+| `error` | `Error`, the failures callers handle themselves: an article or feed that does not exist, a duplicate feed URL, a database from a newer version, and invalid input. Everything else is an `anyhow::Error` with context. |
 | `store` | `Store` (one SQLite connection) and `Db` (a handle to the database worker thread). `schema` holds the migrations; `folders`, `feeds` (library listing, subscriptions, refresh results, OPML import/export), `articles` (listing and read/star state) and `search` (query predicates) each add their methods to `Store`; `worker` is the thread. |
 | `fuzzy` | Forgiving search: turns typed words into an FTS5 query using the index's own vocabulary (typos, plurals, prefix of the last word). Private to the crate. |
-| `ingest` | Getting feeds in. `refresh` has `Refresher` (one pass over due feeds, with per-host and global concurrency limits) and its `Progress` events; `download` the conditional GET, retry backoff and `Retry-After`; `parse` feed-rs to `Entry`; `discovery` turns a website or feed URL into feed candidates; `icons` finds, downloads, normalizes (to 64×64 PNG), caches and prunes website icons. |
+| `ingest` | Getting feeds in. `refresh` has `Refresher` (one pass over due feeds, with per-host and global concurrency limits) and its `Progress` events; `download` the conditional GET; `schedule` when a feed is due next (the refresh interval, backoff after failures, and `Retry-After`) as pure functions of the time, so the store only records the timestamps they give; `parse` feed-rs to `Entry`; `discovery` turns a website or feed URL into feed candidates; `icons` finds, downloads, normalizes (to 64×64 PNG), caches and prunes website icons. |
 | `content` | Article HTML: `sanitize`, plain text for previews and search (`plain`), and Markdown-like reading text for the command line (`readable`). |
 | `render` | The reader's HTML document (`document`). |
 | `opml` | OPML parsing and export. |
@@ -86,6 +87,10 @@ is created (subscribe or OPML import) or its URL changes. A refresh remembers th
 started with, and `commit_download` and `record_failure` store nothing unless the feed still
 has it. So a download that finishes after its feed was edited, deleted, or replaced by a new
 feed that reused the ID (SQLite reuses the highest deleted rowid) is dropped.
+
+Every `Store` method takes `&self`. A write of more than one statement runs in one
+immediate transaction through `Store::immediate`, which joins an enclosing transaction if
+there is one.
 
 Reads that must agree run in one snapshot (`Store::snapshot`): the library's folders, feeds
 and totals; the window's reload after another program's change, which reads the library and

@@ -1,7 +1,7 @@
 use omafeed_core::{
     Db, Store, content,
     ingest::{self, Refresher},
-    model::{Download, Query, Scope, Update},
+    model::{ArticleId, Download, FeedId, Query, Scope, StatePatch, Update},
 };
 fn rss(body: &str) -> String {
     format!(
@@ -19,7 +19,7 @@ fn download(body: &str) -> Download {
 /// Turns a new library back into the version 2 schema, for tests that write older text.
 const UNDO_LATER_MIGRATIONS: &str = "ALTER TABLE feeds DROP COLUMN revision; DROP TABLE meta;";
 /// The feed's current revision, as a refresh would see it.
-fn revision(s: &Store, feed: i64) -> i64 {
+fn revision(s: &Store, feed: FeedId) -> i64 {
     s.library()
         .unwrap()
         .feeds
@@ -27,6 +27,10 @@ fn revision(s: &Store, feed: i64) -> i64 {
         .find(|f| f.id == feed)
         .unwrap()
         .revision
+}
+/// The current time, as a refresh would record it.
+fn now() -> i64 {
+    chrono::Utc::now().timestamp()
 }
 fn all() -> Query {
     Query {
@@ -36,7 +40,7 @@ fn all() -> Query {
 }
 #[test]
 fn import_hierarchy_roundtrip_and_reimport_preserves_moves() {
-    let mut s = Store::open(":memory:").unwrap();
+    let s = Store::open(":memory:").unwrap();
     let input = r#"<opml version="2.0"><body><outline text="Blogs &amp; News"><outline text="Nested"><outline text="マリウス" xmlUrl="https://example.org/feed?x=1&amp;y=2"/></outline></outline><outline text="bad" xmlUrl="file:///etc/passwd"/></body></opml>"#;
     let r = s.import(input).unwrap();
     assert_eq!(r.added, 1);
@@ -48,13 +52,13 @@ fn import_hierarchy_roundtrip_and_reimport_preserves_moves() {
     assert_eq!(s.import(input).unwrap().skipped, 1);
     assert_eq!(s.library().unwrap().feeds[0].folder, None);
     let export = s.export().unwrap();
-    let mut other = Store::open(":memory:").unwrap();
+    let other = Store::open(":memory:").unwrap();
     assert_eq!(other.import(&export).unwrap().added, 1);
     assert_eq!(other.library().unwrap().feeds[0].title, "Custom");
 }
 #[test]
 fn reimporting_folders_with_surrounding_spaces_reuses_them() {
-    let mut s = Store::open(":memory:").unwrap();
+    let s = Store::open(":memory:").unwrap();
     let opml = r#"<opml version="2.0"><body><outline text=" Work "><outline text="  "><outline text="Feed" xmlUrl="https://example.org/feed"/></outline></outline></body></opml>"#;
     assert_eq!(s.import(opml).unwrap().added, 1);
     let again = s.import(opml).unwrap();
@@ -69,7 +73,7 @@ fn reimporting_folders_with_surrounding_spaces_reuses_them() {
     names.sort();
     assert_eq!(names, ["Untitled", "Work"]);
     // A folder made by hand is found by its trimmed name too.
-    let mut s = Store::open(":memory:").unwrap();
+    let s = Store::open(":memory:").unwrap();
     let work = s.add_folder("Work", None).unwrap();
     s.import(opml).unwrap();
     let lib = s.library().unwrap();
@@ -79,7 +83,7 @@ fn reimporting_folders_with_surrounding_spaces_reuses_them() {
 }
 #[test]
 fn folder_moves_reject_cycles_and_delete_preserves_contents() {
-    let mut s = Store::open(":memory:").unwrap();
+    let s = Store::open(":memory:").unwrap();
     let a = s.add_folder("A", None).unwrap();
     let b = s.add_folder("B", Some(a)).unwrap();
     let c = s.add_folder("C", Some(b)).unwrap();
@@ -98,20 +102,20 @@ fn folder_moves_reject_cycles_and_delete_preserves_contents() {
 }
 #[test]
 fn repeated_downloads_preserve_state_and_content_updates_are_searchable() {
-    let mut s = Store::open(":memory:").unwrap();
+    let s = Store::open(":memory:").unwrap();
     let f = s
         .add_feed("Test", "https://example.org/feed", None)
         .unwrap();
     let body = rss(
         "<item><guid>1</guid><title>First title</title><description>old body</description></item>",
     );
-    s.commit_download(f, revision(&s, f), download(&body), 30)
+    s.commit_download(f, revision(&s, f), download(&body), now(), now() + 1800)
         .unwrap();
     let a = s.articles(&all()).unwrap().remove(0);
     s.set_read(a.id, true).unwrap();
     s.set_starred(a.id, true).unwrap();
     let body = body.replace("old body", "new searchable content");
-    s.commit_download(f, revision(&s, f), download(&body), 30)
+    s.commit_download(f, revision(&s, f), download(&body), now(), now() + 1800)
         .unwrap();
     let articles = s.articles(&all()).unwrap();
     assert_eq!(articles.len(), 1);
@@ -130,8 +134,14 @@ fn repeated_downloads_preserve_state_and_content_updates_are_searchable() {
         .is_empty()
     );
     let original_date = articles[0].published;
-    s.commit_download(f, revision(&s, f), Download::NotModified, 30)
-        .unwrap();
+    s.commit_download(
+        f,
+        revision(&s, f),
+        Download::NotModified,
+        now(),
+        now() + 1800,
+    )
+    .unwrap();
     assert_eq!(s.articles(&all()).unwrap()[0].published, original_date);
     assert_eq!(s.library().unwrap().feeds[0].etag.as_deref(), Some("v1"));
 }
@@ -141,7 +151,7 @@ fn state_survives_reopen_and_feed_moves() {
     let path = dir.path().join("data.db");
     let id;
     {
-        let mut s = Store::open(&path).unwrap();
+        let s = Store::open(&path).unwrap();
         let folder = s.add_folder("Read", None).unwrap();
         let f = s
             .add_feed("Test", "https://example.org/feed", None)
@@ -150,7 +160,8 @@ fn state_survives_reopen_and_feed_moves() {
             f,
             revision(&s, f),
             download(&rss("<item><guid>1</guid><title>A</title></item>")),
-            30,
+            now(),
+            now() + 1800,
         )
         .unwrap();
         id = s.articles(&all()).unwrap()[0].id;
@@ -203,7 +214,7 @@ fn atom_json_and_sanitized_relative_links() {
 }
 #[test]
 fn bulk_mark_includes_descendants_and_undo_is_scoped() {
-    let mut s = Store::open(":memory:").unwrap();
+    let s = Store::open(":memory:").unwrap();
     let a = s.add_folder("A", None).unwrap();
     let b = s.add_folder("B", Some(a)).unwrap();
     for (i, folder) in [Some(a), Some(b), None].into_iter().enumerate() {
@@ -214,7 +225,8 @@ fn bulk_mark_includes_descendants_and_undo_is_scoped() {
             id,
             revision(&s, id),
             download(&rss("<item><guid>x</guid><title>test</title></item>")),
-            30,
+            now(),
+            now() + 1800,
         )
         .unwrap();
     }
@@ -292,13 +304,14 @@ async fn conditional_refresh_and_failures_keep_cached_articles() {
 }
 #[test]
 fn invalid_search_is_literal_and_removing_feed_cleans_fts() {
-    let mut s = Store::open(":memory:").unwrap();
+    let s = Store::open(":memory:").unwrap();
     let f = s.add_feed("Test", "https://example.org", None).unwrap();
     s.commit_download(
         f,
         revision(&s, f),
         download(&rss("<item><guid>1</guid><title>Hello</title></item>")),
-        30,
+        now(),
+        now() + 1800,
     )
     .unwrap();
     assert!(
@@ -321,13 +334,14 @@ fn invalid_search_is_literal_and_removing_feed_cleans_fts() {
 
 #[test]
 fn correcting_feed_url_preserves_history_and_resets_validators() {
-    let mut s = Store::open(":memory:").unwrap();
+    let s = Store::open(":memory:").unwrap();
     let id = s.add_feed("Test", "https://example.org/old", None).unwrap();
     s.commit_download(
         id,
         revision(&s, id),
         download(&rss("<item><guid>1</guid><title>A</title></item>")),
-        30,
+        now(),
+        now() + 1800,
     )
     .unwrap();
     let a = s.articles(&all()).unwrap()[0].id;
@@ -368,7 +382,7 @@ async fn redirects_are_followed_and_oversized_feeds_are_rejected() {
 }
 #[test]
 fn folder_removal_handles_duplicate_child_names_without_losing_feeds() {
-    let mut s = Store::open(":memory:").unwrap();
+    let s = Store::open(":memory:").unwrap();
     let root = s.add_folder("Root", None).unwrap();
     let child = s.add_folder("Same", Some(root)).unwrap();
     s.add_folder("Same", None).unwrap();
@@ -496,7 +510,7 @@ fn upgrading_a_version_1_database_reextracts_article_text() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("old.db");
     {
-        let mut s = Store::open(&path).unwrap();
+        let s = Store::open(&path).unwrap();
         let f = s
             .add_feed("Test", "https://example.org/feed", None)
             .unwrap();
@@ -504,8 +518,7 @@ fn upgrading_a_version_1_database_reextracts_article_text() {
             f, revision(&s, f),
             download(&rss(
                 "<item><guid>1</guid><title>A</title><description>&lt;p&gt;On &lt;a href=\"https://x.org\"&gt;Spotify&lt;/a&gt;, Apple&lt;/p&gt;</description></item>",
-            )),
-            30,
+            )), now(), now() + 1800,
         )
         .unwrap();
     }
@@ -528,16 +541,16 @@ fn upgrading_a_version_1_database_reextracts_article_text() {
 }
 #[test]
 fn feed_article_counts_report_articles_and_stars_per_feed() {
-    let mut s = Store::open(":memory:").unwrap();
+    let s = Store::open(":memory:").unwrap();
     let a = s.add_feed("A", "https://example.org/a", None).unwrap();
     let b = s.add_feed("B", "https://example.org/b", None).unwrap();
     let two = rss(
         "<item><guid>1</guid><title>One</title></item><item><guid>2</guid><title>Two</title></item>",
     );
-    s.commit_download(a, revision(&s, a), download(&two), 30)
+    s.commit_download(a, revision(&s, a), download(&two), now(), now() + 1800)
         .unwrap();
     let one = rss("<item><guid>3</guid><title>Three</title></item>");
-    s.commit_download(b, revision(&s, b), download(&one), 30)
+    s.commit_download(b, revision(&s, b), download(&one), now(), now() + 1800)
         .unwrap();
     assert_eq!(s.feed_article_counts(a).unwrap(), (2, 0));
     let in_a = Query {
@@ -550,7 +563,7 @@ fn feed_article_counts_report_articles_and_stars_per_feed() {
     s.set_read(first.id, true).unwrap();
     assert_eq!(s.feed_article_counts(a).unwrap(), (2, 1));
     assert_eq!(s.feed_article_counts(b).unwrap(), (1, 0));
-    assert_eq!(s.feed_article_counts(999).unwrap(), (0, 0));
+    assert_eq!(s.feed_article_counts(FeedId(999)).unwrap(), (0, 0));
     s.delete_feed(a).unwrap();
     assert_eq!(s.feed_article_counts(a).unwrap(), (0, 0));
     assert_eq!(s.feed_article_counts(b).unwrap(), (1, 0));
@@ -579,37 +592,65 @@ fn data_version_changes_only_when_another_connection_writes() {
 fn batch_state_changes_roll_back_on_invalid_ids_and_write_failures() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("batch.db");
-    let mut s = Store::open(&path).unwrap();
+    let s = Store::open(&path).unwrap();
     let feed = s
         .add_feed("Test", "https://example.org/feed", None)
         .unwrap();
-    s.commit_download(feed, revision(&s, feed), download(&rss("<item><guid>1</guid><title>One</title></item><item><guid>2</guid><title>Two</title></item>")), 30).unwrap();
+    s.commit_download(feed, revision(&s, feed), download(&rss("<item><guid>1</guid><title>One</title></item><item><guid>2</guid><title>Two</title></item>")), now(), now() + 1800).unwrap();
     let mut ids: Vec<_> = s.articles(&all()).unwrap().iter().map(|a| a.id).collect();
     ids.sort();
     assert!(
-        s.set_article_states(&[ids[0], 9999], Some(true), Some(true))
-            .is_err()
+        s.set_article_states(
+            &[ids[0], ArticleId(9999)],
+            StatePatch {
+                read: Some(true),
+                starred: Some(true)
+            }
+        )
+        .is_err()
     );
     assert!(!s.article(ids[0]).unwrap().read);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!("CREATE TRIGGER fail_batch BEFORE UPDATE ON article_state WHEN NEW.article_id = {} BEGIN SELECT RAISE(ABORT, 'write failure'); END", ids[1])).unwrap();
-    assert!(s.set_article_states(&ids, Some(true), Some(true)).is_err());
+    assert!(
+        s.set_article_states(
+            &ids,
+            StatePatch {
+                read: Some(true),
+                starred: Some(true)
+            }
+        )
+        .is_err()
+    );
     for id in &ids {
         let a = s.article(*id).unwrap();
         assert!(!a.read && !a.starred);
     }
     conn.execute_batch("DROP TRIGGER fail_batch").unwrap();
     assert_eq!(
-        s.set_article_states(&[ids[1], ids[0], ids[0]], Some(true), None)
-            .unwrap()
-            .len(),
+        s.set_article_states(
+            &[ids[1], ids[0], ids[0]],
+            StatePatch {
+                read: Some(true),
+                starred: None
+            }
+        )
+        .unwrap()
+        .len(),
         2
     );
     for id in &ids {
         let a = s.article(*id).unwrap();
         assert!(a.read && !a.starred);
     }
-    s.set_article_states(&ids, None, Some(true)).unwrap();
+    s.set_article_states(
+        &ids,
+        StatePatch {
+            read: None,
+            starred: Some(true),
+        },
+    )
+    .unwrap();
     assert!(s.article(ids[0]).unwrap().read && s.article(ids[0]).unwrap().starred);
     s.delete_feed(feed).unwrap();
     assert!(s.article_if_exists(ids[0]).unwrap().is_none());
@@ -623,21 +664,27 @@ fn article(guid: &str, title: &str, body: &str) -> String {
 
 /// A store with one feed holding the given (title, body) articles.
 fn library(articles: &[(&str, &str)]) -> Store {
-    let mut s = Store::open(":memory:").unwrap();
+    let s = Store::open(":memory:").unwrap();
     let feed = s
         .add_feed("Test", "https://example.org/feed", None)
         .unwrap();
-    add(&mut s, feed, articles);
+    add(&s, feed, articles);
     s
 }
 
-fn add(s: &mut Store, feed: i64, articles: &[(&str, &str)]) {
+fn add(s: &Store, feed: FeedId, articles: &[(&str, &str)]) {
     let items: String = articles
         .iter()
         .map(|(title, body)| article(&format!("{title}-{body}"), title, body))
         .collect();
-    s.commit_download(feed, revision(s, feed), download(&rss(&items)), 30)
-        .unwrap();
+    s.commit_download(
+        feed,
+        revision(s, feed),
+        download(&rss(&items)),
+        now(),
+        now() + 1800,
+    )
+    .unwrap();
 }
 
 fn titles(s: &Store, search: &str, exact: bool) -> Vec<String> {
@@ -754,23 +801,23 @@ fn exact_search_matches_words_as_typed() {
 fn search_sees_words_added_by_this_connection_and_by_other_programs() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("library.db");
-    let mut mine = Store::open(&path).unwrap();
+    let mine = Store::open(&path).unwrap();
     let feed = mine
         .add_feed("Test", "https://example.org/feed", None)
         .unwrap();
-    add(&mut mine, feed, &[("Base", "ordinary words")]);
+    add(&mine, feed, &[("Base", "ordinary words")]);
     assert!(
         found(&mine, "zebrafisch").is_empty(),
         "primes the cached word list"
     );
 
     // A word this connection just stored is found by a typo of it.
-    add(&mut mine, feed, &[("Fish", "a zebrafish swims")]);
+    add(&mine, feed, &[("Fish", "a zebrafish swims")]);
     assert_eq!(found(&mine, "zebrafisch"), ["Fish"]);
 
     // So is a word another program (the command line) stored in the meantime.
-    let mut other = Store::open(&path).unwrap();
-    add(&mut other, feed, &[("Marsupial", "the quokka smiles")]);
+    let other = Store::open(&path).unwrap();
+    add(&other, feed, &[("Marsupial", "the quokka smiles")]);
     assert_eq!(found(&mine, "quokkaa"), ["Marsupial"]);
 
     // Deleting articles removes their words from the corrections too.
@@ -865,15 +912,11 @@ fn search_copes_with_odd_words_and_huge_neighbourhoods() {
 fn the_word_list_is_read_again_only_when_articles_change() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("library.db");
-    let mut s = Store::open(&path).unwrap();
+    let s = Store::open(&path).unwrap();
     let feed = s
         .add_feed("Test", "https://example.org/feed", None)
         .unwrap();
-    add(
-        &mut s,
-        feed,
-        &[("One", "first article"), ("Two", "second one")],
-    );
+    add(&s, feed, &[("One", "first article"), ("Two", "second one")]);
     assert_eq!(s.vocabulary_loads(), 0, "not read until a search needs it");
     let id = s.articles(&all()).unwrap()[0].id;
 
@@ -900,11 +943,11 @@ fn the_word_list_is_read_again_only_when_articles_change() {
     assert_eq!(s.vocabulary_loads(), 1, "no reason to read the words again");
 
     // A download with new articles does, and so does removing a feed.
-    add(&mut s, feed, &[("Three", "third article")]);
+    add(&s, feed, &[("Three", "third article")]);
     assert_eq!(found(&s, "thrid"), ["Three"]);
     assert_eq!(s.vocabulary_loads(), 2);
     let notmodified = Download::NotModified;
-    s.commit_download(feed, revision(&s, feed), notmodified, 30)
+    s.commit_download(feed, revision(&s, feed), notmodified, now(), now() + 1800)
         .unwrap();
     found(&s, "thrid");
     assert_eq!(
@@ -917,11 +960,11 @@ fn the_word_list_is_read_again_only_when_articles_change() {
     assert_eq!(s.vocabulary_loads(), 3);
 
     // Another program's write is noticed too, once.
-    let mut other = Store::open(&path).unwrap();
+    let other = Store::open(&path).unwrap();
     let elsewhere = other
         .add_feed("Elsewhere", "https://example.org/other", None)
         .unwrap();
-    add(&mut other, elsewhere, &[("Four", "fourth article")]);
+    add(&other, elsewhere, &[("Four", "fourth article")]);
     assert_eq!(found(&s, "fourht"), ["Four"]);
     found(&s, "fourht");
     assert_eq!(s.vocabulary_loads(), 4);
@@ -988,16 +1031,16 @@ fn decomposed_accents_get_typo_correction_and_prefixes() {
 fn a_snapshot_does_not_see_writes_made_while_it_reads() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("library.db");
-    let mut mine = Store::open(&path).unwrap();
+    let mine = Store::open(&path).unwrap();
     let feed = mine
         .add_feed("Test", "https://example.org/feed", None)
         .unwrap();
-    add(&mut mine, feed, &[("One", "first")]);
-    let mut other = Store::open(&path).unwrap();
+    add(&mine, feed, &[("One", "first")]);
+    let other = Store::open(&path).unwrap();
     let (before, during) = mine
         .snapshot(|s| {
             let before = s.articles(&all())?.len();
-            add(&mut other, feed, &[("Two", "second")]);
+            add(&other, feed, &[("Two", "second")]);
             Ok((before, s.articles(&all())?.len()))
         })
         .unwrap();
@@ -1010,7 +1053,7 @@ fn upgrading_a_version_2_database_separates_words_at_block_ends() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("old.db");
     {
-        let mut s = Store::open(&path).unwrap();
+        let s = Store::open(&path).unwrap();
         let f = s
             .add_feed("Test", "https://example.org/feed", None)
             .unwrap();
@@ -1018,8 +1061,7 @@ fn upgrading_a_version_2_database_separates_words_at_block_ends() {
             f, revision(&s, f),
             download(&rss(
                 "<item><guid>1</guid><title>A</title><description>&lt;details&gt;&lt;summary&gt;Changes&lt;/summary&gt;Fixed&lt;/details&gt;</description></item>",
-            )),
-            30,
+            )), now(), now() + 1800,
         )
         .unwrap();
     }
@@ -1109,4 +1151,48 @@ fn immediate_work_is_kept_only_if_it_all_succeeds() {
     assert_eq!(s.library().unwrap().feeds.len(), 1);
     s.immediate(|s| s.delete_feed(id)).unwrap();
     assert!(s.library().unwrap().feeds.is_empty());
+}
+
+#[test]
+fn callers_can_tell_the_errors_they_act_on_apart() {
+    use omafeed_core::Error;
+    let kind = |e: anyhow::Error| match e.downcast_ref::<Error>() {
+        Some(Error::ArticleNotFound(id)) => format!("article {id}"),
+        Some(Error::FeedNotFound(id)) => format!("feed {id}"),
+        Some(Error::DuplicateFeed(_)) => "duplicate".into(),
+        Some(Error::NewerDatabase) => "newer".into(),
+        Some(Error::Validation(_)) => "validation".into(),
+        None => format!("other: {e}"),
+    };
+    let s = Store::open(":memory:").unwrap();
+    let a = s.add_feed("A", "https://example.org/a", None).unwrap();
+    s.add_feed("B", "https://example.org/b", None).unwrap();
+    let duplicate = s
+        .add_feed("Again", "https://example.org/a", None)
+        .unwrap_err();
+    // The command line prints SQLite's own message, as it always has.
+    assert_eq!(
+        format!("{duplicate:#}"),
+        "UNIQUE constraint failed: feeds.url: Error code 2067: constraint failed"
+    );
+    assert_eq!(kind(duplicate), "duplicate");
+    let moved = s.update_feed(a, "A", "https://example.org/b", None);
+    assert_eq!(kind(moved.unwrap_err()), "duplicate");
+    assert_eq!(
+        kind(s.add_feed("", "ftp://example.org", None).unwrap_err()),
+        "validation"
+    );
+    assert_eq!(
+        kind(s.add_feed("", "not a url", None).unwrap_err()),
+        "validation"
+    );
+    assert_eq!(kind(s.add_folder(" ", None).unwrap_err()), "validation");
+    // Other constraints are not mistaken for a duplicate feed.
+    s.add_folder("Same", None).unwrap();
+    assert!(kind(s.add_folder("Same", None).unwrap_err()).starts_with("other: UNIQUE"));
+    let missing = s.set_article_states(&[ArticleId(404)], StatePatch::read(true));
+    assert_eq!(kind(missing.unwrap_err()), "article 404");
+    // A single article that is gone is left alone, without an error.
+    s.set_state(ArticleId(404), StatePatch::starred(true))
+        .unwrap();
 }

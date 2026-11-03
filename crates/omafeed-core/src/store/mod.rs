@@ -7,8 +7,11 @@ mod schema;
 mod search;
 mod worker;
 
-use crate::fuzzy::Vocabulary;
-use anyhow::{Result, bail};
+use crate::{
+    fuzzy::Vocabulary,
+    model::{ArticleId, FeedId, FolderId},
+};
+use anyhow::Result;
 use rusqlite::Connection;
 use std::{
     cell::{Cell, RefCell},
@@ -16,6 +19,25 @@ use std::{
 };
 
 pub use worker::Db;
+
+/// IDs go into and come out of SQLite as the integers they are.
+macro_rules! sql_id {
+    ($($name:ty),*) => {$(
+        impl rusqlite::ToSql for $name {
+            fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+                self.0.to_sql()
+            }
+        }
+
+        impl rusqlite::types::FromSql for $name {
+            fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+                i64::column_result(value).map(Self)
+            }
+        }
+    )*};
+}
+
+sql_id!(ArticleId, FeedId, FolderId);
 
 /// Number of articles per list page.
 pub const PAGE_SIZE: usize = 200;
@@ -86,7 +108,7 @@ impl Store {
     pub(super) fn name(name: &str) -> Result<&str> {
         let n = name.trim();
         if n.is_empty() || n.len() > 300 {
-            bail!("Name must contain 1–300 bytes");
+            return Err(crate::Error::Validation("Name must contain 1–300 bytes".into()).into());
         }
         Ok(n)
     }
@@ -105,8 +127,13 @@ impl Store {
     }
 
     /// Run reads and writes in one transaction that takes the write lock at once, so nothing
-    /// another program writes can come between them. Nothing is kept if `work` fails.
+    /// another program writes can come between them. Nothing is kept if `work` fails. Inside
+    /// another transaction, the work joins it (and its failure must fail that one too). Every
+    /// write that takes more than one statement goes through here.
     pub fn immediate<T>(&self, work: impl FnOnce(&Self) -> Result<T>) -> Result<T> {
+        if !self.conn.is_autocommit() {
+            return work(self);
+        }
         let tx = rusqlite::Transaction::new_unchecked(
             &self.conn,
             rusqlite::TransactionBehavior::Immediate,

@@ -1,6 +1,7 @@
 //! Folders: creating, renaming, moving and removing them.
 use super::Store;
-use anyhow::{Result, bail};
+use crate::model::FolderId;
+use anyhow::Result;
 use rusqlite::params;
 
 const FOLDER_CYCLE: &str = "
@@ -12,15 +13,15 @@ WITH RECURSIVE descendants(id) AS (
 SELECT EXISTS(SELECT 1 FROM descendants WHERE id = ?2)";
 
 impl Store {
-    pub fn add_folder(&self, name: &str, parent: Option<i64>) -> Result<i64> {
+    pub fn add_folder(&self, name: &str, parent: Option<FolderId>) -> Result<FolderId> {
         self.conn.execute(
             "INSERT INTO folders(name, parent) VALUES(?1, ?2)",
             params![Self::name(name)?, parent],
         )?;
-        Ok(self.conn.last_insert_rowid())
+        Ok(FolderId(self.conn.last_insert_rowid()))
     }
 
-    pub fn rename_folder(&self, id: i64, name: &str) -> Result<()> {
+    pub fn rename_folder(&self, id: FolderId, name: &str) -> Result<()> {
         self.conn.execute(
             "UPDATE folders SET name = ?1 WHERE id = ?2",
             params![Self::name(name)?, id],
@@ -28,13 +29,16 @@ impl Store {
         Ok(())
     }
 
-    pub fn move_folder(&self, id: i64, parent: Option<i64>) -> Result<()> {
+    pub fn move_folder(&self, id: FolderId, parent: Option<FolderId>) -> Result<()> {
         if let Some(p) = parent
             && self
                 .conn
                 .query_row(FOLDER_CYCLE, params![id, p], |r| r.get::<_, bool>(0))?
         {
-            bail!("A folder cannot be moved inside itself or its children");
+            return Err(crate::Error::Validation(
+                "A folder cannot be moved inside itself or its children".into(),
+            )
+            .into());
         }
         self.conn.execute(
             "UPDATE folders SET parent = ?1 WHERE id = ?2",
@@ -44,18 +48,21 @@ impl Store {
     }
 
     /// Rename and move a folder atomically.
-    pub fn edit_folder(&self, id: i64, name: &str, parent: Option<i64>) -> Result<()> {
-        let tx = self.conn.unchecked_transaction()?;
-        self.rename_folder(id, name)?;
-        self.move_folder(id, parent)?;
-        tx.commit()?;
-        Ok(())
+    pub fn edit_folder(&self, id: FolderId, name: &str, parent: Option<FolderId>) -> Result<()> {
+        self.immediate(|s| {
+            s.rename_folder(id, name)?;
+            s.move_folder(id, parent)
+        })
     }
 
     /// Removing a folder keeps all feeds and promotes child folders to its parent.
-    pub fn delete_folder(&mut self, id: i64) -> Result<()> {
-        let tx = self.conn.transaction()?;
-        let parent: Option<i64> =
+    pub fn delete_folder(&self, id: FolderId) -> Result<()> {
+        self.immediate(|s| s.delete_folder_now(id))
+    }
+
+    fn delete_folder_now(&self, id: FolderId) -> Result<()> {
+        let tx = &self.conn;
+        let parent: Option<FolderId> =
             tx.query_row("SELECT parent FROM folders WHERE id = ?1", [id], |r| {
                 r.get(0)
             })?;
@@ -85,7 +92,6 @@ impl Store {
             params![parent, id],
         )?;
         tx.execute("DELETE FROM folders WHERE id = ?1", [id])?;
-        tx.commit()?;
         Ok(())
     }
 }

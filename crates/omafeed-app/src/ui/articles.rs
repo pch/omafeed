@@ -4,7 +4,7 @@ use chrono::{DateTime, Datelike, Local};
 use gtk::{glib, prelude::*};
 use omafeed_core::{
     content::one_line,
-    model::{Article, Scope},
+    model::{Article, ArticleId, Scope, StatePatch},
     store::PAGE_SIZE,
 };
 use std::rc::Rc;
@@ -172,7 +172,7 @@ impl Ui {
         }
     }
 
-    pub(super) fn select(self: &Rc<Self>, id: i64) {
+    pub(super) fn select(self: &Rc<Self>, id: ArticleId) {
         let generation = self.selection_generation.get() + 1;
         self.selection_generation.set(generation);
         let mark = self.changes.borrow().mark();
@@ -197,18 +197,16 @@ impl Ui {
     }
 
     /// Show an article's read and/or star state in the list and, if it is open, the reader.
-    fn show_state(&self, id: i64, read: Option<bool>, starred: Option<bool>) {
+    fn show_state(&self, id: ArticleId, patch: StatePatch) {
         if let Some(a) = self.selected.borrow_mut().as_mut().filter(|a| a.id == id) {
-            a.read = read.unwrap_or(a.read);
-            a.starred = starred.unwrap_or(a.starred);
+            patch.apply(a);
             self.update_buttons(a);
         }
         let mut articles = self.articles.borrow_mut();
         let Some((index, a)) = articles.iter_mut().enumerate().find(|(_, a)| a.id == id) else {
             return;
         };
-        a.read = read.unwrap_or(a.read);
-        a.starred = starred.unwrap_or(a.starred);
+        patch.apply(a);
         if let Some(row) = self.article_rows.borrow().get(index) {
             row.show_state(a);
         }
@@ -216,29 +214,19 @@ impl Ui {
 
     /// Show a read and/or star change at once, then write it. Results are applied only while
     /// no newer change of the same field is pending; an article deleted meanwhile is ignored.
-    pub(super) fn set_state(self: &Rc<Self>, id: i64, read: Option<bool>, starred: Option<bool>) {
+    pub(super) fn set_state(self: &Rc<Self>, id: ArticleId, patch: StatePatch) {
         self.state_writes.set(self.state_writes.get() + 1);
         let started: Vec<(Field, u64)> = {
             let mut changes = self.changes.borrow_mut();
-            [(Field::Read, read), (Field::Starred, starred)]
+            [(Field::Read, patch.read), (Field::Starred, patch.starred)]
                 .into_iter()
                 .filter_map(|(field, value)| Some((field, changes.start(id, field, value?))))
                 .collect()
         };
-        self.show_state(id, read, starred);
+        self.show_state(id, patch);
         let u = self.clone();
         glib::spawn_future_local(async move {
-            let result =
-                u.db.call(move |s| {
-                    if let Some(r) = read {
-                        s.set_read(id, r)?;
-                    }
-                    if let Some(v) = starred {
-                        s.set_starred(id, v)?;
-                    }
-                    Ok(())
-                })
-                .await;
+            let result = u.db.call(move |s| s.set_state(id, patch)).await;
             let mut newest = false;
             for (field, sequence) in started {
                 newest |= u.changes.borrow_mut().finish(id, field, sequence);
@@ -258,7 +246,7 @@ impl Ui {
 
     /// Show the article's saved state again after a failed write, keeping any change made
     /// after this read was sent.
-    fn reconcile(self: &Rc<Self>, id: i64) {
+    fn reconcile(self: &Rc<Self>, id: ArticleId) {
         let mark = self.changes.borrow().mark();
         let u = self.clone();
         glib::spawn_future_local(async move {
@@ -267,7 +255,13 @@ impl Ui {
                     u.changes
                         .borrow()
                         .overlay(id, mark, &mut a.read, &mut a.starred);
-                    u.show_state(id, Some(a.read), Some(a.starred));
+                    u.show_state(
+                        id,
+                        StatePatch {
+                            read: Some(a.read),
+                            starred: Some(a.starred),
+                        },
+                    );
                     u.refresh_counts();
                 }
                 // Deleted in the meantime: nothing left to show.
@@ -280,20 +274,20 @@ impl Ui {
     pub(super) fn toggle_read(self: &Rc<Self>) {
         let change = self.selected.borrow().as_ref().map(|a| (a.id, !a.read));
         if let Some((id, read)) = change {
-            self.set_state(id, Some(read), None);
+            self.set_state(id, StatePatch::read(read));
         }
     }
 
     pub(super) fn toggle_star(self: &Rc<Self>) {
         let change = self.selected.borrow().as_ref().map(|a| (a.id, !a.starred));
         if let Some((id, starred)) = change {
-            self.set_state(id, None, Some(starred));
+            self.set_state(id, StatePatch::starred(starred));
         }
     }
 
     /// Record that bulk change `sequence` set `articles` to `read`, except those changed
     /// since it was sent, and show it on the open article if it is one of them.
-    fn bulk_read_done(&self, articles: &[i64], read: bool, sequence: u64) {
+    fn bulk_read_done(&self, articles: &[ArticleId], read: bool, sequence: u64) {
         let open = self.selected.borrow().as_ref().map(|a| a.id);
         let mut show = false;
         let mut changes = self.changes.borrow_mut();
@@ -303,7 +297,7 @@ impl Ui {
         }
         drop(changes);
         if let Some(id) = open.filter(|_| show) {
-            self.show_state(id, Some(read), None);
+            self.show_state(id, StatePatch::read(read));
         }
     }
 

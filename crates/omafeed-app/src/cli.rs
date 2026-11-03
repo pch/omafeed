@@ -2,10 +2,12 @@
 use crate::DB_FILE;
 use anyhow::{Context, Result, bail};
 use omafeed_core::{
-    Db, Paths, Settings,
+    Db, Error, Paths, Settings,
     content::{one_line, readable},
     ingest::{Progress, Refresher},
-    model::{Article, Library, Query, Scope},
+    model::{
+        Article, ArticleId, FeedId, FolderId, Library, ParseScopeError, Query, Scope, StatePatch,
+    },
     store::PAGE_SIZE,
 };
 use serde_json::{Value, json};
@@ -157,10 +159,14 @@ pub fn run(command: Command) -> Result<()> {
                 articles(&db, scope, query.join(" "), list).await
             }
             Command::Article { id, html, json } => article(&db, id, html, json).await,
-            Command::Read(i) => set_state(&db, i, "Marked {} read", Some(true), None).await,
-            Command::Unread(i) => set_state(&db, i, "Marked {} unread", Some(false), None).await,
-            Command::Star(i) => set_state(&db, i, "Starred {}", None, Some(true)).await,
-            Command::Unstar(i) => set_state(&db, i, "Unstarred {}", None, Some(false)).await,
+            Command::Read(i) => set_state(&db, i, "Marked {} read", StatePatch::read(true)).await,
+            Command::Unread(i) => {
+                set_state(&db, i, "Marked {} unread", StatePatch::read(false)).await
+            }
+            Command::Star(i) => set_state(&db, i, "Starred {}", StatePatch::starred(true)).await,
+            Command::Unstar(i) => {
+                set_state(&db, i, "Unstarred {}", StatePatch::starred(false)).await
+            }
             Command::Subscribe {
                 url,
                 folder,
@@ -267,23 +273,7 @@ async fn discover(url: &str, json: bool) -> Result<()> {
 }
 
 fn parse_scope(text: &str) -> Result<Scope, String> {
-    let id = |n: &str| {
-        n.parse::<i64>()
-            .map_err(|_| format!("expected a number in '{text}'"))
-    };
-    match text {
-        "unread" => Ok(Scope::Unread),
-        "today" => Ok(Scope::Today),
-        "starred" => Ok(Scope::Starred),
-        "all" => Ok(Scope::All),
-        _ => match text.split_once(':') {
-            Some(("feed", n)) => Ok(Scope::Feed(id(n)?)),
-            Some(("folder", n)) => Ok(Scope::Folder(id(n)?)),
-            _ => Err(format!(
-                "unknown scope '{text}'; use unread, today, starred, all, feed:ID or folder:ID"
-            )),
-        },
-    }
+    text.parse().map_err(|e: ParseScopeError| e.to_string())
 }
 
 /// A search needs at least one word; an empty one would match every article.
@@ -346,7 +336,7 @@ fn day(timestamp: i64) -> String {
 }
 
 /// A folder's name with its parents, such as `Work/Blogs`; empty for no folder.
-fn folder_path(lib: &Library, id: Option<i64>) -> String {
+fn folder_path(lib: &Library, id: Option<FolderId>) -> String {
     lib.folder_path(id)
         .iter()
         .map(|f| one_line(&f.name))
@@ -523,10 +513,11 @@ async fn articles(db: &Db, scope: Scope, search: String, list: List) -> Result<(
 }
 
 async fn article(db: &Db, id: i64, html: bool, json: bool) -> Result<()> {
+    let id = ArticleId(id);
     let a = db
         .call(move |s| s.article_if_exists(id))
         .await?
-        .with_context(|| format!("No article with id {id}"))?;
+        .ok_or(Error::ArticleNotFound(id))?;
     if json {
         let mut item = summary(&a);
         if html {
@@ -558,12 +549,10 @@ async fn set_state(
     db: &Db,
     Ids { ids, json }: Ids,
     message: &str,
-    read: Option<bool>,
-    starred: Option<bool>,
+    patch: StatePatch,
 ) -> Result<()> {
-    let changed = db
-        .call(move |s| s.set_article_states(&ids, read, starred))
-        .await?;
+    let ids: Vec<ArticleId> = ids.into_iter().map(ArticleId).collect();
+    let changed = db.call(move |s| s.set_article_states(&ids, patch)).await?;
     if json {
         let articles: Vec<_> = changed
             .iter()
@@ -596,7 +585,7 @@ async fn subscribe(
     let feed_url = pick.url.clone();
     let (add_name, add_url) = (name.clone(), feed_url.clone());
     let id = db
-        .call(move |s| s.add_feed(&add_name, &add_url, folder))
+        .call(move |s| s.add_feed(&add_name, &add_url, folder.map(FolderId)))
         .await?;
     if !json {
         println!(
@@ -616,14 +605,13 @@ async fn subscribe(
 }
 
 async fn unsubscribe(db: &Db, id: i64, yes: bool, json: bool) -> Result<()> {
+    let id = FeedId(id);
     // One transaction, so the counts reported are exactly what is deleted.
     let (title, url, total, starred) = db
         .call(move |s| {
             s.immediate(|s| {
                 let lib = s.library()?;
-                let Some(feed) = lib.feed(id) else {
-                    bail!("No feed with id {id}");
-                };
+                let feed = lib.feed(id).ok_or(Error::FeedNotFound(id))?;
                 let (total, starred) = s.feed_article_counts(id)?;
                 if yes {
                     s.delete_feed(id)?;
@@ -709,8 +697,8 @@ mod tests {
         assert_eq!(parse_scope("today"), Ok(Scope::Today));
         assert_eq!(parse_scope("starred"), Ok(Scope::Starred));
         assert_eq!(parse_scope("all"), Ok(Scope::All));
-        assert_eq!(parse_scope("feed:12"), Ok(Scope::Feed(12)));
-        assert_eq!(parse_scope("folder:3"), Ok(Scope::Folder(3)));
+        assert_eq!(parse_scope("feed:12"), Ok(Scope::Feed(FeedId(12))));
+        assert_eq!(parse_scope("folder:3"), Ok(Scope::Folder(FolderId(3))));
     }
 
     #[test]
@@ -737,8 +725,8 @@ mod tests {
 
     fn folder(id: i64, parent: Option<i64>, name: &str) -> Folder {
         Folder {
-            id,
-            parent,
+            id: FolderId(id),
+            parent: parent.map(FolderId),
             name: name.into(),
         }
     }
@@ -756,12 +744,12 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(folder_path(&folders, None), "");
-        assert_eq!(folder_path(&folders, Some(1)), "Work");
-        assert_eq!(folder_path(&folders, Some(2)), "Work/Blogs");
-        assert_eq!(folder_path(&folders, Some(3)), "Orphan");
-        assert_eq!(folder_path(&folders, Some(404)), "");
+        assert_eq!(folder_path(&folders, Some(FolderId(1))), "Work");
+        assert_eq!(folder_path(&folders, Some(FolderId(2))), "Work/Blogs");
+        assert_eq!(folder_path(&folders, Some(FolderId(3))), "Orphan");
+        assert_eq!(folder_path(&folders, Some(FolderId(404))), "");
         // A cycle cannot happen in a real library, but must not hang the command.
-        assert!(!folder_path(&folders, Some(4)).is_empty());
+        assert!(!folder_path(&folders, Some(FolderId(4))).is_empty());
     }
 
     #[test]

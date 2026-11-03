@@ -233,7 +233,7 @@ impl Ui {
             .is_some_and(|a| a.id == loaded && !a.read);
         // Shown at once and put back if the write fails, like any other change.
         if unread {
-            self.set_state(loaded, Some(true), None);
+            self.set_state(loaded, omafeed_core::model::StatePatch::read(true));
         }
     }
 

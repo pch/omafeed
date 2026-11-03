@@ -27,6 +27,7 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 scraper = "0.27"
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.11"
+thiserror = "2"
 toml = "1.1"
 url = "2"
 

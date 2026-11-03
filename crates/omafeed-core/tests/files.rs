@@ -5,7 +5,7 @@
 use omafeed_core::{
     Paths, Settings, Store,
     config::Theme,
-    model::{Query, Scope},
+    model::{ArticleId, FeedId, FolderId, Query, Scope},
 };
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
@@ -77,10 +77,16 @@ fn databases_from_every_schema_version_open_with_their_library_intact() {
             .iter()
             .map(|f| (f.id, f.parent, f.name.as_str()))
             .collect();
-        assert_eq!(folders, [(2, Some(1), "Sub"), (1, None, "Work")]);
-        let local = lib.feeds.iter().find(|f| f.id == 1).unwrap();
+        assert_eq!(
+            folders,
+            [
+                (FolderId(2), Some(FolderId(1)), "Sub"),
+                (FolderId(1), None, "Work")
+            ]
+        );
+        let local = lib.feeds.iter().find(|f| f.id == FeedId(1)).unwrap();
         assert_eq!(local.title, "Local Feed");
-        assert_eq!(local.folder, Some(2));
+        assert_eq!(local.folder, Some(FolderId(2)));
         assert_eq!(local.url, "https://example.org/feed.xml");
         assert_eq!(local.site_url, "https://example.org/");
         assert_eq!(local.etag.as_deref(), Some("\"v1\""));
@@ -92,7 +98,7 @@ fn databases_from_every_schema_version_open_with_their_library_intact() {
             (local.next_fetch, local.failures, local.unread),
             (1704069000, 0, 1)
         );
-        let broken = lib.feeds.iter().find(|f| f.id == 2).unwrap();
+        let broken = lib.feeds.iter().find(|f| f.id == FeedId(2)).unwrap();
         assert_eq!(broken.failures, 3);
         assert_eq!(
             broken.error.as_deref(),
@@ -110,9 +116,9 @@ fn databases_from_every_schema_version_open_with_their_library_intact() {
         assert_eq!(
             articles,
             [
-                (3, "Plain words".to_string(), true, false),
-                (2, "Changes Fixed".to_string(), false, false),
-                (1, "On Spotify, Apple".to_string(), true, true),
+                (ArticleId(3), "Plain words".to_string(), true, false),
+                (ArticleId(2), "Changes Fixed".to_string(), false, false),
+                (ArticleId(1), "On Spotify, Apple".to_string(), true, true),
             ],
             "v{version}"
         );
@@ -125,7 +131,7 @@ fn databases_from_every_schema_version_open_with_their_library_intact() {
                 })
                 .unwrap();
             assert_eq!(found.len(), 1, "v{version}: {word}");
-            assert_eq!(found[0].id, id, "v{version}: {word}");
+            assert_eq!(found[0].id, ArticleId(id), "v{version}: {word}");
         }
         // Existing feeds get distinct revisions, and new ones never repeat them.
         let mut revisions: Vec<i64> = lib.feeds.iter().map(|f| f.revision).collect();
@@ -138,7 +144,7 @@ fn databases_from_every_schema_version_open_with_their_library_intact() {
         assert_eq!(distinct.len(), 3, "v{version}: {revisions:?}");
         s.delete_feed(added).unwrap();
 
-        let a = s.article(1).unwrap();
+        let a = s.article(ArticleId(1)).unwrap();
         assert_eq!(
             (a.title.as_str(), a.author.as_str(), a.published),
             ("Links", "Ann", 1704067200)
@@ -159,6 +165,10 @@ fn a_database_from_a_newer_version_is_refused_and_left_alone() {
         .pragma_update(None, "user_version", current + 1)
         .unwrap();
     let error = Store::open(&path).err().unwrap();
+    assert!(matches!(
+        error.downcast_ref::<omafeed_core::Error>(),
+        Some(omafeed_core::Error::NewerDatabase)
+    ));
     assert_eq!(
         error.to_string(),
         "Database was created by a newer Omafeed version"
@@ -204,8 +214,8 @@ fn settings_files_keep_their_format() {
         height: 700,
         sidebar_width: 200,
         list_width: 300,
-        scope: Scope::Folder(3),
-        selected_article: Some(42),
+        scope: Scope::Folder(FolderId(3)),
+        selected_article: Some(ArticleId(42)),
         unread_only: true,
     };
     assert_eq!(saved(&custom), read("settings/custom.toml"));
@@ -214,7 +224,7 @@ fn settings_files_keep_their_format() {
         (Scope::Today, "settings/scope-today.toml"),
         (Scope::Starred, "settings/scope-starred.toml"),
         (Scope::All, "settings/scope-all.toml"),
-        (Scope::Feed(18), "settings/scope-feed.toml"),
+        (Scope::Feed(FeedId(18)), "settings/scope-feed.toml"),
     ] {
         let settings = Settings {
             scope: scope.clone(),
@@ -232,9 +242,9 @@ fn settings_files_from_earlier_versions_and_odd_values_still_load() {
     let defaults = Settings::default();
 
     let legacy = load("legacy-json-scope.toml");
-    assert_eq!(legacy.scope, Scope::Feed(18));
+    assert_eq!(legacy.scope, Scope::Feed(FeedId(18)));
     assert_eq!(legacy.font_size, 20);
-    assert_eq!(legacy.selected_article, Some(7));
+    assert_eq!(legacy.selected_article, Some(ArticleId(7)));
     assert_eq!(load("legacy-json-unit-scope.toml").scope, Scope::Starred);
 
     let clamped = load("out-of-range.toml");
