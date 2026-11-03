@@ -73,14 +73,10 @@ impl Scope {
             Scope::Starred => "Starred".into(),
             Scope::All => "All Articles".into(),
             Scope::Feed(id) => lib
-                .feeds
-                .iter()
-                .find(|f| f.id == *id)
+                .feed(*id)
                 .map_or_else(|| "Feed".into(), |f| f.title.clone()),
             Scope::Folder(id) => lib
-                .folders
-                .iter()
-                .find(|f| f.id == *id)
+                .folder(*id)
                 .map_or_else(|| "Folder".into(), |f| f.name.clone()),
         }
     }
@@ -112,6 +108,74 @@ pub struct Library {
     pub starred: i64,
 }
 
+/// One step through the library's folders and feeds, in [`Library::tree`] order.
+#[derive(Clone, Copy, Debug)]
+pub enum TreeItem<'a> {
+    /// A folder `depth` levels down; everything inside it follows, then its `FolderEnd`.
+    Folder { folder: &'a Folder, depth: usize },
+    /// The end of a folder's contents.
+    FolderEnd(&'a Folder),
+    /// A feed `depth` levels down (0 is the top level).
+    Feed { feed: &'a Feed, depth: usize },
+}
+
+impl Library {
+    pub fn feed(&self, id: i64) -> Option<&Feed> {
+        self.feeds.iter().find(|f| f.id == id)
+    }
+
+    pub fn folder(&self, id: i64) -> Option<&Folder> {
+        self.folders.iter().find(|f| f.id == id)
+    }
+
+    /// Feeds directly in `folder`, or at the top level for `None`, in library order.
+    pub fn feeds_in(&self, folder: Option<i64>) -> impl Iterator<Item = &Feed> {
+        self.feeds.iter().filter(move |f| f.folder == folder)
+    }
+
+    /// Every folder and feed reachable from the top level, depth first: each level lists its
+    /// folders (with their contents) before its feeds, both in library order.
+    pub fn tree(&self) -> Vec<TreeItem<'_>> {
+        fn walk<'a>(
+            lib: &'a Library,
+            parent: Option<i64>,
+            depth: usize,
+            out: &mut Vec<TreeItem<'a>>,
+        ) {
+            for folder in lib.folders.iter().filter(|f| f.parent == parent) {
+                out.push(TreeItem::Folder { folder, depth });
+                walk(lib, Some(folder.id), depth + 1, out);
+                out.push(TreeItem::FolderEnd(folder));
+            }
+            for feed in lib.feeds_in(parent) {
+                out.push(TreeItem::Feed { feed, depth });
+            }
+        }
+        let mut out = Vec::new();
+        walk(self, None, 0, &mut out);
+        out
+    }
+
+    /// The folder `id` and the folders above it, outermost first; empty for `None` or an
+    /// unknown folder. Stops rather than loops if the parents form a cycle.
+    pub fn folder_path(&self, id: Option<i64>) -> Vec<&Folder> {
+        let mut path = Vec::new();
+        let mut next = id;
+        while let Some(id) = next {
+            let Some(folder) = self.folder(id) else {
+                break;
+            };
+            path.push(folder);
+            next = folder.parent;
+            if path.len() > self.folders.len() {
+                break;
+            }
+        }
+        path.reverse();
+        path
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Entry {
     pub identity: String,
@@ -136,4 +200,74 @@ pub struct Update {
     pub entries: Vec<Entry>,
     pub etag: Option<String>,
     pub modified: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn folder(id: i64, parent: Option<i64>, name: &str) -> Folder {
+        Folder {
+            id,
+            parent,
+            name: name.into(),
+        }
+    }
+
+    fn feed(id: i64, folder: Option<i64>, title: &str) -> Feed {
+        Feed {
+            id,
+            folder,
+            title: title.into(),
+            url: String::new(),
+            site_url: String::new(),
+            unread: 0,
+            error: None,
+            etag: None,
+            modified: None,
+            next_fetch: 0,
+            failures: 0,
+            revision: 0,
+        }
+    }
+
+    #[test]
+    fn the_tree_lists_folders_with_their_contents_before_feeds() {
+        let lib = Library {
+            folders: vec![
+                folder(2, Some(1), "Sub"),
+                folder(1, None, "Work"),
+                folder(3, None, "Zed"),
+            ],
+            feeds: vec![
+                feed(1, None, "Top"),
+                feed(2, Some(2), "Deep"),
+                feed(3, Some(1), "Mid"),
+            ],
+            ..Default::default()
+        };
+        let steps: Vec<String> = lib
+            .tree()
+            .iter()
+            .map(|item| match item {
+                TreeItem::Folder { folder, depth } => format!("{depth}+{}", folder.name),
+                TreeItem::FolderEnd(folder) => format!("-{}", folder.name),
+                TreeItem::Feed { feed, depth } => format!("{depth}:{}", feed.title),
+            })
+            .collect();
+        assert_eq!(
+            steps,
+            [
+                "0+Work", "1+Sub", "2:Deep", "-Sub", "1:Mid", "-Work", "0+Zed", "-Zed", "0:Top"
+            ]
+        );
+        let path: Vec<&str> = lib
+            .folder_path(Some(2))
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect();
+        assert_eq!(path, ["Work", "Sub"]);
+        assert_eq!(lib.feed(3).map(|f| f.title.as_str()), Some("Mid"));
+        assert!(lib.folder(9).is_none());
+    }
 }

@@ -1,6 +1,6 @@
 //! Resolve website subscriptions before adding anything to the library.
 use crate::{
-    http::{BODY_LIMIT, read_limited},
+    http::{BODY_LIMIT, Body, read_limited},
     util::validate_url,
 };
 use anyhow::{Context, Result, bail};
@@ -18,7 +18,7 @@ pub struct Candidate {
 async fn get(client: &Client, url: &str) -> Result<(String, Vec<u8>)> {
     let response = client.get(url).send().await?.error_for_status()?;
     let base = response.url().to_string();
-    Ok((base, read_limited(response, BODY_LIMIT).await?))
+    Ok((base, read_limited(response, BODY_LIMIT, Body::Whole).await?))
 }
 fn candidate(data: &[u8], url: &str) -> Result<Candidate> {
     let feed = feed_rs::parser::Builder::new()

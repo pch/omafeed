@@ -73,7 +73,7 @@ pub(super) async fn download_from(client: &Client, feed: &Feed) -> Result<(Downl
     let etag = header(header::ETAG);
     let modified = header(header::LAST_MODIFIED);
     let base = response.url().to_string();
-    let data = http::read_limited(response, BODY_LIMIT).await?;
+    let data = http::read_limited(response, BODY_LIMIT, http::Body::Whole).await?;
     let (entries, site_url) =
         tokio::task::spawn_blocking(move || parse_document(&data, &base)).await??;
     Ok((

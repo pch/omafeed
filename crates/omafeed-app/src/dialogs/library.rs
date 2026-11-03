@@ -5,7 +5,7 @@ use adw::prelude::*;
 use gtk::glib;
 use omafeed_core::{
     ingest::discovery::Candidate,
-    model::{Library, Scope},
+    model::{Library, Scope, TreeItem},
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -19,24 +19,20 @@ enum Action {
 
 /// Folder choices as (id, "Parent / Child" path), starting with the top level.
 fn folder_paths(lib: &Library) -> Vec<(Option<i64>, String)> {
-    fn walk(
-        lib: &Library,
-        parent: Option<i64>,
-        prefix: &str,
-        out: &mut Vec<(Option<i64>, String)>,
-    ) {
-        for f in lib.folders.iter().filter(|f| f.parent == parent) {
-            let name = if prefix.is_empty() {
-                f.name.clone()
-            } else {
-                format!("{prefix} / {}", f.name)
-            };
-            out.push((Some(f.id), name.clone()));
-            walk(lib, Some(f.id), &name, out);
+    let mut out = vec![(None, "Top level".into())];
+    let mut names: Vec<&str> = Vec::new();
+    for item in lib.tree() {
+        match item {
+            TreeItem::Folder { folder, .. } => {
+                names.push(&folder.name);
+                out.push((Some(folder.id), names.join(" / ")));
+            }
+            TreeItem::FolderEnd(_) => {
+                names.pop();
+            }
+            TreeItem::Feed { .. } => {}
         }
     }
-    let mut out = vec![(None, "Top level".into())];
-    walk(lib, None, "", &mut out);
     out
 }
 
@@ -151,9 +147,7 @@ impl Manager {
                     Some(Scope::Feed(id)) => u
                         .library
                         .borrow()
-                        .feeds
-                        .iter()
-                        .find(|f| f.id == id)
+                        .feed(id)
                         .map(|f| match &f.error {
                             Some(e) => format!("{}\nLast refresh: {e}", f.url),
                             None => f.url.clone(),
@@ -173,9 +167,7 @@ impl Manager {
     }
 
     fn populate(&self, lib: &Library) {
-        while let Some(child) = self.list.first_child() {
-            self.list.remove(&child);
-        }
+        self.list.remove_all();
         let mut rows = self.rows.borrow_mut();
         rows.clear();
         for (folder, path) in folder_paths(lib) {
@@ -188,7 +180,7 @@ impl Manager {
                 self.list.append(&row);
                 rows.push(Scope::Folder(id));
             }
-            for f in lib.feeds.iter().filter(|f| f.folder == folder) {
+            for f in lib.feeds_in(folder) {
                 let warning = if f.error.is_some() { "  ⚠" } else { "" };
                 let row = gtk::Label::new(Some(&format!("    {}{warning}", f.title)));
                 row.set_xalign(0.0);
@@ -231,10 +223,7 @@ async fn run(u: Rc<Ui>) {
         // New items go into the selected folder, or the selected feed's folder.
         let parent = match selected {
             Some(Scope::Folder(id)) => Some(id),
-            Some(Scope::Feed(id)) => {
-                let lib = u.library.borrow();
-                lib.feeds.iter().find(|f| f.id == id).and_then(|f| f.folder)
-            }
+            Some(Scope::Feed(id)) => u.library.borrow().feed(id).and_then(|f| f.folder),
             _ => None,
         };
         match (action, selected) {
@@ -285,7 +274,7 @@ async fn edit_folder(u: &Rc<Ui>, window: &gtk::Window, id: Option<i64>, parent: 
     let form = Form::new(window, "Folder");
     let (name, parent) = {
         let lib = u.library.borrow();
-        match id.and_then(|id| lib.folders.iter().find(|f| f.id == id)) {
+        match id.and_then(|id| lib.folder(id)) {
             Some(f) => (f.name.clone(), f.parent),
             None => (String::new(), parent),
         }
@@ -316,7 +305,7 @@ async fn edit_feed(u: &Rc<Ui>, window: &gtk::Window, id: Option<i64>, parent: Op
     let form = Form::new(window, "Subscription");
     let (title, original_url, parent) = {
         let lib = u.library.borrow();
-        match id.and_then(|id| lib.feeds.iter().find(|f| f.id == id)) {
+        match id.and_then(|id| lib.feed(id)) {
             Some(f) => (f.title.clone(), f.url.clone(), f.folder),
             None => (String::new(), String::new(), parent),
         }

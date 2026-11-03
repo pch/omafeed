@@ -1,4 +1,7 @@
-use crate::{model::Library, util::escape};
+use crate::{
+    model::{Library, TreeItem},
+    util::escape,
+};
 use anyhow::{Result, bail};
 use serde::Deserialize;
 
@@ -48,26 +51,24 @@ pub fn parse(text: &str) -> Result<Document> {
 
 /// Serialize the library as OPML 2.0, preserving the folder hierarchy.
 pub fn export(lib: &Library) -> String {
-    fn outlines(lib: &Library, parent: Option<i64>, out: &mut String) {
-        for f in lib.folders.iter().filter(|f| f.parent == parent) {
-            out.push_str(&format!("<outline text=\"{}\">\n", escape(&f.name)));
-            outlines(lib, Some(f.id), out);
-            out.push_str("</outline>\n");
-        }
-        for f in lib.feeds.iter().filter(|f| f.folder == parent) {
-            out.push_str(&format!(
-                "<outline type=\"rss\" text=\"{}\" xmlUrl=\"{}\" htmlUrl=\"{}\"/>\n",
-                escape(&f.title),
-                escape(&f.url),
-                escape(&f.site_url)
-            ));
-        }
-    }
     let mut out = String::from(concat!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
         "<opml version=\"2.0\"><head><title>Omafeed subscriptions</title></head><body>\n",
     ));
-    outlines(lib, None, &mut out);
+    for item in lib.tree() {
+        match item {
+            TreeItem::Folder { folder, .. } => {
+                out.push_str(&format!("<outline text=\"{}\">\n", escape(&folder.name)));
+            }
+            TreeItem::FolderEnd(_) => out.push_str("</outline>\n"),
+            TreeItem::Feed { feed, .. } => out.push_str(&format!(
+                "<outline type=\"rss\" text=\"{}\" xmlUrl=\"{}\" htmlUrl=\"{}\"/>\n",
+                escape(&feed.title),
+                escape(&feed.url),
+                escape(&feed.site_url)
+            )),
+        }
+    }
     out.push_str("</body></opml>\n");
     out
 }

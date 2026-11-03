@@ -1,7 +1,7 @@
 //! Library sidebar: smart views, folders, and feeds with unread counts.
 use super::{Ui, widgets::icon, widgets::label};
 use gtk::{gdk, gio, glib, prelude::*};
-use omafeed_core::model::{Feed, Library, Scope};
+use omafeed_core::model::{Feed, Library, Scope, TreeItem};
 use std::rc::Rc;
 
 /// One sidebar entry before it becomes a widget.
@@ -22,33 +22,6 @@ pub(super) struct Row {
 }
 
 fn items(lib: &Library) -> Vec<Item> {
-    fn tree(lib: &Library, parent: Option<i64>, depth: i32, items: &mut Vec<Item>) {
-        for f in lib.folders.iter().filter(|f| f.parent == parent) {
-            let index = items.len();
-            items.push(Item {
-                scope: Scope::Folder(f.id),
-                title: f.name.clone(),
-                count: 0,
-                depth,
-                feed: None,
-            });
-            tree(lib, Some(f.id), depth + 1, items);
-            items[index].count = items[index + 1..]
-                .iter()
-                .filter(|i| i.feed.is_some())
-                .map(|i| i.count)
-                .sum();
-        }
-        for f in lib.feeds.iter().filter(|f| f.folder == parent) {
-            items.push(Item {
-                scope: Scope::Feed(f.id),
-                title: f.title.clone(),
-                count: f.unread,
-                depth,
-                feed: Some(f.clone()),
-            });
-        }
-    }
     let smart = |scope: Scope, count| Item {
         title: scope.label(lib),
         scope,
@@ -62,7 +35,37 @@ fn items(lib: &Library) -> Vec<Item> {
         smart(Scope::Starred, lib.starred),
         smart(Scope::All, 0),
     ];
-    tree(lib, None, 0, &mut items);
+    // Open folders, by the index of their item; a folder counts the unread feeds inside it.
+    let mut open = Vec::new();
+    for item in lib.tree() {
+        match item {
+            TreeItem::Folder { folder, depth } => {
+                open.push(items.len());
+                items.push(Item {
+                    scope: Scope::Folder(folder.id),
+                    title: folder.name.clone(),
+                    count: 0,
+                    depth: depth as i32,
+                    feed: None,
+                });
+            }
+            TreeItem::FolderEnd(_) => {
+                let index = open.pop().expect("folders end after they start");
+                items[index].count = items[index + 1..]
+                    .iter()
+                    .filter(|i| i.feed.is_some())
+                    .map(|i| i.count)
+                    .sum();
+            }
+            TreeItem::Feed { feed, depth } => items.push(Item {
+                scope: Scope::Feed(feed.id),
+                title: feed.title.clone(),
+                count: feed.unread,
+                depth: depth as i32,
+                feed: Some(feed.clone()),
+            }),
+        }
+    }
     items
 }
 
@@ -98,9 +101,7 @@ impl Ui {
 
     pub(super) fn rebuild_sidebar(self: &Rc<Self>) {
         self.rebuilding.set(true);
-        while let Some(child) = self.side.list.first_child() {
-            self.side.list.remove(&child);
-        }
+        self.side.list.remove_all();
         let selected = self.query.borrow().scope.clone();
         let rows: Vec<Row> = self
             .sidebar_items()

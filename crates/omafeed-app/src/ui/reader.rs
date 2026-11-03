@@ -175,9 +175,7 @@ impl Ui {
         let site = self
             .library
             .borrow()
-            .feeds
-            .iter()
-            .find(|f| f.id == a.feed_id)
+            .feed(a.feed_id)
             .map(|f| f.website().to_owned())
             .unwrap_or_default();
         // Favicons are small normalized PNGs, so reading one per render is cheap.

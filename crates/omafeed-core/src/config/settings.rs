@@ -3,7 +3,7 @@ use super::Paths;
 use crate::model::Scope;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::{ops::RangeInclusive, path::PathBuf};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -83,7 +83,19 @@ impl Default for Settings {
     }
 }
 
+fn clamp<T: Ord + Copy>(value: T, range: RangeInclusive<T>) -> T {
+    value.clamp(*range.start(), *range.end())
+}
+
 impl Settings {
+    /// Supported values; a file with others is clamped to them.
+    pub const FONT_SIZES: RangeInclusive<u32> = 12..=32;
+    pub const REFRESH_MINUTES: RangeInclusive<u32> = 5..=1440;
+    pub const WIDTHS: RangeInclusive<i32> = 360..=5000;
+    pub const HEIGHTS: RangeInclusive<i32> = 400..=3000;
+    pub const SIDEBAR_WIDTHS: RangeInclusive<i32> = 180..=800;
+    pub const LIST_WIDTHS: RangeInclusive<i32> = 270..=1200;
+
     fn file(paths: &Paths) -> PathBuf {
         paths.config.join("settings.toml")
     }
@@ -111,12 +123,12 @@ impl Settings {
             Err(e) => return Err(e.into()),
         };
         let mut s: Self = toml::from_str(&text)?;
-        s.font_size = s.font_size.clamp(12, 32);
-        s.refresh_minutes = s.refresh_minutes.clamp(5, 1440);
-        s.width = s.width.clamp(360, 5000);
-        s.height = s.height.clamp(400, 3000);
-        s.sidebar_width = s.sidebar_width.clamp(180, 800);
-        s.list_width = s.list_width.clamp(270, 1200);
+        s.font_size = clamp(s.font_size, Self::FONT_SIZES);
+        s.refresh_minutes = clamp(s.refresh_minutes, Self::REFRESH_MINUTES);
+        s.width = clamp(s.width, Self::WIDTHS);
+        s.height = clamp(s.height, Self::HEIGHTS);
+        s.sidebar_width = clamp(s.sidebar_width, Self::SIDEBAR_WIDTHS);
+        s.list_width = clamp(s.list_width, Self::LIST_WIDTHS);
         Ok(Some(s))
     }
 
