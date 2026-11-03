@@ -88,7 +88,7 @@ impl Changes {
     }
 
     /// The value an unfinished change is writing.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn unfinished(&self, id: i64, field: Field) -> Option<bool> {
         self.newest
             .get(&(id, field))
@@ -148,8 +148,6 @@ impl Undo {
 
 #[cfg(test)]
 mod tests {
-    // tests/desktop_smoke.rs includes this file without a test harness, so nothing uses it there.
-    #[allow(unused_imports)]
     use super::*;
 
     #[test]

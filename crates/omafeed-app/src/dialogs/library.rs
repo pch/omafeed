@@ -241,7 +241,7 @@ async fn run(u: Rc<Ui>) {
             (Action::Remove, Some(scope)) => remove(&u, &m.window, scope).await,
             (Action::Remove | Action::Edit, None) => u.toast("Select a feed or folder first"),
             (Action::Edit, Some(Scope::Folder(id))) => {
-                edit_folder(&u, &m.window, Some(id), None).await
+                edit_folder(&u, &m.window, Some(id), None).await;
             }
             (Action::Edit, Some(Scope::Feed(id))) => edit_feed(&u, &m.window, Some(id), None).await,
             (Action::NewFolder, _) => edit_folder(&u, &m.window, None, parent).await,

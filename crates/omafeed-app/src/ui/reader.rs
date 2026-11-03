@@ -89,7 +89,7 @@ fn web_view() -> webkit6::WebView {
         }
         let Some(mut action) = decision
             .downcast_ref::<webkit6::NavigationPolicyDecision>()
-            .and_then(|nav| nav.navigation_action())
+            .and_then(webkit6::NavigationPolicyDecision::navigation_action)
         else {
             return false;
         };

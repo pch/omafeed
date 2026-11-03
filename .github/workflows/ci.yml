@@ -36,8 +36,8 @@ jobs:
           have=$(rustc --version | cut -d' ' -f2)
           printf '%s\n%s\n' "$msrv" "$have" | sort -VC || { echo "rustc $have < MSRV $msrv"; exit 1; }
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - run: cargo test --workspace --locked
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - run: cargo test --workspace --all-features --locked
       - name: Desktop smoke test (headless GTK/WebKit)
         env:
           # Containers lack the namespaces WebKit's sandbox needs, and a GPU.
@@ -47,7 +47,7 @@ jobs:
           LIBGL_ALWAYS_SOFTWARE: "1"
         run: >-
           dbus-run-session -- xvfb-run -a
-          cargo test -p omafeed --locked --test desktop_smoke -- --ignored
+          cargo test -p omafeed --features test-support --locked --test desktop_smoke -- --ignored
       - name: Validate desktop entry and AppStream metadata
         run: |
           desktop-file-validate data/io.github.pch.Omafeed.desktop
@@ -70,7 +70,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: msrv
-      - run: cargo "+$MSRV" build --workspace --all-targets --locked
+      - run: cargo "+$MSRV" build --workspace --all-targets --all-features --locked
 
   package:
     name: Build Arch package

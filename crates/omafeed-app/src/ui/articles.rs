@@ -107,7 +107,7 @@ impl Ui {
         glib::spawn_future_local(async move {
             match u.db.call(move |s| s.articles(&q)).await {
                 Ok(articles) if u.generation.get() == generation => {
-                    u.show_articles(articles, page, mark)
+                    u.show_articles(articles, page, mark);
                 }
                 Ok(_) => {}
                 Err(e) => u.error(e),
@@ -355,8 +355,7 @@ impl Ui {
         let list = &self.list.list;
         let current = list
             .selected_row()
-            .map(|r| r.index())
-            .unwrap_or(if delta > 0 { -1 } else { 0 });
+            .map_or(if delta > 0 { -1 } else { 0 }, |r| r.index());
         let target = {
             let articles = self.articles.borrow();
             std::iter::successors(Some(current + delta), |i| Some(i + delta))

@@ -158,7 +158,7 @@ pub(crate) fn desktop_smoke() {
             let changes = u.changes.borrow();
             changes.unfinished(id, changes::Field::Read).is_none()
                 && changes.unfinished(id, changes::Field::Starred).is_none()
-        })
+        });
     };
     u.select(id);
     pump_until(|| u.selected.borrow().as_ref().is_some_and(|a| a.read));

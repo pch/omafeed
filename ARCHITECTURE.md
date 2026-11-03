@@ -22,16 +22,16 @@ Run without a command, `omafeed` opens the reader window; with a command (`omafe
 | `article` | HTML sanitizing (`sanitize`), plain text for previews and search (`plain`), Markdown-like reading text for the command line (`readable`), and the reader's HTML document (`document`). |
 | `opml` | OPML parsing and export. |
 | `settings` | `Paths` (XDG or `OMAFEED_HOME`), `Settings` (`settings.toml`), `Theme`, and `Palette` (including the Omarchy `colors.toml` reader). |
-| `http` | The shared `reqwest` client and size-limited body reads. |
-| `util` | URL validation, HTML escaping, SHA-256 hex, local-host detection. |
+| `http` | The shared `reqwest` client, its redirect policy, and size-limited body reads. Private to the crate. |
+| `util` | URL validation, HTML escaping, SHA-256 hex, local-host detection. Private to the crate. |
 
 ## omafeed (app)
 
 | Module | Contents |
 | --- | --- |
-| `main` | Argument parsing; dispatches to `cli::run` or builds the GTK application. |
+| `lib` | Argument parsing (`main`), which dispatches to `cli::run` or builds the GTK application. `main.rs` only calls it. With the `test-support` feature, `test_support` exposes the desktop smoke test to `tests/desktop_smoke.rs`. |
 | `cli` | Every command: argument definitions, text and JSON output. |
-| `ui` | The main window. `Ui` owns the panes (`Header`, `SidebarPane`, `ListPane`, `ReaderPane`) and the view state; `articles`, `sidebar`, `reader`, `keys` and `theme` add methods to it. `widgets` has small constructors. `tests` holds the desktop smoke test. |
+| `ui` | The main window. `Ui` owns the panes (`Header`, `SidebarPane`, `ListPane`, `ReaderPane`) and the view state; `articles`, `sidebar`, `reader`, `keys` and `theme` add methods to it. `widgets` has small constructors. `changes` tracks read/star changes not yet confirmed. `tests` holds the desktop smoke test (only with `test-support`). |
 | `dialogs` | Library manager, subscription and folder forms, OPML import/export, settings, shortcuts and about. |
 
 ## Data flow
@@ -136,5 +136,10 @@ These are properties of the current design, not promises. Change them deliberate
   stderr, exit codes and help (`tests/snapshots/`). Rewrite them with `OMAFEED_BLESS=1` only
   for an intended change.
 - `crates/omafeed-app/tests/desktop_smoke.rs`: the window, driven headlessly. Run with
-  `cargo test -p omafeed --test desktop_smoke -- --ignored` in a desktop session (CI uses
-  Xvfb).
+  `cargo test -p omafeed --features test-support --test desktop_smoke -- --ignored` in a
+  desktop session (CI uses Xvfb). Without the feature the test is not built; without
+  `--ignored` it is skipped.
+
+`make check` runs formatting, Clippy and every test with all features. Lints are shared through
+`[workspace.lints]`: a chosen part of Clippy's pedantic group, and `unsafe_code` denied
+(forbidden in `omafeed-core`; the app allows it only for restoring `SIGPIPE`).
