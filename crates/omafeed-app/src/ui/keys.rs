@@ -29,6 +29,7 @@ impl Ui {
         self.action("library", dialogs::library);
         self.action("import", dialogs::import);
         self.action("export", dialogs::export);
+        self.action("filters", dialogs::filters);
         self.action("settings", dialogs::settings);
         self.action("shortcuts", dialogs::shortcuts);
         self.action("about", dialogs::about);

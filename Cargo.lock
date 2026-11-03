@@ -1691,6 +1691,7 @@ dependencies = [
  "httpdate",
  "image",
  "quick-xml",
+ "regex",
  "reqwest",
  "resvg",
  "rusqlite",

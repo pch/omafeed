@@ -19,6 +19,11 @@ Notable changes to Omafeed. Earlier versions are described in the
   URL, marks it all read (undo with Ctrl+Z), and edits or removes it; a folder's marks it read
   and edits or removes it; a view's marks it read. The view shown stays as it is, unless it is
   the feed or folder removed.
+- Content filters (**Content filters…** in the menu): hide articles whose title or preview
+  matches a word or a `/regex/`, ignoring case. Hidden articles leave lists, unread counts and
+  "mark all read" alone; starred articles are never hidden. The command line applies the same
+  filters, though `omafeed article <id>` still opens a hidden article. Filters are kept in
+  `settings.toml`. Contributed by UnderStackDev.
 
 ### Fixed
 

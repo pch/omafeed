@@ -104,6 +104,9 @@ impl Store {
         if q.unread_only {
             terms.push("s.read = 0");
         }
+        if let Some(condition) = self.not_filtered() {
+            terms.push(condition);
+        }
         // Every typed word is quoted, so user input is matched literally, never as FTS syntax.
         if let Some(expression) = self.match_expression(q)? {
             terms.push("a.id IN (SELECT rowid FROM article_fts WHERE article_fts MATCH ?)");

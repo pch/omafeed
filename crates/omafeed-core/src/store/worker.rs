@@ -27,6 +27,16 @@ impl Db {
         Ok(Self { sender })
     }
 
+    /// Replace the content filters, as [`Store::set_filters`] does. Jobs run in order, so
+    /// calls made after this one see them.
+    pub fn set_filters(&self, patterns: Vec<String>) {
+        let _ = self.sender.send(Box::new(move |s| {
+            if let Err(e) = s.set_filters(&patterns) {
+                eprintln!("Omafeed: could not apply content filters: {e:#}");
+            }
+        }));
+    }
+
     /// Run `f` on the worker thread, after everything sent before it, and wait for its result.
     pub async fn call<T: Send + 'static>(
         &self,

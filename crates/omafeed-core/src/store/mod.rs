@@ -8,11 +8,12 @@ mod search;
 mod worker;
 
 use crate::{
+    filters::ContentFilters,
     fuzzy::Vocabulary,
     model::{ArticleId, FeedId, FolderId},
 };
 use anyhow::Result;
-use rusqlite::Connection;
+use rusqlite::{Connection, functions::FunctionFlags};
 use std::{
     cell::{Cell, RefCell},
     path::Path,
@@ -53,7 +54,14 @@ pub struct Store {
     article_writes: Cell<u64>,
     /// How many times the word list was read from the index, for tests and benchmarks.
     vocabulary_loads: Cell<u64>,
+    /// Whether content filters are set. Without any, queries stay exactly as they were.
+    filtering: Cell<bool>,
 }
+
+/// Starred articles stay visible: a filter should not make something saved on purpose vanish.
+/// The text is the same preview the article list shows.
+const NOT_FILTERED: &str =
+    "(s.starred = 1 OR NOT omafeed_blocked(a.title, substr(a.text, 1, 220)))";
 
 impl Store {
     /// Open (creating if need be) the library at `path`, or `:memory:`, and bring its schema
@@ -74,7 +82,34 @@ impl Store {
             vocabulary: RefCell::default(),
             article_writes: Cell::default(),
             vocabulary_loads: Cell::default(),
+            filtering: Cell::default(),
         })
+    }
+
+    /// Replace the content filters applied to article lists, counts and bulk mark-read.
+    /// Invalid patterns are reported and skipped.
+    pub fn set_filters(&self, patterns: &[String]) -> Result<()> {
+        let filters = ContentFilters::new(patterns);
+        self.filtering.set(!filters.is_empty());
+        self.conn.create_scalar_function(
+            "omafeed_blocked",
+            2,
+            FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+            move |ctx| Ok(filters.blocks(&ctx.get::<String>(0)?, &ctx.get::<String>(1)?)),
+        )?;
+        Ok(())
+    }
+
+    /// The condition that leaves filtered articles out (aliases `a` and `s`), if any is set.
+    pub(super) fn not_filtered(&self) -> Option<&'static str> {
+        self.filtering.get().then_some(NOT_FILTERED)
+    }
+
+    /// [`Self::not_filtered`] with a leading ` AND `, or nothing.
+    pub(super) fn and_not_filtered(&self) -> String {
+        self.not_filtered()
+            .map(|c| format!(" AND {c}"))
+            .unwrap_or_default()
     }
 
     /// How many times forgiving search has read the library's word list. It is kept between

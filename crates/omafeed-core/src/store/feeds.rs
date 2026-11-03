@@ -9,13 +9,18 @@ use crate::{
 use anyhow::{Result, bail};
 use rusqlite::{Connection, OptionalExtension, params};
 
-const LIBRARY_FEEDS: &str = "
-SELECT f.id, f.folder, f.title, f.url, f.site_url,
-       (SELECT count(*) FROM articles a JOIN article_state s ON s.article_id = a.id
-        WHERE a.feed_id = f.id AND s.read = 0),
-       f.error, f.etag, f.modified, f.next_fetch, f.failures, f.revision
-FROM feeds f
-ORDER BY f.title COLLATE NOCASE";
+/// The library's feeds with their unread counts; `visible` is ` AND ` and a condition on `a`
+/// and `s`, or empty.
+fn library_feeds(visible: &str) -> String {
+    format!(
+        "SELECT f.id, f.folder, f.title, f.url, f.site_url,
+                (SELECT count(*) FROM articles a JOIN article_state s ON s.article_id = a.id
+                 WHERE a.feed_id = f.id AND s.read = 0{visible}),
+                f.error, f.etag, f.modified, f.next_fetch, f.failures, f.revision
+         FROM feeds f
+         ORDER BY f.title COLLATE NOCASE"
+    )
+}
 
 const UPSERT_ARTICLE: &str = "
 INSERT INTO articles(feed_id, identity, title, url, author, published, first_seen, html, text)
@@ -64,7 +69,7 @@ impl Store {
             .collect::<Result<Vec<_>, _>>()?;
         let feeds = self
             .conn
-            .prepare(LIBRARY_FEEDS)?
+            .prepare(&library_feeds(&self.and_not_filtered()))?
             .query_map([], |r| {
                 Ok(Feed {
                     id: r.get(0)?,
@@ -83,7 +88,13 @@ impl Store {
             })?
             .collect::<Result<Vec<_>, _>>()?;
         let (unread, starred) = self.conn.query_row(
-            "SELECT COALESCE(sum(read = 0), 0), COALESCE(sum(starred), 0) FROM article_state",
+            &format!(
+                "SELECT (SELECT count(*) FROM article_state s JOIN articles a ON a.id = s.article_id
+                         WHERE s.read = 0{}),
+                        COALESCE(sum(starred), 0)
+                 FROM article_state",
+                self.and_not_filtered()
+            ),
             [],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;

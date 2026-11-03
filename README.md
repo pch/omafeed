@@ -8,6 +8,7 @@ A native RSS reader for Linux and Omarchy, written in Rust. A three-pane library
 
 - RSS, Atom, and JSON Feed; manual refresh and scheduled refresh while the app is open.
 - Nested folders: create, rename, move, and remove. Move feeds between folders without losing article history or read state. Removing a folder promotes its feeds and children to its parent.
+- Content filters: hide articles by keyword or `/regex/`, matched against the title and preview. Starred articles stay visible.
 - OPML import/export with duplicate detection and preserved folder hierarchy.
 - A command line to list, search, star, and subscribe without the window, with `--json` output for scripts and LLM agents.
 - All Unread, Today, Starred, All Articles, folder and feed views; full-text search and unread filtering.
@@ -260,5 +261,7 @@ CI runs formatting, Clippy, tests, the documentation build, the headless desktop
 ## Inspiration
 
 [NetNewsWire](https://github.com/Ranchero-Software/NetNewsWire), [Omarchy Meeting Recorder](https://github.com/jankeesvw/omarchy-meeting-recorder), and [Spotifast](https://github.com/crmne/spotifast). Omafeed is an independent Rust implementation; no source or visual assets were copied from those projects.
+
+Content filters were contributed by [UnderStackDev](https://github.com/UnderStackDev), modelled on the filters in [Aura News](https://github.com/UnderStackDev/aura_news).
 
 MIT licensed.

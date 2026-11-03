@@ -76,6 +76,7 @@ impl Header {
             ("Manage library…", "win.library"),
             ("Import OPML…", "win.import"),
             ("Export OPML…", "win.export"),
+            ("Content filters…", "win.filters"),
             ("Settings…", "win.settings"),
             ("Keyboard shortcuts", "win.shortcuts"),
             ("About Omafeed", "win.about"),
@@ -708,6 +709,14 @@ impl Ui {
         *self.settings.borrow_mut() = settings;
         self.save();
         self.reload_palette(true);
+    }
+
+    /// Apply an edited list of content filters to the sidebar and the article list.
+    pub fn apply_filters(self: &Rc<Self>, filters: Vec<String>) {
+        self.db.set_filters(filters.clone());
+        self.settings.borrow_mut().filters = filters;
+        self.save();
+        self.reload();
     }
 
     /// Show "All Articles" with nothing selected, e.g. after removing the current feed.

@@ -217,6 +217,7 @@ fn settings_files_keep_their_format() {
         scope: Scope::Folder(FolderId(3)),
         selected_article: Some(ArticleId(42)),
         unread_only: true,
+        filters: Vec::new(),
     };
     assert_eq!(saved(&custom), read("settings/custom.toml"));
     for (scope, file) in [

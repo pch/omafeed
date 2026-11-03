@@ -135,6 +135,41 @@ pub(crate) fn desktop_smoke() {
     assert!(u.view.borrow().articles().iter().any(|a| a.id == id));
     assert!(!u.list.previous.is_sensitive());
     assert!(!u.list.next.is_sensitive());
+    // Content filters apply at once and refuse a pattern that cannot work.
+    crate::dialogs::filters(u.clone());
+    let window = Rc::new(RefCell::new(None::<gtk::Window>));
+    pump_until(|| {
+        *window.borrow_mut() = gtk::Window::list_toplevels()
+            .into_iter()
+            .filter_map(|w| w.downcast::<gtk::Window>().ok())
+            .find(|w| w.title().as_deref() == Some("Content filters"));
+        window.borrow().is_some()
+    });
+    let filters = window.borrow().clone().unwrap();
+    let root = filters.clone().upcast::<gtk::Widget>();
+    let entry = widgets(&root)
+        .into_iter()
+        .find_map(|w| w.downcast::<gtk::Entry>().ok())
+        .unwrap();
+    entry.set_text("/(/");
+    button(&root, "Add").emit_clicked();
+    assert!(u.settings.borrow().filters.is_empty());
+    assert_eq!(entry.text(), "/(/");
+    entry.set_text("fixture");
+    button(&root, "Add").emit_clicked();
+    assert_eq!(u.settings.borrow().filters, ["fixture"]);
+    assert_eq!(entry.text(), "");
+    pump_until(|| u.view.borrow().articles().iter().all(|a| a.id != id));
+    widgets(&root)
+        .into_iter()
+        .filter_map(|w| w.downcast::<gtk::Button>().ok())
+        .find(|b| b.tooltip_text().as_deref() == Some("Remove"))
+        .unwrap()
+        .emit_clicked();
+    assert!(u.settings.borrow().filters.is_empty());
+    pump_until(|| u.view.borrow().articles().iter().any(|a| a.id == id));
+    filters.close();
+    pump_until(|| !filters.is_visible());
     let expander = widgets(&u.side.list.clone().upcast())
         .into_iter()
         .filter_map(|w| w.downcast::<gtk::Button>().ok())
