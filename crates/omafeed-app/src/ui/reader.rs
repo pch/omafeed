@@ -3,8 +3,8 @@ use super::{Ui, widgets::icon, widgets::margins};
 use adw::prelude::*;
 use gtk::{gio, glib};
 use omafeed_core::{
-    article::{Source, document},
     model::Article,
+    render::{Source, document},
 };
 use std::rc::Rc;
 use webkit6::prelude::*;
@@ -182,7 +182,9 @@ impl Ui {
             .unwrap_or_default();
         // Favicons are small normalized PNGs, so reading one per render is cheap.
         let icon = (!site.is_empty())
-            .then(|| std::fs::read(omafeed_core::icons::path(&self.paths.cache, &site)).ok())
+            .then(|| {
+                std::fs::read(omafeed_core::ingest::icons::path(&self.paths.cache, &site)).ok()
+            })
             .flatten();
         let source = Source {
             url: &site,

@@ -4,8 +4,8 @@
 //! them to make a test pass; a failure here means existing users' files would break.
 use omafeed_core::{
     Paths, Settings, Store,
+    config::Theme,
     model::{Query, Scope},
-    settings::Theme,
 };
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};

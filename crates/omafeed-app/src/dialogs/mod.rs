@@ -4,7 +4,7 @@ mod library;
 use crate::ui::Ui;
 use adw::prelude::*;
 use gtk::{gio, glib};
-use omafeed_core::settings::Theme;
+use omafeed_core::config::Theme;
 use std::rc::Rc;
 
 pub use library::library;

@@ -6,7 +6,7 @@ mod ui;
 use anyhow::Result;
 use clap::Parser;
 use gtk::prelude::*;
-use omafeed_core::{Db, Paths, Settings, fetch::Refresher};
+use omafeed_core::{Db, Paths, Settings, ingest::Refresher};
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 /// The application ID, also the name of the desktop entry and icon.

@@ -3,8 +3,8 @@ use super::{Ui, changes::Field, widgets::label};
 use chrono::{DateTime, Datelike, Local};
 use gtk::{glib, prelude::*};
 use omafeed_core::{
-    db::PAGE_SIZE,
     model::{Article, Scope},
+    store::PAGE_SIZE,
 };
 use std::rc::Rc;
 

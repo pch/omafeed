@@ -139,7 +139,7 @@ impl Ui {
     }
 
     fn favicon(&self, feed: &Feed) -> gtk::Image {
-        let path = omafeed_core::icons::path(&self.paths.cache, feed.website());
+        let path = omafeed_core::ingest::icons::path(&self.paths.cache, feed.website());
         let texture = self
             .favicons
             .borrow_mut()

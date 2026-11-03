@@ -4,7 +4,7 @@ use crate::ui::{Ui, widgets::margins};
 use adw::prelude::*;
 use gtk::glib;
 use omafeed_core::{
-    discovery::Candidate,
+    ingest::discovery::Candidate,
     model::{Library, Scope},
 };
 use std::{cell::RefCell, rc::Rc};

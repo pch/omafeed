@@ -3,10 +3,10 @@ use crate::DB_FILE;
 use anyhow::{Context, Result, bail};
 use omafeed_core::{
     Db, Paths, Settings,
-    article::readable,
-    db::PAGE_SIZE,
-    fetch::{Progress, Refresher},
+    content::readable,
+    ingest::{Progress, Refresher},
     model::{Article, Folder, Query, Scope},
+    store::PAGE_SIZE,
 };
 use serde_json::{Value, json};
 use std::path::PathBuf;

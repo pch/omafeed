@@ -1,7 +1,7 @@
 //! A refresh that finishes after its feed was edited, deleted or replaced must store nothing.
 use omafeed_core::{
     Db, Store,
-    fetch::{self, Refresher},
+    ingest::{self, Refresher},
     model::{Download, Feed, Query, Scope, Update},
 };
 
@@ -15,7 +15,7 @@ fn rss(items: &str) -> String {
 fn stale_download() -> Download {
     Download::Updated(Update {
         site_url: Some("https://old.example.org/".into()),
-        entries: fetch::parse(
+        entries: ingest::parse(
             rss("<item><guid>old</guid><title>From the old URL</title></item>").as_bytes(),
             "https://old.example.org/feed",
         )
