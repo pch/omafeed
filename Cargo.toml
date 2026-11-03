@@ -23,3 +23,29 @@ strip = true
 
 [profile.dev]
 debug = "line-tables-only"
+
+# Shared by every crate. Clippy's pedantic group is too noisy to enable whole; these are the
+# parts that catch real mistakes or keep the code uniform without fighting GTK's APIs.
+[workspace.lints.rust]
+# omafeed-core forbids it outright in lib.rs; the app allows it at one call (see main).
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+cloned_instead_of_copied = "warn"
+dbg_macro = "warn"
+explicit_into_iter_loop = "warn"
+flat_map_option = "warn"
+implicit_clone = "warn"
+inefficient_to_string = "warn"
+manual_assert = "warn"
+manual_let_else = "warn"
+manual_ok_or = "warn"
+manual_string_new = "warn"
+map_unwrap_or = "warn"
+needless_for_each = "warn"
+redundant_else = "warn"
+semicolon_if_nothing_returned = "warn"
+todo = "warn"
+uninlined_format_args = "warn"
+unnested_or_patterns = "warn"
+unused_self = "warn"

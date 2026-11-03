@@ -20,13 +20,21 @@ clap = { version = "4", features = ["derive"] }
 libc = "0.2"
 gtk = { package = "gtk4", version = "0.10", features = ["v4_12"] }
 webkit6 = { version = "0.5", features = ["v2_42"] }
+tempfile = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
-tokio = { workspace = true, features = ["net", "io-util"] }
+
+[features]
+# Exposes `omafeed::test_support` for the desktop smoke test; not for other use.
+test-support = ["dep:tempfile", "tokio/net", "tokio/io-util"]
 
 # GTK/WebKit must initialize on the process main thread, not a libtest worker.
 [[test]]
 name = "desktop_smoke"
 path = "tests/desktop_smoke.rs"
 harness = false
+required-features = ["test-support"]
+
+[lints]
+workspace = true

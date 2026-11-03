@@ -44,7 +44,7 @@ fn import_hierarchy_roundtrip_and_reimport_preserves_moves() {
     let lib = s.library().unwrap();
     assert_eq!(lib.folders.len(), 2);
     let f = &lib.feeds[0];
-    s.edit_feed(f.id, "Custom", None).unwrap();
+    s.update_feed(f.id, "Custom", &f.url, None).unwrap();
     assert_eq!(s.import(input).unwrap().skipped, 1);
     assert_eq!(s.library().unwrap().feeds[0].folder, None);
     let export = s.export().unwrap();
@@ -156,7 +156,8 @@ fn state_survives_reopen_and_feed_moves() {
         id = s.articles(&all()).unwrap()[0].id;
         s.set_starred(id, true).unwrap();
         s.set_read(id, true).unwrap();
-        s.edit_feed(f, "Renamed", Some(folder)).unwrap();
+        let url = s.library().unwrap().feeds[0].url.clone();
+        s.update_feed(f, "Renamed", &url, Some(folder)).unwrap();
     }
     let s = Store::open(path).unwrap();
     let a = s.article(id).unwrap();
@@ -890,7 +891,8 @@ fn the_word_list_is_read_again_only_when_articles_change() {
     s.set_read(id, true).unwrap();
     s.set_starred(id, true).unwrap();
     s.set_starred(id, false).unwrap();
-    s.edit_feed(feed, "Renamed", None).unwrap();
+    let url = s.library().unwrap().feeds[0].url.clone();
+    s.update_feed(feed, "Renamed", &url, None).unwrap();
     s.add_folder("Folder", None).unwrap();
     s.mark_read(&all()).unwrap();
     s.undo_read(&[id]).unwrap();

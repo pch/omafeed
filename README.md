@@ -242,7 +242,7 @@ cargo test -p omafeed-core
 The native desktop smoke test (run headlessly in CI) also verifies WebKit rendering, read/star state, folder creation, and moving a feed through the real dialogs:
 
 ```sh
-cargo test -p omafeed --test desktop_smoke -- --ignored
+cargo test -p omafeed --features test-support --test desktop_smoke -- --ignored
 ```
 
 Tests use temporary SQLite databases and a localhost HTTP server; they do not depend on live blogs. Use `OMAFEED_HOME=/tmp/omafeed-test` to isolate data, settings, and cache during manual testing. The [command line](#command-line) also answers `--help` and `--version`.

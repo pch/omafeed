@@ -33,3 +33,6 @@ url = "2"
 [dev-dependencies]
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util"] }
+
+[lints]
+workspace = true

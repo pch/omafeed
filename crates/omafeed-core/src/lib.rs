@@ -1,13 +1,14 @@
+#![forbid(unsafe_code)]
 pub mod article;
 pub mod db;
 pub mod discovery;
 pub mod fetch;
 mod fuzzy;
-pub mod http;
+mod http;
 pub mod icons;
 pub mod opml;
 pub mod settings;
-pub mod util;
+mod util;
 
 pub use db::{Db, Store};
 pub use settings::{Paths, Settings};

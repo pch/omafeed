@@ -507,14 +507,6 @@ impl Store {
         Ok(id)
     }
 
-    pub fn edit_feed(&self, id: i64, title: &str, folder: Option<i64>) -> Result<()> {
-        self.conn.execute(
-            "UPDATE feeds SET title = ?1, folder = ?2 WHERE id = ?3",
-            params![Self::name(title)?, folder, id],
-        )?;
-        Ok(())
-    }
-
     pub fn update_feed(&self, id: i64, title: &str, url: &str, folder: Option<i64>) -> Result<()> {
         let url = validate_url(url)?;
         let tx = self.conn.unchecked_transaction()?;

@@ -6,10 +6,10 @@ use std::path::PathBuf;
 pub fn xdg(key: &str, fallback: &str) -> PathBuf {
     std::env::var_os(key)
         .filter(|v| PathBuf::from(v).is_absolute())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(fallback)
-        })
+        .map_or_else(
+            || PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(fallback),
+            PathBuf::from,
+        )
 }
 #[derive(Clone, Debug)]
 pub struct Paths {

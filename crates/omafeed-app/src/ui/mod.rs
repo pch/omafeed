@@ -4,8 +4,7 @@ mod changes;
 mod keys;
 mod reader;
 mod sidebar;
-#[cfg(test)]
-#[allow(dead_code)]
+#[cfg(feature = "test-support")]
 pub(crate) mod tests;
 mod theme;
 pub mod widgets;
