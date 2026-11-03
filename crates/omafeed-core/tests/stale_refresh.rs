@@ -82,7 +82,7 @@ fn results_for_a_changed_url_are_dropped() {
 
 #[test]
 fn renaming_or_moving_a_feed_keeps_its_refresh() {
-    let mut s = Store::open(":memory:").unwrap();
+    let s = Store::open(":memory:").unwrap();
     let folder = s.add_folder("Folder", None).unwrap();
     let id = s
         .add_feed("Feed", "https://old.example.org/feed", None)
@@ -153,7 +153,7 @@ fn results_for_a_deleted_feed_do_not_reach_a_new_feed_with_its_id() {
 
 #[test]
 fn every_new_or_moved_subscription_gets_a_revision_never_used_before() {
-    let mut s = Store::open(":memory:").unwrap();
+    let s = Store::open(":memory:").unwrap();
     let mut seen = Vec::new();
     let a = s.add_feed("A", "https://a.example.org/feed", None).unwrap();
     seen.push(feed(&s, a).revision);

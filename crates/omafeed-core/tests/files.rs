@@ -159,6 +159,10 @@ fn a_database_from_a_newer_version_is_refused_and_left_alone() {
         .pragma_update(None, "user_version", current + 1)
         .unwrap();
     let error = Store::open(&path).err().unwrap();
+    assert!(matches!(
+        error.downcast_ref::<omafeed_core::Error>(),
+        Some(omafeed_core::Error::NewerDatabase)
+    ));
     assert_eq!(
         error.to_string(),
         "Database was created by a newer Omafeed version"

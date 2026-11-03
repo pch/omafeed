@@ -1,6 +1,6 @@
 //! Schema migrations, applied in order when a library is opened.
 use super::Store;
-use anyhow::{Result, bail};
+use anyhow::Result;
 use rusqlite::{Connection, params};
 
 enum Migration {
@@ -108,7 +108,7 @@ impl Store {
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         let version = usize::try_from(version).unwrap_or(usize::MAX);
         if version > MIGRATIONS.len() {
-            bail!("Database was created by a newer Omafeed version");
+            return Err(crate::Error::NewerDatabase.into());
         }
         for (index, migration) in MIGRATIONS.iter().enumerate().skip(version) {
             let tx = conn.transaction()?;

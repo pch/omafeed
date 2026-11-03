@@ -1,5 +1,5 @@
 //! Small helpers shared by OPML, storage, fetching, and rendering.
-use anyhow::{Result, bail};
+use anyhow::Result;
 use sha2::{Digest, Sha256};
 use std::net::IpAddr;
 use url::{Host, Url};
@@ -23,12 +23,13 @@ pub fn escape(s: &str) -> String {
 
 /// Accept only credential-free HTTP(S) URLs, dropping any fragment.
 pub fn validate_url(value: &str) -> Result<String> {
-    let mut u = Url::parse(value.trim())?;
+    let invalid = |message: String| crate::Error::Validation(message);
+    let mut u = Url::parse(value.trim()).map_err(|e| invalid(e.to_string()))?;
     if !matches!(u.scheme(), "http" | "https") || u.host_str().is_none() {
-        bail!("Feed URL must use HTTP or HTTPS");
+        return Err(invalid("Feed URL must use HTTP or HTTPS".into()).into());
     }
     if !u.username().is_empty() || u.password().is_some() {
-        bail!("Credentials in feed URLs are not supported");
+        return Err(invalid("Credentials in feed URLs are not supported".into()).into());
     }
     u.set_fragment(None);
     Ok(u.to_string())

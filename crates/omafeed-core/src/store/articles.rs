@@ -1,7 +1,7 @@
 //! Articles: listing, reading, and read/star state.
 use super::{PAGE_SIZE, Store};
-use crate::model::{Article, Query};
-use anyhow::{Result, bail};
+use crate::model::{Article, Query, StatePatch};
+use anyhow::Result;
 use rusqlite::{OptionalExtension, params};
 
 /// Joins shared by every article query; aliases `a`, `f`, and `s` are used by predicates.
@@ -69,16 +69,14 @@ impl Store {
             .optional()?)
     }
 
-    /// Validate and update a batch in one transaction, including rollback on write failure.
-    pub fn set_article_states(
-        &mut self,
-        ids: &[i64],
-        read: Option<bool>,
-        starred: Option<bool>,
-    ) -> Result<Vec<(i64, String)>> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    /// Change every article in `ids` as `patch` says, or none of them if one does not exist
+    /// or a write fails. Returns each article changed with its title, in ID order.
+    pub fn set_article_states(&self, ids: &[i64], patch: StatePatch) -> Result<Vec<(i64, String)>> {
+        self.immediate(|s| s.set_article_states_now(ids, patch))
+    }
+
+    fn set_article_states_now(&self, ids: &[i64], patch: StatePatch) -> Result<Vec<(i64, String)>> {
+        let tx = &self.conn;
         let mut ids = ids.to_vec();
         ids.sort_unstable();
         ids.dedup();
@@ -90,18 +88,26 @@ impl Store {
                 })
                 .optional()?;
             let Some(title) = title else {
-                bail!("No article with id {id}");
+                return Err(crate::Error::ArticleNotFound(id).into());
             };
             changed.push((id, title));
         }
         for (id, _) in &changed {
             tx.execute(
                 "UPDATE article_state SET read = COALESCE(?1, read), starred = COALESCE(?2, starred) WHERE article_id = ?3",
-                params![read, starred, id],
+                params![patch.read, patch.starred, id],
             )?;
         }
-        tx.commit()?;
         Ok(changed)
+    }
+
+    /// Change one article as `patch` says. An article that no longer exists is left alone.
+    pub fn set_state(&self, id: i64, patch: StatePatch) -> Result<()> {
+        self.conn.execute(
+            "UPDATE article_state SET read = COALESCE(?1, read), starred = COALESCE(?2, starred) WHERE article_id = ?3",
+            params![patch.read, patch.starred, id],
+        )?;
+        Ok(())
     }
 
     pub fn set_read(&self, id: i64, read: bool) -> Result<()> {

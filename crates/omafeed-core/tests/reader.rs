@@ -1,7 +1,7 @@
 use omafeed_core::{
     Db, Store, content,
     ingest::{self, Refresher},
-    model::{Download, Query, Scope, Update},
+    model::{Download, Query, Scope, StatePatch, Update},
 };
 fn rss(body: &str) -> String {
     format!(
@@ -40,7 +40,7 @@ fn all() -> Query {
 }
 #[test]
 fn import_hierarchy_roundtrip_and_reimport_preserves_moves() {
-    let mut s = Store::open(":memory:").unwrap();
+    let s = Store::open(":memory:").unwrap();
     let input = r#"<opml version="2.0"><body><outline text="Blogs &amp; News"><outline text="Nested"><outline text="マリウス" xmlUrl="https://example.org/feed?x=1&amp;y=2"/></outline></outline><outline text="bad" xmlUrl="file:///etc/passwd"/></body></opml>"#;
     let r = s.import(input).unwrap();
     assert_eq!(r.added, 1);
@@ -52,13 +52,13 @@ fn import_hierarchy_roundtrip_and_reimport_preserves_moves() {
     assert_eq!(s.import(input).unwrap().skipped, 1);
     assert_eq!(s.library().unwrap().feeds[0].folder, None);
     let export = s.export().unwrap();
-    let mut other = Store::open(":memory:").unwrap();
+    let other = Store::open(":memory:").unwrap();
     assert_eq!(other.import(&export).unwrap().added, 1);
     assert_eq!(other.library().unwrap().feeds[0].title, "Custom");
 }
 #[test]
 fn reimporting_folders_with_surrounding_spaces_reuses_them() {
-    let mut s = Store::open(":memory:").unwrap();
+    let s = Store::open(":memory:").unwrap();
     let opml = r#"<opml version="2.0"><body><outline text=" Work "><outline text="  "><outline text="Feed" xmlUrl="https://example.org/feed"/></outline></outline></body></opml>"#;
     assert_eq!(s.import(opml).unwrap().added, 1);
     let again = s.import(opml).unwrap();
@@ -73,7 +73,7 @@ fn reimporting_folders_with_surrounding_spaces_reuses_them() {
     names.sort();
     assert_eq!(names, ["Untitled", "Work"]);
     // A folder made by hand is found by its trimmed name too.
-    let mut s = Store::open(":memory:").unwrap();
+    let s = Store::open(":memory:").unwrap();
     let work = s.add_folder("Work", None).unwrap();
     s.import(opml).unwrap();
     let lib = s.library().unwrap();
@@ -83,7 +83,7 @@ fn reimporting_folders_with_surrounding_spaces_reuses_them() {
 }
 #[test]
 fn folder_moves_reject_cycles_and_delete_preserves_contents() {
-    let mut s = Store::open(":memory:").unwrap();
+    let s = Store::open(":memory:").unwrap();
     let a = s.add_folder("A", None).unwrap();
     let b = s.add_folder("B", Some(a)).unwrap();
     let c = s.add_folder("C", Some(b)).unwrap();
@@ -102,7 +102,7 @@ fn folder_moves_reject_cycles_and_delete_preserves_contents() {
 }
 #[test]
 fn repeated_downloads_preserve_state_and_content_updates_are_searchable() {
-    let mut s = Store::open(":memory:").unwrap();
+    let s = Store::open(":memory:").unwrap();
     let f = s
         .add_feed("Test", "https://example.org/feed", None)
         .unwrap();
@@ -151,7 +151,7 @@ fn state_survives_reopen_and_feed_moves() {
     let path = dir.path().join("data.db");
     let id;
     {
-        let mut s = Store::open(&path).unwrap();
+        let s = Store::open(&path).unwrap();
         let folder = s.add_folder("Read", None).unwrap();
         let f = s
             .add_feed("Test", "https://example.org/feed", None)
@@ -214,7 +214,7 @@ fn atom_json_and_sanitized_relative_links() {
 }
 #[test]
 fn bulk_mark_includes_descendants_and_undo_is_scoped() {
-    let mut s = Store::open(":memory:").unwrap();
+    let s = Store::open(":memory:").unwrap();
     let a = s.add_folder("A", None).unwrap();
     let b = s.add_folder("B", Some(a)).unwrap();
     for (i, folder) in [Some(a), Some(b), None].into_iter().enumerate() {
@@ -304,7 +304,7 @@ async fn conditional_refresh_and_failures_keep_cached_articles() {
 }
 #[test]
 fn invalid_search_is_literal_and_removing_feed_cleans_fts() {
-    let mut s = Store::open(":memory:").unwrap();
+    let s = Store::open(":memory:").unwrap();
     let f = s.add_feed("Test", "https://example.org", None).unwrap();
     s.commit_download(
         f,
@@ -334,7 +334,7 @@ fn invalid_search_is_literal_and_removing_feed_cleans_fts() {
 
 #[test]
 fn correcting_feed_url_preserves_history_and_resets_validators() {
-    let mut s = Store::open(":memory:").unwrap();
+    let s = Store::open(":memory:").unwrap();
     let id = s.add_feed("Test", "https://example.org/old", None).unwrap();
     s.commit_download(
         id,
@@ -382,7 +382,7 @@ async fn redirects_are_followed_and_oversized_feeds_are_rejected() {
 }
 #[test]
 fn folder_removal_handles_duplicate_child_names_without_losing_feeds() {
-    let mut s = Store::open(":memory:").unwrap();
+    let s = Store::open(":memory:").unwrap();
     let root = s.add_folder("Root", None).unwrap();
     let child = s.add_folder("Same", Some(root)).unwrap();
     s.add_folder("Same", None).unwrap();
@@ -510,7 +510,7 @@ fn upgrading_a_version_1_database_reextracts_article_text() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("old.db");
     {
-        let mut s = Store::open(&path).unwrap();
+        let s = Store::open(&path).unwrap();
         let f = s
             .add_feed("Test", "https://example.org/feed", None)
             .unwrap();
@@ -541,7 +541,7 @@ fn upgrading_a_version_1_database_reextracts_article_text() {
 }
 #[test]
 fn feed_article_counts_report_articles_and_stars_per_feed() {
-    let mut s = Store::open(":memory:").unwrap();
+    let s = Store::open(":memory:").unwrap();
     let a = s.add_feed("A", "https://example.org/a", None).unwrap();
     let b = s.add_feed("B", "https://example.org/b", None).unwrap();
     let two = rss(
@@ -592,7 +592,7 @@ fn data_version_changes_only_when_another_connection_writes() {
 fn batch_state_changes_roll_back_on_invalid_ids_and_write_failures() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("batch.db");
-    let mut s = Store::open(&path).unwrap();
+    let s = Store::open(&path).unwrap();
     let feed = s
         .add_feed("Test", "https://example.org/feed", None)
         .unwrap();
@@ -600,29 +600,57 @@ fn batch_state_changes_roll_back_on_invalid_ids_and_write_failures() {
     let mut ids: Vec<_> = s.articles(&all()).unwrap().iter().map(|a| a.id).collect();
     ids.sort();
     assert!(
-        s.set_article_states(&[ids[0], 9999], Some(true), Some(true))
-            .is_err()
+        s.set_article_states(
+            &[ids[0], 9999],
+            StatePatch {
+                read: Some(true),
+                starred: Some(true)
+            }
+        )
+        .is_err()
     );
     assert!(!s.article(ids[0]).unwrap().read);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!("CREATE TRIGGER fail_batch BEFORE UPDATE ON article_state WHEN NEW.article_id = {} BEGIN SELECT RAISE(ABORT, 'write failure'); END", ids[1])).unwrap();
-    assert!(s.set_article_states(&ids, Some(true), Some(true)).is_err());
+    assert!(
+        s.set_article_states(
+            &ids,
+            StatePatch {
+                read: Some(true),
+                starred: Some(true)
+            }
+        )
+        .is_err()
+    );
     for id in &ids {
         let a = s.article(*id).unwrap();
         assert!(!a.read && !a.starred);
     }
     conn.execute_batch("DROP TRIGGER fail_batch").unwrap();
     assert_eq!(
-        s.set_article_states(&[ids[1], ids[0], ids[0]], Some(true), None)
-            .unwrap()
-            .len(),
+        s.set_article_states(
+            &[ids[1], ids[0], ids[0]],
+            StatePatch {
+                read: Some(true),
+                starred: None
+            }
+        )
+        .unwrap()
+        .len(),
         2
     );
     for id in &ids {
         let a = s.article(*id).unwrap();
         assert!(a.read && !a.starred);
     }
-    s.set_article_states(&ids, None, Some(true)).unwrap();
+    s.set_article_states(
+        &ids,
+        StatePatch {
+            read: None,
+            starred: Some(true),
+        },
+    )
+    .unwrap();
     assert!(s.article(ids[0]).unwrap().read && s.article(ids[0]).unwrap().starred);
     s.delete_feed(feed).unwrap();
     assert!(s.article_if_exists(ids[0]).unwrap().is_none());
@@ -1029,7 +1057,7 @@ fn upgrading_a_version_2_database_separates_words_at_block_ends() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("old.db");
     {
-        let mut s = Store::open(&path).unwrap();
+        let s = Store::open(&path).unwrap();
         let f = s
             .add_feed("Test", "https://example.org/feed", None)
             .unwrap();
@@ -1127,4 +1155,47 @@ fn immediate_work_is_kept_only_if_it_all_succeeds() {
     assert_eq!(s.library().unwrap().feeds.len(), 1);
     s.immediate(|s| s.delete_feed(id)).unwrap();
     assert!(s.library().unwrap().feeds.is_empty());
+}
+
+#[test]
+fn callers_can_tell_the_errors_they_act_on_apart() {
+    use omafeed_core::Error;
+    let kind = |e: anyhow::Error| match e.downcast_ref::<Error>() {
+        Some(Error::ArticleNotFound(id)) => format!("article {id}"),
+        Some(Error::FeedNotFound(id)) => format!("feed {id}"),
+        Some(Error::DuplicateFeed(_)) => "duplicate".into(),
+        Some(Error::NewerDatabase) => "newer".into(),
+        Some(Error::Validation(_)) => "validation".into(),
+        None => format!("other: {e}"),
+    };
+    let s = Store::open(":memory:").unwrap();
+    let a = s.add_feed("A", "https://example.org/a", None).unwrap();
+    s.add_feed("B", "https://example.org/b", None).unwrap();
+    let duplicate = s
+        .add_feed("Again", "https://example.org/a", None)
+        .unwrap_err();
+    // The command line prints SQLite's own message, as it always has.
+    assert_eq!(
+        format!("{duplicate:#}"),
+        "UNIQUE constraint failed: feeds.url: Error code 2067: constraint failed"
+    );
+    assert_eq!(kind(duplicate), "duplicate");
+    let moved = s.update_feed(a, "A", "https://example.org/b", None);
+    assert_eq!(kind(moved.unwrap_err()), "duplicate");
+    assert_eq!(
+        kind(s.add_feed("", "ftp://example.org", None).unwrap_err()),
+        "validation"
+    );
+    assert_eq!(
+        kind(s.add_feed("", "not a url", None).unwrap_err()),
+        "validation"
+    );
+    assert_eq!(kind(s.add_folder(" ", None).unwrap_err()), "validation");
+    // Other constraints are not mistaken for a duplicate feed.
+    s.add_folder("Same", None).unwrap();
+    assert!(kind(s.add_folder("Same", None).unwrap_err()).starts_with("other: UNIQUE"));
+    let missing = s.set_article_states(&[404], StatePatch::read(true));
+    assert_eq!(kind(missing.unwrap_err()), "article 404");
+    // A single article that is gone is left alone, without an error.
+    s.set_state(404, StatePatch::starred(true)).unwrap();
 }

@@ -88,7 +88,7 @@ fn documents() -> Vec<String> {
 }
 
 fn library(path: &Path, documents: &[String], extra_terms: usize) -> Store {
-    let mut store = Store::open(path).unwrap();
+    let store = Store::open(path).unwrap();
     let feed = store
         .add_feed("Bench", "https://example.org/feed", None)
         .unwrap();

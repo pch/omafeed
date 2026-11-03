@@ -2,10 +2,10 @@
 use crate::DB_FILE;
 use anyhow::{Context, Result, bail};
 use omafeed_core::{
-    Db, Paths, Settings,
+    Db, Error, Paths, Settings,
     content::{one_line, readable},
     ingest::{Progress, Refresher},
-    model::{Article, Library, Query, Scope},
+    model::{Article, Library, ParseScopeError, Query, Scope, StatePatch},
     store::PAGE_SIZE,
 };
 use serde_json::{Value, json};
@@ -157,10 +157,14 @@ pub fn run(command: Command) -> Result<()> {
                 articles(&db, scope, query.join(" "), list).await
             }
             Command::Article { id, html, json } => article(&db, id, html, json).await,
-            Command::Read(i) => set_state(&db, i, "Marked {} read", Some(true), None).await,
-            Command::Unread(i) => set_state(&db, i, "Marked {} unread", Some(false), None).await,
-            Command::Star(i) => set_state(&db, i, "Starred {}", None, Some(true)).await,
-            Command::Unstar(i) => set_state(&db, i, "Unstarred {}", None, Some(false)).await,
+            Command::Read(i) => set_state(&db, i, "Marked {} read", StatePatch::read(true)).await,
+            Command::Unread(i) => {
+                set_state(&db, i, "Marked {} unread", StatePatch::read(false)).await
+            }
+            Command::Star(i) => set_state(&db, i, "Starred {}", StatePatch::starred(true)).await,
+            Command::Unstar(i) => {
+                set_state(&db, i, "Unstarred {}", StatePatch::starred(false)).await
+            }
             Command::Subscribe {
                 url,
                 folder,
@@ -267,23 +271,7 @@ async fn discover(url: &str, json: bool) -> Result<()> {
 }
 
 fn parse_scope(text: &str) -> Result<Scope, String> {
-    let id = |n: &str| {
-        n.parse::<i64>()
-            .map_err(|_| format!("expected a number in '{text}'"))
-    };
-    match text {
-        "unread" => Ok(Scope::Unread),
-        "today" => Ok(Scope::Today),
-        "starred" => Ok(Scope::Starred),
-        "all" => Ok(Scope::All),
-        _ => match text.split_once(':') {
-            Some(("feed", n)) => Ok(Scope::Feed(id(n)?)),
-            Some(("folder", n)) => Ok(Scope::Folder(id(n)?)),
-            _ => Err(format!(
-                "unknown scope '{text}'; use unread, today, starred, all, feed:ID or folder:ID"
-            )),
-        },
-    }
+    text.parse().map_err(|e: ParseScopeError| e.to_string())
 }
 
 /// A search needs at least one word; an empty one would match every article.
@@ -526,7 +514,7 @@ async fn article(db: &Db, id: i64, html: bool, json: bool) -> Result<()> {
     let a = db
         .call(move |s| s.article_if_exists(id))
         .await?
-        .with_context(|| format!("No article with id {id}"))?;
+        .ok_or(Error::ArticleNotFound(id))?;
     if json {
         let mut item = summary(&a);
         if html {
@@ -558,12 +546,9 @@ async fn set_state(
     db: &Db,
     Ids { ids, json }: Ids,
     message: &str,
-    read: Option<bool>,
-    starred: Option<bool>,
+    patch: StatePatch,
 ) -> Result<()> {
-    let changed = db
-        .call(move |s| s.set_article_states(&ids, read, starred))
-        .await?;
+    let changed = db.call(move |s| s.set_article_states(&ids, patch)).await?;
     if json {
         let articles: Vec<_> = changed
             .iter()
@@ -621,9 +606,7 @@ async fn unsubscribe(db: &Db, id: i64, yes: bool, json: bool) -> Result<()> {
         .call(move |s| {
             s.immediate(|s| {
                 let lib = s.library()?;
-                let Some(feed) = lib.feed(id) else {
-                    bail!("No feed with id {id}");
-                };
+                let feed = lib.feed(id).ok_or(Error::FeedNotFound(id))?;
                 let (total, starred) = s.feed_article_counts(id)?;
                 if yes {
                     s.delete_feed(id)?;

@@ -82,6 +82,50 @@ impl Scope {
     }
 }
 
+impl std::fmt::Display for Scope {
+    /// The scope as the command line writes it: `unread`, `feed:12`, …
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Scope::Unread => f.write_str("unread"),
+            Scope::Today => f.write_str("today"),
+            Scope::Starred => f.write_str("starred"),
+            Scope::All => f.write_str("all"),
+            Scope::Folder(id) => write!(f, "folder:{id}"),
+            Scope::Feed(id) => write!(f, "feed:{id}"),
+        }
+    }
+}
+
+/// Why text is not a [`Scope`]; the message names the accepted forms.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub struct ParseScopeError(String);
+
+impl std::str::FromStr for Scope {
+    type Err = ParseScopeError;
+
+    /// Read `unread`, `today`, `starred`, `all`, `feed:ID` or `folder:ID`.
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        let id = |n: &str| {
+            n.parse::<i64>()
+                .map_err(|_| ParseScopeError(format!("expected a number in '{text}'")))
+        };
+        match text {
+            "unread" => Ok(Scope::Unread),
+            "today" => Ok(Scope::Today),
+            "starred" => Ok(Scope::Starred),
+            "all" => Ok(Scope::All),
+            _ => match text.split_once(':') {
+                Some(("feed", n)) => Ok(Scope::Feed(id(n)?)),
+                Some(("folder", n)) => Ok(Scope::Folder(id(n)?)),
+                _ => Err(ParseScopeError(format!(
+                    "unknown scope '{text}'; use unread, today, starred, all, feed:ID or folder:ID"
+                ))),
+            },
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Query {
     pub scope: Scope,
@@ -106,6 +150,35 @@ pub struct Library {
     pub feeds: Vec<Feed>,
     pub unread: i64,
     pub starred: i64,
+}
+
+/// A change to an article's read and star state; `None` leaves that part as it is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StatePatch {
+    pub read: Option<bool>,
+    pub starred: Option<bool>,
+}
+
+impl StatePatch {
+    pub fn read(read: bool) -> Self {
+        Self {
+            read: Some(read),
+            ..Self::default()
+        }
+    }
+
+    pub fn starred(starred: bool) -> Self {
+        Self {
+            starred: Some(starred),
+            ..Self::default()
+        }
+    }
+
+    /// Make the change to an article already in memory.
+    pub fn apply(self, article: &mut Article) {
+        article.read = self.read.unwrap_or(article.read);
+        article.starred = self.starred.unwrap_or(article.starred);
+    }
 }
 
 /// One step through the library's folders and feeds, in [`Library::tree`] order.
@@ -269,5 +342,20 @@ mod tests {
         assert_eq!(path, ["Work", "Sub"]);
         assert_eq!(lib.feed(3).map(|f| f.title.as_str()), Some("Mid"));
         assert!(lib.folder(9).is_none());
+    }
+
+    #[test]
+    fn scopes_read_back_what_they_write() {
+        for scope in [
+            Scope::Unread,
+            Scope::Today,
+            Scope::Starred,
+            Scope::All,
+            Scope::Feed(12),
+            Scope::Folder(3),
+        ] {
+            assert_eq!(scope.to_string().parse::<Scope>(), Ok(scope));
+        }
+        assert_eq!(Scope::Feed(-4).to_string(), "feed:-4");
     }
 }

@@ -1,6 +1,7 @@
 //! Feeds: the library listing, subscriptions, refresh results, and OPML import and export.
 use super::Store;
 use crate::{
+    Error,
     model::{Download, Feed, Folder, ImportReport, Library},
     opml,
     util::validate_url,
@@ -101,26 +102,27 @@ impl Store {
         } else {
             Self::name(title)?
         };
-        let tx = self.conn.unchecked_transaction()?;
-        tx.execute(
-            "INSERT INTO feeds(title, url, folder, revision) VALUES(?1, ?2, ?3, ?4)",
-            params![title, url, folder, Self::next_revision(&tx)?],
-        )?;
-        let id = tx.last_insert_rowid();
-        tx.commit()?;
-        Ok(id)
+        self.immediate(|s| {
+            s.conn
+                .execute(
+                    "INSERT INTO feeds(title, url, folder, revision) VALUES(?1, ?2, ?3, ?4)",
+                    params![title, url, folder, Self::next_revision(&s.conn)?],
+                )
+                .map_err(Error::duplicate_feed)?;
+            Ok(s.conn.last_insert_rowid())
+        })
     }
 
     pub fn update_feed(&self, id: i64, title: &str, url: &str, folder: Option<i64>) -> Result<()> {
         let url = validate_url(url)?;
-        let tx = self.conn.unchecked_transaction()?;
-        let revision = Self::next_revision(&tx)?;
-        tx.execute(
-            UPDATE_FEED,
-            params![Self::name(title)?, folder, url, id, revision],
-        )?;
-        tx.commit()?;
-        Ok(())
+        let title = Self::name(title)?;
+        self.immediate(|s| {
+            let revision = Self::next_revision(&s.conn)?;
+            s.conn
+                .execute(UPDATE_FEED, params![title, folder, url, id, revision])
+                .map_err(Error::duplicate_feed)?;
+            Ok(())
+        })
     }
 
     /// Stored articles for a feed, and how many of them are starred.
@@ -144,21 +146,38 @@ impl Store {
     /// schedule the next one at `next_fetch`; validators are only saved with committed
     /// content. Nothing is stored if the feed was deleted or is no longer at that revision.
     pub fn commit_download(
-        &mut self,
+        &self,
         feed_id: i64,
         revision: i64,
         download: Download,
         now: i64,
         next_fetch: i64,
     ) -> Result<()> {
-        let tx = self.conn.transaction()?;
+        let changed = self
+            .immediate(|s| s.commit_download_now(feed_id, revision, download, now, next_fetch))?;
+        if changed {
+            self.articles_changed();
+        }
+        Ok(())
+    }
+
+    /// Store a download as `commit_download` does; returns whether any article text changed.
+    fn commit_download_now(
+        &self,
+        feed_id: i64,
+        revision: i64,
+        download: Download,
+        now: i64,
+        next_fetch: i64,
+    ) -> Result<bool> {
+        let tx = &self.conn;
         let current: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM feeds WHERE id = ?1 AND revision = ?2)",
             [feed_id, revision],
             |r| r.get(0),
         )?;
         if !current {
-            return Ok(());
+            return Ok(false);
         }
         let changes_articles = matches!(download, Download::Updated(_));
         if let Download::Updated(update) = download {
@@ -187,11 +206,7 @@ impl Store {
              WHERE id = ?3",
             params![now, next_fetch, feed_id],
         )?;
-        tx.commit()?;
-        if changes_articles {
-            self.articles_changed();
-        }
-        Ok(())
+        Ok(changes_articles)
     }
 
     /// Record a refresh of the feed `feed_id` at `revision` that failed at `now`, and schedule
@@ -213,13 +228,13 @@ impl Store {
         Ok(())
     }
 
-    pub fn import(&mut self, text: &str) -> Result<ImportReport> {
+    pub fn import(&self, text: &str) -> Result<ImportReport> {
         let doc = opml::parse(text)?;
-        let tx = self.conn.transaction()?;
-        let mut report = ImportReport::default();
-        Self::import_outlines(&tx, &doc.body.outlines, None, &mut report, 0)?;
-        tx.commit()?;
-        Ok(report)
+        self.immediate(|s| {
+            let mut report = ImportReport::default();
+            Self::import_outlines(&s.conn, &doc.body.outlines, None, &mut report, 0)?;
+            Ok(report)
+        })
     }
 
     fn import_outlines(
