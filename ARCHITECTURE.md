@@ -53,8 +53,15 @@ by polling SQLite's `PRAGMA data_version` every two seconds and reloading when i
 
 The library is `omafeed.db` in the data directory (`$XDG_DATA_HOME/omafeed`, or
 `$OMAFEED_HOME/data`). The schema version is SQLite's `user_version`; migration `n` upgrades
-version `n` to `n + 1`, each in its own transaction. Migrations 2 and 3 recompute article
-text from stored HTML. A database from a newer Omafeed is refused, not modified.
+version `n` to `n + 1`, each in its own transaction. The upgrades to versions 2 and 3
+recompute article text from stored HTML; the upgrade to version 4 adds feed revisions. A database from a newer Omafeed is
+refused, not modified.
+
+Each feed has a `revision`, drawn from a counter in the one-row `meta` table whenever a feed
+is created (subscribe or OPML import) or its URL changes. A refresh remembers the revision it
+started with, and `commit_download` and `record_failure` store nothing unless the feed still
+has it. So a download that finishes after its feed was edited, deleted, or replaced by a new
+feed that reused the ID (SQLite reuses the highest deleted rowid) is dropped.
 
 Articles are indexed in an FTS5 table kept in step by triggers. The search vocabulary is read
 from an `fts5vocab` view and cached per connection until articles change.

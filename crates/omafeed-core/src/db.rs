@@ -35,6 +35,10 @@ pub struct Feed {
     pub modified: Option<String>,
     pub next_fetch: i64,
     pub failures: i64,
+    /// Changes whenever the row stops being the subscription it was: when it is created and
+    /// when its URL changes. A refresh that started earlier must not store anything once it
+    /// differs, even if the ID was reused for a new feed.
+    pub revision: i64,
 }
 
 impl Feed {
@@ -133,6 +137,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Rust(reextract_text),
     // Blocks also separate words where they end, and `details`/`summary` count as blocks.
     Migration::Rust(reextract_text),
+    // Feed revisions, so a refresh that raced an edit or a deletion stores nothing.
+    Migration::Sql(FEED_REVISIONS),
 ];
 
 const SCHEMA_V1: &str = r#"
@@ -194,6 +200,18 @@ CREATE TRIGGER article_update AFTER UPDATE ON articles BEGIN
 END;
 "#;
 
+/// Every existing feed gets its ID as revision; new revisions start above all of them, so a
+/// recreated feed never matches a revision handed out before.
+const FEED_REVISIONS: &str = "
+ALTER TABLE feeds ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+UPDATE feeds SET revision = id;
+CREATE TABLE meta(
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    next_revision INTEGER NOT NULL
+);
+INSERT INTO meta(id, next_revision) VALUES(1, (SELECT COALESCE(max(id), 0) + 1 FROM feeds));
+";
+
 /// Recompute search/preview text from stored HTML (the FTS index follows via trigger).
 fn reextract_text(conn: &Connection) -> Result<()> {
     let articles = conn
@@ -211,7 +229,7 @@ const LIBRARY_FEEDS: &str = "
 SELECT f.id, f.folder, f.title, f.url, f.site_url,
        (SELECT count(*) FROM articles a JOIN article_state s ON s.article_id = a.id
         WHERE a.feed_id = f.id AND s.read = 0),
-       f.error, f.etag, f.modified, f.next_fetch, f.failures
+       f.error, f.etag, f.modified, f.next_fetch, f.failures, f.revision
 FROM feeds f
 ORDER BY f.title COLLATE NOCASE";
 
@@ -232,11 +250,13 @@ ON CONFLICT(feed_id, identity) DO UPDATE SET
     html = excluded.html,
     text = excluded.text";
 
-/// Changing a feed URL clears everything learned from the old URL.
+/// Changing a feed URL clears everything learned from the old URL and gives the feed revision
+/// `?5`.
 const UPDATE_FEED: &str = "
 UPDATE feeds SET
     title = ?1,
     folder = ?2,
+    revision = CASE WHEN url <> ?3 THEN ?5 ELSE revision END,
     etag = CASE WHEN url <> ?3 THEN NULL ELSE etag END,
     modified = CASE WHEN url <> ?3 THEN NULL ELSE modified END,
     site_url = CASE WHEN url <> ?3 THEN '' ELSE site_url END,
@@ -352,6 +372,7 @@ impl Store {
                     modified: r.get(8)?,
                     next_fetch: r.get(9)?,
                     failures: r.get(10)?,
+                    revision: r.get(11)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -366,6 +387,17 @@ impl Store {
             unread,
             starred,
         })
+    }
+
+    /// Hand out a feed revision no feed has had before. Call it inside the transaction that
+    /// uses the revision.
+    fn next_revision(conn: &Connection) -> Result<i64> {
+        Ok(conn.query_row(
+            "UPDATE meta SET next_revision = next_revision + 1 WHERE id = 1
+             RETURNING next_revision - 1",
+            [],
+            |r| r.get(0),
+        )?)
     }
 
     fn name(name: &str) -> Result<&str> {
@@ -460,11 +492,14 @@ impl Store {
         } else {
             Self::name(title)?
         };
-        self.conn.execute(
-            "INSERT INTO feeds(title, url, folder) VALUES(?1, ?2, ?3)",
-            params![title, url, folder],
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "INSERT INTO feeds(title, url, folder, revision) VALUES(?1, ?2, ?3, ?4)",
+            params![title, url, folder, Self::next_revision(&tx)?],
         )?;
-        Ok(self.conn.last_insert_rowid())
+        let id = tx.last_insert_rowid();
+        tx.commit()?;
+        Ok(id)
     }
 
     pub fn edit_feed(&self, id: i64, title: &str, folder: Option<i64>) -> Result<()> {
@@ -477,8 +512,13 @@ impl Store {
 
     pub fn update_feed(&self, id: i64, title: &str, url: &str, folder: Option<i64>) -> Result<()> {
         let url = validate_url(url)?;
-        self.conn
-            .execute(UPDATE_FEED, params![Self::name(title)?, folder, url, id])?;
+        let tx = self.conn.unchecked_transaction()?;
+        let revision = Self::next_revision(&tx)?;
+        tx.execute(
+            UPDATE_FEED,
+            params![Self::name(title)?, folder, url, id, revision],
+        )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -499,21 +539,24 @@ impl Store {
         Ok(())
     }
 
-    /// Store a successful download; validators are only saved with committed content.
+    /// Store a successful download of the feed `feed_id` at `revision`; validators are only
+    /// saved with committed content. Nothing is stored if the feed was deleted or is no
+    /// longer at that revision.
     pub fn commit_download(
         &mut self,
         feed_id: i64,
+        revision: i64,
         download: Download,
         minutes: u32,
     ) -> Result<()> {
         let now = chrono::Utc::now().timestamp();
         let tx = self.conn.transaction()?;
-        let exists: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM feeds WHERE id = ?1)",
-            [feed_id],
+        let current: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM feeds WHERE id = ?1 AND revision = ?2)",
+            [feed_id, revision],
             |r| r.get(0),
         )?;
-        if !exists {
+        if !current {
             return Ok(());
         }
         let changes_articles = matches!(download, Download::Updated(_));
@@ -550,12 +593,21 @@ impl Store {
         Ok(())
     }
 
-    /// Record a failed refresh and schedule the next attempt `delay` seconds from `now`.
-    pub fn record_failure(&self, feed_id: i64, error: &str, now: i64, delay: i64) -> Result<()> {
+    /// Record a failed refresh of the feed `feed_id` at `revision` and schedule the next
+    /// attempt `delay` seconds from `now`. Nothing is recorded if the feed was deleted or is
+    /// no longer at that revision.
+    pub fn record_failure(
+        &self,
+        feed_id: i64,
+        revision: i64,
+        error: &str,
+        now: i64,
+        delay: i64,
+    ) -> Result<()> {
         self.conn.execute(
             "UPDATE feeds SET error = ?1, failures = failures + 1, last_attempt = ?2, next_fetch = ?3
-             WHERE id = ?4",
-            params![error, now, now + delay, feed_id],
+             WHERE id = ?4 AND revision = ?5",
+            params![error, now, now + delay, feed_id, revision],
         )?;
         Ok(())
     }
@@ -638,8 +690,8 @@ impl Store {
                 .and_then(|s| validate_url(s).ok())
                 .unwrap_or_default();
             conn.execute(
-                "INSERT INTO feeds(title, url, folder, site_url) VALUES(?1, ?2, ?3, ?4)",
-                params![title, url, parent, site],
+                "INSERT INTO feeds(title, url, folder, site_url, revision) VALUES(?1, ?2, ?3, ?4, ?5)",
+                params![title, url, parent, site, Self::next_revision(conn)?],
             )?;
             report.added += 1;
         }

@@ -63,8 +63,10 @@ pub(crate) fn desktop_smoke() {
         .block_on(db.call(|s| {
             let folder = s.add_folder("Blogs", None)?;
             let f = s.add_feed("Fixture feed", "https://example.invalid/feed", Some(folder))?;
+            let revision = s.library()?.feeds[0].revision;
             s.commit_download(
                 f,
+                revision,
                 omafeed_core::fetch::Download::Updated(omafeed_core::fetch::Update {
                     entries: vec![omafeed_core::fetch::Entry {
                         identity: "one".into(),

@@ -127,6 +127,17 @@ fn databases_from_every_schema_version_open_with_their_library_intact() {
             assert_eq!(found.len(), 1, "v{version}: {word}");
             assert_eq!(found[0].id, id, "v{version}: {word}");
         }
+        // Existing feeds get distinct revisions, and new ones never repeat them.
+        let mut revisions: Vec<i64> = lib.feeds.iter().map(|f| f.revision).collect();
+        let added = s.add_feed("New", "https://example.com/feed", None).unwrap();
+        let lib = s.library().unwrap();
+        revisions.push(lib.feeds.iter().find(|f| f.id == added).unwrap().revision);
+        let mut distinct = revisions.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        assert_eq!(distinct.len(), 3, "v{version}: {revisions:?}");
+        s.delete_feed(added).unwrap();
+
         let a = s.article(1).unwrap();
         assert_eq!(
             (a.title.as_str(), a.author.as_str(), a.published),
