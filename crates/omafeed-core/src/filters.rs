@@ -1,13 +1,12 @@
 //! Content filters: hide articles whose title or preview matches a word or a `/regex/`.
+//!
+//! Both kinds ignore case the same way, by Unicode case folding: a word is a regex that
+//! matches the word literally. A regex may still turn that off for itself with `(?-i)`. The
+//! title and the preview are matched separately, so `^` and `$` mean the start and end of
+//! either, and no match spans both.
 use crate::Error;
 use anyhow::Result;
 use regex::{Regex, RegexBuilder};
-
-enum Pattern {
-    /// Lowercased text found anywhere in the title or preview.
-    Word(String),
-    Regex(Regex),
-}
 
 /// Split `/body/flags`. Anything else, such as `/a/b`, is an ordinary word.
 fn regex_parts(text: &str) -> Option<(&str, &str)> {
@@ -18,15 +17,17 @@ fn regex_parts(text: &str) -> Option<(&str, &str)> {
         .then_some((body, flags))
 }
 
-fn parse(text: &str) -> Result<Pattern> {
+fn parse(text: &str) -> Result<Regex> {
     let text = text.trim();
     if text.is_empty() {
         return Err(Error::Validation("Enter a word or a /regex/".into()).into());
     }
     let Some((body, flags)) = regex_parts(text) else {
-        return Ok(Pattern::Word(text.to_lowercase()));
+        return Ok(RegexBuilder::new(&regex::escape(text))
+            .case_insensitive(true)
+            .build()?);
     };
-    // Always case-insensitive, like words, so `i` is accepted but changes nothing.
+    // Case-insensitive by default, like words, so `i` is accepted but changes nothing.
     let regex = RegexBuilder::new(body)
         .case_insensitive(true)
         .multi_line(flags.contains('m'))
@@ -39,7 +40,7 @@ fn parse(text: &str) -> Result<Pattern> {
             Error::Validation("This regular expression would hide every article".into()).into(),
         );
     }
-    Ok(Pattern::Regex(regex))
+    Ok(regex)
 }
 
 /// Check a pattern before it is saved. Fails with [`Error::Validation`] saying what is wrong.
@@ -51,7 +52,7 @@ pub fn validate(text: &str) -> Result<()> {
 /// reported and skipped so that the others keep working.
 #[derive(Default)]
 pub struct ContentFilters {
-    patterns: Vec<Pattern>,
+    patterns: Vec<Regex>,
 }
 
 impl ContentFilters {
@@ -77,11 +78,8 @@ impl ContentFilters {
 
     /// Whether an article with this title and preview is hidden.
     pub fn blocks(&self, title: &str, preview: &str) -> bool {
-        let text = format!("{title} {preview}");
-        let lower = text.to_lowercase();
-        self.patterns.iter().any(|pattern| match pattern {
-            Pattern::Word(word) => lower.contains(word),
-            Pattern::Regex(regex) => regex.is_match(&text),
-        })
+        self.patterns
+            .iter()
+            .any(|regex| regex.is_match(title) || regex.is_match(preview))
     }
 }

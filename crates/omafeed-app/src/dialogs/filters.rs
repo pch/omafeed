@@ -3,7 +3,7 @@ use crate::ui::{Ui, widgets::margins};
 use adw::prelude::*;
 use gtk::glib;
 use omafeed_core::filters::validate;
-use std::rc::Rc;
+use std::{cell::RefCell, rc::Rc};
 
 struct Panel {
     u: Rc<Ui>,
@@ -26,9 +26,14 @@ impl Panel {
             let remove = gtk::Button::from_icon_name("window-close-symbolic");
             remove.set_tooltip_text(Some("Remove"));
             remove.add_css_class("flat");
-            let panel = self.clone();
+            // Weak: the panel owns the list, and so this button.
+            let panel = Rc::downgrade(self);
             let pattern = pattern.clone();
-            remove.connect_clicked(move |_| panel.remove(&pattern));
+            remove.connect_clicked(move |_| {
+                if let Some(panel) = panel.upgrade() {
+                    panel.remove(&pattern);
+                }
+            });
             row.append(&remove);
             self.list.append(&row);
         }
@@ -76,7 +81,7 @@ pub fn filters(u: Rc<Ui>) {
     margins(&root, 16);
     let description = gtk::Label::new(Some(
         "Hide articles whose title or preview contains a word, or matches a /regex/. \
-         Case is ignored. Starred articles stay visible.",
+         Case is ignored unless a regex turns it back on with (?-i). Starred articles stay visible.",
     ));
     description.set_wrap(true);
     description.set_xalign(0.0);
@@ -121,11 +126,22 @@ pub fn filters(u: Rc<Ui>) {
         error,
     });
     panel.render();
+    // The panel holds the window's widgets, so their handlers hold it weakly. The window
+    // keeps it until it is closed.
     add.connect_clicked(glib::clone!(
-        #[strong]
+        #[weak]
         panel,
         move |_| panel.add()
     ));
-    entry.connect_activate(move |_| panel.add());
+    entry.connect_activate(glib::clone!(
+        #[weak]
+        panel,
+        move |_| panel.add()
+    ));
+    let owner = RefCell::new(Some(panel));
+    window.connect_close_request(move |_| {
+        owner.take();
+        glib::Propagation::Proceed
+    });
     window.present();
 }

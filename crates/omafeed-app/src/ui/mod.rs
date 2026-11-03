@@ -715,6 +715,8 @@ impl Ui {
     pub fn apply_filters(self: &Rc<Self>, filters: Vec<String>) {
         self.db.set_filters(filters.clone());
         self.settings.borrow_mut().filters = filters;
+        // The page the list was on may no longer exist.
+        self.view.borrow_mut().first_page();
         self.save();
         self.reload();
     }

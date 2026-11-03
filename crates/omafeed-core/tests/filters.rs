@@ -60,6 +60,23 @@ fn words_ignore_case_and_match_title_or_preview() {
     assert!(f.blocks("Weather", "sports day"));
     assert!(!f.blocks("Rust release", "A new compiler"));
     assert!(filters(&["äänestys"]).blocks("ÄÄNESTYS alkaa", ""));
+    // Case folding, not lowercasing: final sigma is the same letter.
+    assert!(filters(&["οσ"]).blocks("ΟΣ", ""));
+    assert!(filters(&["a.b"]).blocks("A.B", ""));
+    assert!(!filters(&["a.b"]).blocks("axb", ""));
+}
+
+#[test]
+fn title_and_preview_are_matched_separately() {
+    assert!(filters(&["/^sports$/"]).blocks("Sports", "Results"));
+    assert!(filters(&["/^sports/"]).blocks("Weather", "Sports day"));
+    assert!(!filters(&["/results weather/"]).blocks("Sports results", "Weather"));
+}
+
+#[test]
+fn a_regex_may_turn_case_matching_back_on() {
+    assert!(!filters(&["/(?-i:sports)/"]).blocks("SPORTS", ""));
+    assert!(filters(&["/(?-i:sports)/"]).blocks("sports", ""));
 }
 
 #[test]
