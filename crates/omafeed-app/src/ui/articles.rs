@@ -1,5 +1,5 @@
 //! Article list: paging, selection, and read/star state.
-use super::{Ui, widgets::label};
+use super::{Ui, changes::Field, widgets::label};
 use chrono::{DateTime, Datelike, Local};
 use gtk::{glib, prelude::*};
 use omafeed_core::db::{Article, PAGE_SIZE, Scope};
@@ -102,17 +102,27 @@ impl Ui {
         let page = self.page.get();
         let mut q = self.query.borrow().clone();
         q.offset = page * PAGE_SIZE;
+        let mark = self.changes.borrow().mark();
         let u = self.clone();
         glib::spawn_future_local(async move {
             match u.db.call(move |s| s.articles(&q)).await {
-                Ok(articles) if u.generation.get() == generation => u.show_articles(articles, page),
+                Ok(articles) if u.generation.get() == generation => {
+                    u.show_articles(articles, page, mark)
+                }
                 Ok(_) => {}
                 Err(e) => u.error(e),
             }
         });
     }
 
-    fn show_articles(self: &Rc<Self>, articles: Vec<Article>, page: usize) {
+    /// Show a page of articles read from the database at `mark`.
+    fn show_articles(self: &Rc<Self>, mut articles: Vec<Article>, page: usize, mark: u64) {
+        // Changes made since the read was sent, or still being written, are newer.
+        for a in &mut articles {
+            self.changes
+                .borrow()
+                .overlay(a.id, mark, &mut a.read, &mut a.starred);
+        }
         self.rebuilding.set(true);
         let list = &self.list.list;
         while let Some(child) = list.first_child() {
@@ -163,11 +173,15 @@ impl Ui {
     pub(super) fn select(self: &Rc<Self>, id: i64) {
         let generation = self.selection_generation.get() + 1;
         self.selection_generation.set(generation);
+        let mark = self.changes.borrow().mark();
         let u = self.clone();
         glib::spawn_future_local(async move {
             match u.db.call(move |s| s.article(id)).await {
                 Ok(_) if u.selection_generation.get() != generation => {}
-                Ok(a) => {
+                Ok(mut a) => {
+                    u.changes
+                        .borrow()
+                        .overlay(a.id, mark, &mut a.read, &mut a.starred);
                     u.settings.borrow_mut().selected_article = Some(id);
                     *u.selected.borrow_mut() = Some(a);
                     u.pending_mark.set(Some(id));
@@ -180,26 +194,36 @@ impl Ui {
         });
     }
 
-    /// Update an article's title row after its state changed.
-    fn update_local_state(&self, id: i64, read: Option<bool>, starred: Option<bool>) {
+    /// Show an article's read and/or star state in the list and, if it is open, the reader.
+    fn show_state(&self, id: i64, read: Option<bool>, starred: Option<bool>) {
+        if let Some(a) = self.selected.borrow_mut().as_mut().filter(|a| a.id == id) {
+            a.read = read.unwrap_or(a.read);
+            a.starred = starred.unwrap_or(a.starred);
+            self.update_buttons(a);
+        }
         let mut articles = self.articles.borrow_mut();
         let Some((index, a)) = articles.iter_mut().enumerate().find(|(_, a)| a.id == id) else {
             return;
         };
-        if let Some(r) = read {
-            a.read = r;
-        }
-        if let Some(s) = starred {
-            a.starred = s;
-        }
+        a.read = read.unwrap_or(a.read);
+        a.starred = starred.unwrap_or(a.starred);
         if let Some(row) = self.article_rows.borrow().get(index) {
             row.show_state(a);
         }
     }
 
-    /// Persist a read and/or star change, then update every view of the article.
+    /// Show a read and/or star change at once, then write it. Results are applied only while
+    /// no newer change of the same field is pending; an article deleted meanwhile is ignored.
     pub(super) fn set_state(self: &Rc<Self>, id: i64, read: Option<bool>, starred: Option<bool>) {
         self.state_writes.set(self.state_writes.get() + 1);
+        let started: Vec<(Field, u64)> = {
+            let mut changes = self.changes.borrow_mut();
+            [(Field::Read, read), (Field::Starred, starred)]
+                .into_iter()
+                .filter_map(|(field, value)| Some((field, changes.start(id, field, value?))))
+                .collect()
+        };
+        self.show_state(id, read, starred);
         let u = self.clone();
         glib::spawn_future_local(async move {
             let result =
@@ -213,17 +237,41 @@ impl Ui {
                     Ok(())
                 })
                 .await;
-            if let Err(e) = result {
-                u.error(e);
-                return;
+            let mut newest = false;
+            for (field, sequence) in started {
+                newest |= u.changes.borrow_mut().finish(id, field, sequence);
             }
-            if let Some(a) = u.selected.borrow_mut().as_mut().filter(|a| a.id == id) {
-                a.read = read.unwrap_or(a.read);
-                a.starred = starred.unwrap_or(a.starred);
-                u.update_buttons(a);
+            match result {
+                Ok(()) => u.refresh_counts(),
+                Err(e) => {
+                    u.error(e);
+                    // Show what was saved, unless a newer change will settle it anyway.
+                    if newest {
+                        u.reconcile(id);
+                    }
+                }
             }
-            u.update_local_state(id, read, starred);
-            u.refresh_counts();
+        });
+    }
+
+    /// Show the article's saved state again after a failed write, keeping any change made
+    /// after this read was sent.
+    fn reconcile(self: &Rc<Self>, id: i64) {
+        let mark = self.changes.borrow().mark();
+        let u = self.clone();
+        glib::spawn_future_local(async move {
+            match u.db.call(move |s| s.article_if_exists(id)).await {
+                Ok(Some(mut a)) => {
+                    u.changes
+                        .borrow()
+                        .overlay(id, mark, &mut a.read, &mut a.starred);
+                    u.show_state(id, Some(a.read), Some(a.starred));
+                    u.refresh_counts();
+                }
+                // Deleted in the meantime: nothing left to show.
+                Ok(None) => {}
+                Err(e) => u.error(e),
+            }
         });
     }
 
@@ -241,9 +289,26 @@ impl Ui {
         }
     }
 
+    /// Record that bulk change `sequence` set `articles` to `read`, except those changed
+    /// since it was sent, and show it on the open article if it is one of them.
+    fn bulk_read_done(&self, articles: &[i64], read: bool, sequence: u64) {
+        let open = self.selected.borrow().as_ref().map(|a| a.id);
+        let mut show = false;
+        let mut changes = self.changes.borrow_mut();
+        for &id in articles {
+            let applied = changes.finish_bulk(id, Field::Read, read, sequence);
+            show |= applied && Some(id) == open;
+        }
+        drop(changes);
+        if let Some(id) = open.filter(|_| show) {
+            self.show_state(id, Some(read), None);
+        }
+    }
+
     pub(super) fn mark_all(self: &Rc<Self>) {
         self.state_writes.set(self.state_writes.get() + 1);
         let q = self.query.borrow().clone();
+        let sequence = self.changes.borrow_mut().start_bulk();
         let u = self.clone();
         glib::spawn_future_local(async move {
             match u.db.call(move |s| s.mark_read(&q)).await {
@@ -252,13 +317,8 @@ impl Ui {
                         "Marked {} articles read · Ctrl+Z to undo",
                         ids.len()
                     ));
-                    if let Some(a) = u.selected.borrow_mut().as_mut()
-                        && ids.contains(&a.id)
-                    {
-                        a.read = true;
-                        u.update_buttons(a);
-                    }
-                    *u.undo.borrow_mut() = ids;
+                    u.bulk_read_done(&ids, true, sequence);
+                    u.undo.borrow_mut().push(ids);
                     u.reload();
                 }
                 Err(e) => u.error(e),
@@ -267,24 +327,25 @@ impl Ui {
     }
 
     pub(super) fn undo(self: &Rc<Self>) {
-        let ids = std::mem::take(&mut *self.undo.borrow_mut());
-        if ids.is_empty() {
+        let Some(batch) = self.undo.borrow_mut().take() else {
             return;
-        }
-        let selected = self.selected.borrow().as_ref().map(|a| a.id);
-        let restore = selected.is_some_and(|id| ids.contains(&id));
+        };
         self.state_writes.set(self.state_writes.get() + 1);
+        let sequence = self.changes.borrow_mut().start_bulk();
         let u = self.clone();
         glib::spawn_future_local(async move {
+            let ids = batch.articles.clone();
             match u.db.call(move |s| s.undo_read(&ids)).await {
                 Ok(()) => {
-                    if restore && let Some(a) = u.selected.borrow_mut().as_mut() {
-                        a.read = false;
-                        u.update_buttons(a);
-                    }
+                    // Whatever is open now, not what was open when undo was pressed.
+                    u.bulk_read_done(&batch.articles, false, sequence);
                     u.reload();
                 }
-                Err(e) => u.error(e),
+                Err(e) => {
+                    u.error(e);
+                    // Ctrl+Z can try again, unless a newer batch took its place.
+                    u.undo.borrow_mut().give_back(batch);
+                }
             }
         });
     }

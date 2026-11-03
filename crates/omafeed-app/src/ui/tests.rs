@@ -152,12 +152,56 @@ pub(crate) fn desktop_smoke() {
             .iter()
             .any(|r| matches!(r.scope, Scope::Feed(_)))
     );
+    // Changes show at once; wait until the database has them too.
+    let settled = || {
+        pump_until(|| {
+            let changes = u.changes.borrow();
+            changes.unfinished(id, changes::Field::Read).is_none()
+                && changes.unfinished(id, changes::Field::Starred).is_none()
+        })
+    };
     u.select(id);
     pump_until(|| u.selected.borrow().as_ref().is_some_and(|a| a.read));
+    settled();
     u.toggle_star();
-    pump_until(|| u.selected.borrow().as_ref().is_some_and(|a| a.starred));
+    assert!(u.selected.borrow().as_ref().is_some_and(|a| a.starred));
+    settled();
     u.toggle_read();
-    pump_until(|| u.selected.borrow().as_ref().is_some_and(|a| !a.read));
+    assert!(u.selected.borrow().as_ref().is_some_and(|a| !a.read));
+    settled();
+    // Each quick toggle flips what the one before it showed, before any write has finished,
+    // and the last one is what gets saved.
+    u.toggle_star();
+    u.toggle_star();
+    assert!(u.selected.borrow().as_ref().is_some_and(|a| a.starred));
+    settled();
+    assert!(u.selected.borrow().as_ref().is_some_and(|a| a.starred));
+    assert!(
+        runtime
+            .block_on(db.call(move |s| s.article(id)))
+            .unwrap()
+            .starred
+    );
+    // Marking the view read and undoing it updates the open article both times.
+    u.mark_all();
+    pump_until(|| u.selected.borrow().as_ref().is_some_and(|a| a.read));
+    assert!(
+        runtime
+            .block_on(db.call(move |s| s.article(id)))
+            .unwrap()
+            .read
+    );
+    u.undo();
+    pump_until(|| {
+        u.selected.borrow().as_ref().is_some_and(|a| !a.read)
+            && u.articles.borrow().iter().any(|a| a.id == id && !a.read)
+    });
+    assert!(
+        !runtime
+            .block_on(db.call(move |s| s.article(id)))
+            .unwrap()
+            .read
+    );
     u.render();
     pump_until(|| !u.reader.web.is_loading());
     let done = Rc::new(RefCell::new(None));
@@ -211,7 +255,8 @@ pub(crate) fn desktop_smoke() {
             .any(|w| w.tooltip_text().as_deref() == Some("Star (S)"))
     );
     u.toggle_star();
-    pump_until(|| u.selected.borrow().as_ref().is_some_and(|a| a.starred));
+    assert!(u.selected.borrow().as_ref().is_some_and(|a| a.starred));
+    settled();
     assert!(
         runtime
             .block_on(outsider.call(move |s| s.article(id)))
