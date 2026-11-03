@@ -4,7 +4,7 @@ use chrono::{DateTime, Datelike, Local};
 use gtk::{glib, prelude::*};
 use omafeed_core::{
     content::one_line,
-    model::{Article, ArticleId, Scope, StatePatch},
+    model::{Article, ArticleId, Query, Scope, StatePatch},
     reading,
 };
 use std::rc::Rc;
@@ -240,11 +240,15 @@ impl Ui {
         }
     }
 
+    /// Mark the view shown read, search included.
     pub(super) fn mark_all(self: &Rc<Self>) {
-        let (bulk, q) = {
-            let mut view = self.view.borrow_mut();
-            (view.start_bulk(), view.query.clone())
-        };
+        let q = self.view.borrow().query.clone();
+        self.mark_read(q);
+    }
+
+    /// Mark every unread article in `q` read, shown at once and undone with Ctrl+Z.
+    pub(super) fn mark_read(self: &Rc<Self>, q: Query) {
+        let bulk = self.view.borrow_mut().start_bulk();
         let u = self.clone();
         glib::spawn_future_local(async move {
             match reading::mark_view_read(&u.db, q).await {

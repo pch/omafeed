@@ -7,7 +7,7 @@ use gtk::{gio, glib};
 use omafeed_core::{Settings, config::Theme};
 use std::rc::Rc;
 
-pub use library::library;
+pub use library::{edit, library, remove};
 
 /// A Cancel/Save dialog around a box of form fields, reusable across attempts.
 struct Form {
@@ -228,6 +228,7 @@ Space / Shift+Space   Scroll article
 Ctrl+R   Refresh
 Ctrl+F   Search
 Ctrl+L   Manage library
+Menu / Shift+F10   Menu of the sidebar item
 Ctrl+Shift+A   Mark current view read
 Ctrl+Z   Undo bulk mark read
 Ctrl+Q   Quit

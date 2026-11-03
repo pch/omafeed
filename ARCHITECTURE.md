@@ -34,7 +34,7 @@ Run without a command, `omafeed` opens the reader window; with a command (`omafe
 | --- | --- |
 | `lib` | Argument parsing (`main`), which dispatches to `cli::run` or builds the GTK application. `main.rs` only calls it. With the `test-support` feature, `test_support` exposes the desktop smoke test to `tests/desktop_smoke.rs`. |
 | `cli` | Every command: argument definitions and text output. `cli/json.rs` has one `Serialize` type per `--json` shape, printed through `serde_json::Value` so the keys stay sorted, byte for byte as before. |
-| `ui` | The main window. `Ui` coordinates: it owns the panes (`Header`, `SidebarPane`, `ListPane`, `ReaderPane`), each holding its own widgets, and a `View` (`view.rs`) with what is shown: view and page, the articles on it, the open article, collapsed folders, and the read/star changes (`changes.rs`) and undo in flight. `View` has no GTK and decides what each late database result may change; it is unit-tested on its own. `articles`, `sidebar`, `reader`, `keys` and `theme` add methods to `Ui`; `widgets` has small constructors; `tests` holds the desktop smoke test (only with `test-support`). |
+| `ui` | The main window. `Ui` coordinates: it owns the panes (`Header`, `SidebarPane`, `ListPane`, `ReaderPane`), each holding its own widgets, and a `View` (`view.rs`) with what is shown: view and page, the articles on it, the open article, collapsed folders, and the read/star changes (`changes.rs`) and undo in flight. `View` has no GTK and decides what each late database result may change, and what a removed feed or folder takes with it; it is unit-tested on its own. `articles`, `sidebar`, `reader`, `keys` and `theme` add methods to `Ui`. `sidebar` also builds the sidebar's context menu: which commands an entry has and which apply now is a pure function, unit-tested; the menu is one `gtk::PopoverMenu` filled from a `gio::Menu` with a fresh `sidebar.` action group each time it opens, closed with its actions dropped whenever the library is read again (an entry's ID may since belong to another feed or folder), and its edit and remove go through the library manager's forms and confirmations (`dialogs::edit`, `dialogs::remove`); `widgets` has small constructors; `tests` holds the desktop smoke test (only with `test-support`). |
 | `dialogs` | Library manager, subscription and folder forms, OPML import/export, settings, shortcuts and about. |
 
 ## Data flow
@@ -139,7 +139,7 @@ These are properties of the current design, not promises. Change them deliberate
   was edited, removed or replaced.
 - Unit tests next to the code, notably `ingest/schedule.rs` (when feeds are due), `http.rs`
   and `util.rs` (the network policy), and the app's `ui/view.rs` and `ui/changes.rs` (what late
-  database results may change on screen).
+  database results may change on screen) and `ui/sidebar.rs` (the context menu's commands).
 - `crates/omafeed-core/tests/files.rs`: frozen database fixtures from every schema version and
   settings files, which must keep opening (`tests/fixtures/`).
 - `crates/omafeed-core/tests/fuzzy_speed.rs`: ignored search benchmarks.

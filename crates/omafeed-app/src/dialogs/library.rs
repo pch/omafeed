@@ -211,7 +211,10 @@ async fn run(u: Rc<Ui>) {
     m.window.present();
     loop {
         match u.db.call(|s| s.library()).await {
-            Ok(lib) => *u.library.borrow_mut() = lib,
+            Ok(lib) => {
+                u.close_sidebar_menu();
+                *u.library.borrow_mut() = lib;
+            }
             Err(e) => {
                 u.error(e);
                 break;
@@ -229,7 +232,11 @@ async fn run(u: Rc<Ui>) {
             _ => None,
         };
         match (action, selected) {
-            (Action::Remove, Some(scope)) => remove(&u, &m.window, scope).await,
+            (Action::Remove, Some(scope)) => {
+                if remove_confirmed(&u, &m.window, scope).await {
+                    u.reset_selection();
+                }
+            }
             (Action::Remove | Action::Edit, None) => u.toast("Select a feed or folder first"),
             (Action::Edit, Some(Scope::Folder(id))) => {
                 edit_folder(&u, &m.window, Some(id), None).await;
@@ -244,7 +251,31 @@ async fn run(u: Rc<Ui>) {
     u.reload();
 }
 
-async fn remove(u: &Rc<Ui>, window: &gtk::Window, scope: Scope) {
+/// Edit a feed or folder from the main window, as "Edit / Move" does in the manager.
+pub fn edit(u: Rc<Ui>, scope: Scope) {
+    glib::spawn_future_local(async move {
+        let window = u.window.clone().upcast::<gtk::Window>();
+        match scope {
+            Scope::Feed(id) => edit_feed(&u, &window, Some(id), None).await,
+            Scope::Folder(id) => edit_folder(&u, &window, Some(id), None).await,
+            _ => {}
+        }
+    });
+}
+
+/// Remove a feed or folder from the main window after the manager's confirmation, keeping
+/// the view shown unless it was the one removed.
+pub fn remove(u: Rc<Ui>, scope: Scope) {
+    glib::spawn_future_local(async move {
+        let window = u.window.clone().upcast::<gtk::Window>();
+        if remove_confirmed(&u, &window, scope.clone()).await {
+            u.removed(&scope);
+        }
+    });
+}
+
+/// Ask, then remove a feed or folder. Returns whether it is gone.
+async fn remove_confirmed(u: &Rc<Ui>, window: &gtk::Window, scope: Scope) -> bool {
     let (heading, body) = match scope {
         Scope::Folder(_) => (
             "Remove folder?",
@@ -256,7 +287,7 @@ async fn remove(u: &Rc<Ui>, window: &gtk::Window, scope: Scope) {
         ),
     };
     if !confirm(window, heading, body).await {
-        return;
+        return false;
     }
     let result = match scope {
         Scope::Folder(id) => u.db.call(move |s| s.delete_folder(id)).await,
@@ -271,8 +302,11 @@ async fn remove(u: &Rc<Ui>, window: &gtk::Window, scope: Scope) {
         _ => Ok(()),
     };
     match result {
-        Ok(()) => u.reset_selection(),
-        Err(e) => u.error(e),
+        Ok(()) => true,
+        Err(e) => {
+            u.error(e);
+            false
+        }
     }
 }
 
