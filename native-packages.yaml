@@ -1,0 +1,64 @@
+schema: 1
+tool:
+  version: '0.12.0'
+  nfpm: '2.47.0'
+nfpm:
+  name: omafeed
+  maintainer: pch <https://github.com/pch>
+  description: A native Rust RSS reader for Linux and Omarchy
+  homepage: https://github.com/pch/omafeed
+  license: MIT
+  section: web
+  contents:
+    - src: '@PAYLOAD@/usr/bin/omafeed'
+      dst: /usr/bin/omafeed
+      file_info:
+        mode: 0755
+    - src: '@PAYLOAD@/usr/share/'
+      dst: /usr/share/
+      type: tree
+  # WebKitGTK plays audio and video in articles through GStreamer.
+  overrides:
+    deb:
+      recommends:
+        - gstreamer1.0-plugins-good
+    rpm:
+      recommends:
+        - gstreamer1-plugins-good
+release:
+  repository: pch/omafeed
+  checksums: SHA256SUMS
+version_file: Cargo.toml
+version_section: workspace.package
+# The libraries the binary links (readelf -d of the Debian 13 build, which
+# links without --as-needed, hence graphene), mapped to the packages of
+# Debian 13, Ubuntu 26.04 and Fedora 43. native-packages turns them into the
+# DEB and RPM dependencies and adds the glibc floor itself. The app needs
+# libadwaita 1.6, which rules out Ubuntu 24.04 (1.5).
+libraries:
+  libgtk-4.so.1: {deb: libgtk-4-1, rpm: gtk4}
+  libadwaita-1.so.0: {deb: 'libadwaita-1-0 (>= 1.6)', rpm: 'libadwaita >= 1.6'}
+  libwebkitgtk-6.0.so.4: {deb: libwebkitgtk-6.0-4, rpm: webkitgtk6.0}
+  libjavascriptcoregtk-6.0.so.1: {deb: libjavascriptcoregtk-6.0-1, rpm: javascriptcoregtk6.0}
+  libgraphene-1.0.so.0: {deb: libgraphene-1.0-0, rpm: graphene}
+  libglib-2.0.so.0: {deb: libglib2.0-0t64, rpm: glib2}
+  libgio-2.0.so.0: {deb: libglib2.0-0t64, rpm: glib2}
+  libgobject-2.0.so.0: {deb: libglib2.0-0t64, rpm: glib2}
+# packaging/linux/build-archive.sh builds each archive on Debian 13.
+targets:
+  linux-amd64:
+    platform: linux
+    arch: amd64
+    libc: glibc
+    formats: [deb, rpm]
+    input:
+      local: dist/omafeed-@VERSION@-x86_64-linux.tar.gz
+      release_asset: omafeed-@VERSION@-x86_64-linux.tar.gz
+  linux-arm64:
+    platform: linux
+    arch: arm64
+    libc: glibc
+    formats: [deb, rpm]
+    input:
+      local: dist/omafeed-@VERSION@-aarch64-linux.tar.gz
+      release_asset: omafeed-@VERSION@-aarch64-linux.tar.gz
