@@ -78,6 +78,8 @@ impl Panel {
         let mut filters = self.u.settings.borrow().filters.clone();
         filters.retain(|f| f != pattern);
         self.apply(filters);
+        // Its button is gone with its row; keep the keyboard in the dialog.
+        self.entry.grab_focus();
     }
 }
 
@@ -137,7 +139,7 @@ pub fn filters(u: Rc<Ui>) {
             panel,
             move |_| panel.add()
         ));
-        entry.grab_focus();
+        form.focus(&entry);
         form.run().await;
         drop(panel);
     });

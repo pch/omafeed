@@ -142,6 +142,8 @@ struct ListPane {
     list: gtk::ListBox,
     /// The context menu of articles, filled in each time it opens.
     menu: gtk::PopoverMenu,
+    /// The article the menu was last opened on.
+    menu_article: Cell<Option<omafeed_core::model::ArticleId>>,
     /// The page buttons, shown only when there is more than one page.
     pages: gtk::Box,
     previous: gtk::Button,
@@ -193,6 +195,7 @@ impl ListPane {
             mark,
             list,
             menu,
+            menu_article: Cell::default(),
             pages,
             previous,
             next,

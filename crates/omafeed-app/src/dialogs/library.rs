@@ -162,7 +162,7 @@ async fn edit_folder(
     };
     let name_entry = form.entry("Name", &name);
     let picker = FolderPicker::new(&form, &u.library.borrow(), parent, id);
-    name_entry.grab_focus();
+    form.focus(&name_entry);
     while form.run().await {
         let name = name_entry.text().to_string();
         let parent = picker.selected();
@@ -220,9 +220,9 @@ async fn edit_feed(
     };
     let picker = FolderPicker::new(&form, &u.library.borrow(), parent, None);
     if id.is_none() {
-        url_entry.grab_focus();
+        form.focus(&url_entry);
     } else {
-        name_entry.grab_focus();
+        form.focus(&name_entry);
     }
     while form.run().await {
         let mut name = name_entry.text().to_string();

@@ -6,7 +6,10 @@ use crate::ui::{Ui, widgets::label};
 use adw::prelude::*;
 use gtk::{gio, glib};
 use omafeed_core::{Settings, config::Theme};
-use std::{cell::Cell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 pub use filters::filters;
 pub use library::{add_feed, edit, new_folder, remove};
@@ -25,6 +28,8 @@ struct Form {
     responses: async_channel::Receiver<bool>,
     presented: Cell<bool>,
     closed: Rc<Cell<bool>>,
+    /// The widget to focus once the dialog is shown.
+    focus: RefCell<Option<gtk::Widget>>,
 }
 
 impl Form {
@@ -92,6 +97,7 @@ impl Form {
             responses,
             presented: Cell::new(false),
             closed,
+            focus: RefCell::default(),
         }
     }
 
@@ -171,6 +177,11 @@ impl Form {
         self.body.append(&row);
     }
 
+    /// Focus `widget` when the form is shown.
+    fn focus(&self, widget: &impl IsA<gtk::Widget>) {
+        self.focus.replace(Some(widget.clone().upcast()));
+    }
+
     /// Show an error below the fields, replacing any previous one.
     fn show_error(&self, message: &str) {
         self.error.set_text(message);
@@ -186,6 +197,9 @@ impl Form {
         self.save.set_sensitive(true);
         if !self.presented.replace(true) {
             self.dialog.present(Some(&self.parent));
+            if let Some(widget) = self.focus.take() {
+                self.dialog.set_focus(Some(&widget));
+            }
         }
         self.responses.recv().await.unwrap_or(false) && !self.closed.get()
     }

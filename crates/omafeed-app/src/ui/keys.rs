@@ -19,7 +19,10 @@ impl Ui {
         let action = gio::SimpleAction::new(name, None);
         let weak = Rc::downgrade(self);
         action.connect_activate(move |_, _| {
-            if let Some(u) = weak.upgrade() {
+            // A dialog's own keys come first; the window's wait until it closes.
+            if let Some(u) = weak.upgrade()
+                && u.window.visible_dialog().is_none()
+            {
                 callback(u);
             }
         });

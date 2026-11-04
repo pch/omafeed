@@ -97,6 +97,10 @@ dialog.form-dialog sheet { background-color: mix(@window_bg_color, @window_fg_co
   box-shadow: 0 0 0 3px alpha(@accent_color, .16);
 }
 .form dropdown > button:hover { background: alpha(@window_fg_color, .09); }
+.form dropdown > button:focus-visible {
+  border-color: @accent_color;
+  box-shadow: 0 0 0 3px alpha(@accent_color, .16);
+}
 .form spinbutton button { border: none; background: none; min-width: 28px; }
 .form entry placeholder, .form entry text placeholder { opacity: .45; }
 .form-error { font-size: 13px; color: @error_color; margin-top: 14px; }

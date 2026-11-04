@@ -234,6 +234,7 @@ impl Ui {
             })
             .collect();
         drop(view);
+        self.list.menu_article.set(Some(id));
         context_menu::show(
             &self.list.menu,
             "article",
@@ -308,8 +309,16 @@ impl Ui {
             .borrow_mut()
             .receive_page(request, articles, remembered);
         self.rebuilding.set(true);
-        // The menu's article may no longer be listed.
-        context_menu::close(&self.list.menu, "article");
+        // The menu stays open over a reload unless its article is no longer listed.
+        let gone = self
+            .list
+            .menu_article
+            .get()
+            .is_some_and(|id| !self.view.borrow().articles().iter().any(|a| a.id == id));
+        if gone {
+            context_menu::close(&self.list.menu, "article");
+            self.list.menu_article.set(None);
+        }
         let list = &self.list.list;
         list.remove_all();
         self.list.next.set_sensitive(shown.has_next);
@@ -457,8 +466,24 @@ impl Ui {
         let bulk = self.view.borrow_mut().start_bulk();
         let u = self.clone();
         glib::spawn_future_local(async move {
-            match reading::change(&u.db, ids, StatePatch::read(true)).await {
-                Ok(changed) => u.marked_read(bulk, changed.into_iter().map(|(id, _)| id).collect()),
+            // Only those still unread, so Ctrl+Z never unmarks one read before; any deleted
+            // meanwhile are skipped. One transaction, so nothing changes in between.
+            let marked =
+                u.db.call(move |s| {
+                    s.immediate(|s| {
+                        let mut unread = Vec::new();
+                        for id in ids {
+                            if s.article_if_exists(id)?.is_some_and(|a| !a.read) {
+                                unread.push(id);
+                            }
+                        }
+                        s.set_article_states(&unread, StatePatch::read(true))?;
+                        Ok(unread)
+                    })
+                })
+                .await;
+            match marked {
+                Ok(ids) => u.marked_read(bulk, ids),
                 Err(e) => u.error(e),
             }
         });
