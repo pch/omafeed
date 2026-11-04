@@ -18,21 +18,37 @@ A native RSS reader for Linux and Omarchy, written in Rust. A three-pane library
 - Omarchy palette following across the top bar, menus, sidebar, and reader; light/dark modes, persisted window/pane sizes, keyboard navigation, and favicon caching.
 - Conditional HTTP requests, bounded concurrency, timeouts, retry backoff, and visible per-feed errors.
 
-## Install on Arch / Omarchy
+## Install
 
-Pick one of the options below. All of them keep your articles and settings when you update or uninstall.
+Download the package for your system from [GitHub Releases](https://github.com/pch/omafeed/releases). Every option keeps your articles and settings when you update or uninstall. Releases before 0.2.5 have only the archives and the `PKGBUILD`; check that release's notes for what they need.
 
 ### Let your agent install it
 
-Point your coding agent to [GitHub Releases](https://github.com/pch/omafeed/releases) and tell it to install the latest version for Arch / Omarchy, or give it this prompt:
+Point your coding agent to [GitHub Releases](https://github.com/pch/omafeed/releases) and tell it to install the latest version for your Linux distribution, or give it this prompt:
 
 ```text
-Install the latest release of Omafeed for my Arch / Omarchy system from https://github.com/pch/omafeed/releases. Check my CPU architecture, choose a compatible installation method from the README, verify downloads against the release's checksums, install it with its dependencies, and tell me how to launch it.
+Install the latest release of Omafeed for my Linux distribution from https://github.com/pch/omafeed/releases. Check my distribution and CPU architecture, choose a compatible installation method from the README, verify downloads against the release's SHA256SUMS, install it with its dependencies, and tell me how to launch it.
 ```
 
-### Option 1: Arch package (recommended)
+### Omarchy
 
-Builds from the tagged source and installs a regular pacman package, so dependencies are handled for you:
+Install `omafeed` from **Omarchy menu → Install → Package**, or from a terminal:
+
+```sh
+omarchy pkg add omafeed
+```
+
+It updates with the rest of the system.
+
+### Arch Linux
+
+Install the prebuilt package for x86_64 from the [latest release](https://github.com/pch/omafeed/releases/latest):
+
+```sh
+sudo pacman -U ./omafeed-VERSION-1-x86_64.pkg.tar.zst
+```
+
+Or build the tagged source as a regular pacman package (this works on ARM too):
 
 ```sh
 mkdir omafeed && cd omafeed
@@ -40,9 +56,9 @@ curl -LO https://github.com/pch/omafeed/releases/latest/download/PKGBUILD
 makepkg -si
 ```
 
-To update, repeat these steps when a new release is out. To uninstall: `sudo pacman -R omafeed`.
+To update, repeat either when a new release is out. To uninstall: `sudo pacman -R omafeed`.
 
-Before the first tagged release (or to follow the latest development code), build the development package instead:
+To follow the latest development code, build the development package instead:
 
 ```sh
 git clone https://github.com/pch/omafeed.git
@@ -52,9 +68,20 @@ makepkg -si
 
 Rerun `makepkg -si` in that folder to update. To uninstall: `sudo pacman -R omafeed-git`.
 
-### Option 2: Build into your home folder
+### Debian, Ubuntu and Fedora (x86_64 and ARM)
 
-Installs to `~/.local` without pacman or root:
+Each release has `.deb` and `.rpm` packages for Debian 13 or newer, Ubuntu 26.04 or newer, and Fedora 43 or newer. Ubuntu 24.04 is too old: Omafeed needs `libadwaita` 1.6. Download the one for your system and architecture from the [latest release](https://github.com/pch/omafeed/releases/latest), then:
+
+```sh
+sudo apt install ./omafeed_VERSION_amd64.deb      # Debian, Ubuntu (arm64.deb on ARM)
+sudo dnf install ./omafeed-VERSION-1.x86_64.rpm   # Fedora (aarch64.rpm on ARM)
+```
+
+They pull in GTK, libadwaita and WebKitGTK from your distribution. There is no package repository yet: to update, install the next release's package the same way. To uninstall: `sudo apt remove omafeed` or `sudo dnf remove omafeed`.
+
+### Build into your home folder
+
+Installs to `~/.local` without a package manager or root (on Omarchy or Arch; elsewhere install Rust, `pkg-config` and the GTK 4, libadwaita and WebKitGTK 6.0 development packages):
 
 ```sh
 omarchy pkg add rust gtk4 libadwaita webkitgtk-6.0 pkgconf
@@ -68,9 +95,9 @@ Make sure `~/.local/bin` is on your `PATH`. To update: `git pull && make && make
 
 For a system-wide install, build as your user and install with `sudo make install PREFIX=/usr` (uninstall with `sudo make uninstall PREFIX=/usr`).
 
-### Option 3: Prebuilt binary
+### Prebuilt archive
 
-Each [release](https://github.com/pch/omafeed/releases) includes `omafeed-VERSION-x86_64-linux.tar.gz`, built on Arch Linux, and `omafeed-VERSION-aarch64-linux.tar.gz` for ARM (such as Arch Linux ARM), built on Debian 13. Both need `gtk4`, `libadwaita` 1.6 or newer, and `webkitgtk-6.0`, and are intended for up-to-date Arch-based systems. The aarch64 build runs where these libraries and glibc are at least as new as Debian 13's (glibc 2.41). Extract the one for your architecture (`uname -m`) into `~/.local`:
+Each release includes `omafeed-VERSION-x86_64-linux.tar.gz` and `omafeed-VERSION-aarch64-linux.tar.gz`. From 0.2.5 both are built on Debian 13 and need glibc 2.34 or newer, `gtk4`, `libadwaita` 1.6 or newer, and `webkitgtk-6.0`; earlier releases' notes say what theirs need. Extract the one for your architecture (`uname -m`) into `~/.local`:
 
 ```sh
 tar -xzf omafeed-*-$(uname -m)-linux.tar.gz -C ~/.local --strip-components=1
@@ -256,7 +283,7 @@ Command output is checked byte for byte against transcripts in `crates/omafeed-a
 
 ## Releases
 
-CI runs formatting, Clippy, tests, the documentation build, the headless desktop smoke test, a build with the minimum supported Rust version, an Arch package build, and `cargo deny`. To release, bump `version` in `Cargo.toml` and the `<releases>` entry in `data/io.github.pch.Omafeed.metainfo.xml`, move the notes under "Unreleased" in [CHANGELOG.md](CHANGELOG.md) to the new version, commit, then push a matching tag (`git tag v0.2.0 && git push origin v0.2.0`). The release workflow reruns CI, builds the x86_64 tarball on Arch Linux and the aarch64 tarball on Debian 13, fills in a checksummed `PKGBUILD`, and publishes them with `SHA256SUMS` as a GitHub release.
+CI runs formatting, Clippy, tests, the documentation build, the headless desktop smoke test, a build with the minimum supported Rust version, an Arch package build, and `cargo deny`; changes to packaging also build the DEB and RPM packages and install them on each supported system. A `vX.Y.Z` tag publishes a release with its notes from [packaging/release-notes/](packaging/release-notes/). [packaging/RELEASING.md](packaging/RELEASING.md) describes the downloads, how to release, and how to write the notes.
 
 ## Inspiration
 
