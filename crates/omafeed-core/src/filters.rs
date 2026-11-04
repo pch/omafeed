@@ -63,7 +63,7 @@ impl ContentFilters {
             .filter_map(|text| match parse(text) {
                 Ok(pattern) => Some(pattern),
                 Err(e) => {
-                    eprintln!("Omafeed: ignoring content filter {text:?}: {e:#}");
+                    eprintln!("omafeed: ignoring content filter {text:?}: {e:#}");
                     None
                 }
             })

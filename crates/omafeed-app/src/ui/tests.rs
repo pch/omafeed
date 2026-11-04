@@ -47,16 +47,18 @@ fn form_button(text: &str) -> gtk::Button {
         .find(|b| b.label().as_deref() == Some(text))
         .unwrap_or_else(|| panic!("Missing form button {text}"))
 }
-/// The text field of the open form whose title starts with `title`.
-fn entry_row(title: &str) -> Option<adw::EntryRow> {
+/// The text field of the open form whose label starts with `title`.
+fn entry_row(title: &str) -> Option<gtk::Entry> {
     all_widgets()
         .into_iter()
-        .filter_map(|w| w.downcast::<adw::EntryRow>().ok())
-        .find(|r| r.title().starts_with(title))
+        .filter_map(|w| w.downcast::<gtk::Label>().ok())
+        .find(|l| l.has_css_class("form-label") && l.text().starts_with(title))
+        .and_then(|l| l.next_sibling())
+        .and_then(|w| w.downcast::<gtk::Entry>().ok())
 }
-/// Whether a feed or folder form is open.
+/// Whether a form is open.
 fn open_form() -> bool {
-    all_widgets().iter().any(|w| w.is::<adw::EntryRow>())
+    all_widgets().iter().any(|w| w.has_css_class("form"))
 }
 /// The current time, as a refresh would record it.
 fn now() -> i64 {
@@ -148,16 +150,15 @@ pub(crate) fn desktop_smoke() {
     assert!(!u.list.next.is_sensitive());
     // Content filters apply at once and refuse a pattern that cannot work.
     crate::dialogs::filters(u.clone());
-    let window = Rc::new(RefCell::new(None::<gtk::Window>));
+    let dialog = Rc::new(RefCell::new(None::<adw::Dialog>));
     pump_until(|| {
-        *window.borrow_mut() = gtk::Window::list_toplevels()
+        *dialog.borrow_mut() = all_widgets()
             .into_iter()
-            .filter_map(|w| w.downcast::<gtk::Window>().ok())
-            .find(|w| w.title().as_deref() == Some("Content filters"));
-        window.borrow().is_some()
+            .filter_map(|w| w.downcast::<adw::Dialog>().ok())
+            .find(|d| d.title() == "Content filters");
+        dialog.borrow().is_some()
     });
-    let filters = window.borrow().clone().unwrap();
-    let root = filters.clone().upcast::<gtk::Widget>();
+    let root = dialog.borrow().clone().unwrap().upcast::<gtk::Widget>();
     let entry = widgets(&root)
         .into_iter()
         .find_map(|w| w.downcast::<gtk::Entry>().ok())
@@ -179,8 +180,8 @@ pub(crate) fn desktop_smoke() {
         .emit_clicked();
     assert!(u.settings.borrow().filters.is_empty());
     pump_until(|| u.view.borrow().articles().iter().any(|a| a.id == id));
-    filters.close();
-    pump_until(|| !filters.is_visible());
+    button(&root, "Done").emit_clicked();
+    pump_until(|| !open_form());
     let expander = widgets(&u.side.list.clone().upcast())
         .into_iter()
         .filter_map(|w| w.downcast::<gtk::Button>().ok())
@@ -418,7 +419,8 @@ pub(crate) fn desktop_smoke() {
     entry_row("Name").unwrap().set_text("Renamed through UI");
     let picker = all_widgets()
         .into_iter()
-        .find_map(|w| w.downcast::<adw::ComboRow>().ok())
+        .filter(|w| w.ancestor(adw::Dialog::static_type()).is_some())
+        .find_map(|w| w.downcast::<gtk::DropDown>().ok())
         .unwrap();
     picker.set_selected(2);
     form_button("Save").emit_clicked();
@@ -456,9 +458,9 @@ pub(crate) fn desktop_smoke() {
         }
     });
     WidgetExt::activate_action(&u.window, "win.add-feed", None).unwrap();
-    pump_until(|| entry_row("Website").is_some());
+    pump_until(|| entry_row("Address").is_some());
     assert!(entry_row("Name").unwrap().text().is_empty());
-    entry_row("Website").unwrap().set_text(&website);
+    entry_row("Address").unwrap().set_text(&website);
     form_button("Add").emit_clicked();
     pump_until(|| {
         runtime
@@ -473,8 +475,8 @@ pub(crate) fn desktop_smoke() {
     pump_until(|| !open_form());
     // Subscribing to it again closes the form without adding anything.
     WidgetExt::activate_action(&u.window, "win.add-feed", None).unwrap();
-    pump_until(|| entry_row("Website").is_some());
-    entry_row("Website").unwrap().set_text(&website);
+    pump_until(|| entry_row("Address").is_some());
+    entry_row("Address").unwrap().set_text(&website);
     form_button("Add").emit_clicked();
     pump_until(|| !open_form());
     assert_eq!(
@@ -493,8 +495,8 @@ pub(crate) fn desktop_smoke() {
         tokio::time::sleep(Duration::from_secs(60)).await;
     });
     WidgetExt::activate_action(&u.window, "win.add-feed", None).unwrap();
-    pump_until(|| entry_row("Website").is_some());
-    entry_row("Website").unwrap().set_text(&slow_url);
+    pump_until(|| entry_row("Address").is_some());
+    entry_row("Address").unwrap().set_text(&slow_url);
     form_button("Add").emit_clicked();
     pump_until(|| all_widgets().iter().any(|w| w.is::<gtk::Spinner>()));
     // Cancelling the search leaves the form open for another try.
@@ -639,6 +641,94 @@ pub(crate) fn desktop_smoke() {
         ]
     );
     assert_eq!(open_menu(Scope::Starred), ["Mark all as read"]);
+    // An article's own menu changes it without opening it, and can go to its feed.
+    let article_menu = |id: omafeed_core::model::ArticleId| -> Vec<String> {
+        let index = u
+            .view
+            .borrow()
+            .articles()
+            .iter()
+            .position(|a| a.id == id)
+            .unwrap();
+        let row = u.list.list.row_at_index(index as i32).unwrap();
+        u.open_article_menu(&row, None);
+        let model = u.list.menu.menu_model().unwrap();
+        let mut labels = Vec::new();
+        for i in 0..model.n_items() {
+            let section = model.item_link(i, gio::MENU_LINK_SECTION).unwrap();
+            for j in 0..section.n_items() {
+                labels.push(
+                    section
+                        .item_attribute_value(j, gio::MENU_ATTRIBUTE_LABEL, None)
+                        .and_then(|v| v.get::<String>())
+                        .unwrap(),
+                );
+            }
+        }
+        labels
+    };
+    pump_until(|| u.view.borrow().articles().iter().any(|a| a.id == id));
+    assert_eq!(
+        article_menu(id),
+        [
+            "Mark as read",
+            "Unstar",
+            "Mark above as read",
+            "Mark below as read",
+            "Open in browser",
+            "Copy link",
+            "Go to feed"
+        ]
+    );
+    u.list
+        .menu
+        .activate_action(
+            &format!("article.{}", articles::ArticleCommand::ToggleRead.name()),
+            None,
+        )
+        .unwrap();
+    pump_until(|| {
+        runtime
+            .block_on(db.call(move |s| s.article(id)))
+            .unwrap()
+            .read
+    });
+    assert!(u.view.borrow().open().is_none());
+    article_menu(id);
+    u.list
+        .menu
+        .activate_action(
+            &format!("article.{}", articles::ArticleCommand::ToggleRead.name()),
+            None,
+        )
+        .unwrap();
+    pump_until(|| {
+        !runtime
+            .block_on(db.call(move |s| s.article(id)))
+            .unwrap()
+            .read
+    });
+    article_menu(id);
+    u.list
+        .menu
+        .activate_action(
+            &format!("article.{}", articles::ArticleCommand::GoToFeed.name()),
+            None,
+        )
+        .unwrap();
+    pump_until(|| u.view.borrow().query.scope == Scope::Feed(fixture));
+    pump_until(|| u.list.heading.text() == u.library.borrow().feed(fixture).unwrap().title);
+    // Back to Starred, which the rest expects.
+    let starred = u
+        .sidebar_rows
+        .borrow()
+        .iter()
+        .position(|r| r.scope == Scope::Starred)
+        .unwrap();
+    u.side
+        .list
+        .select_row(u.side.list.row_at_index(starred as i32).as_ref());
+    pump_until(|| u.list.heading.text() == "Starred");
     // Reading the library again closes the menu and drops its actions: the entry it was
     // opened on may be gone, its ID taken by another.
     open_menu(Scope::Feed(fixture));

@@ -1,8 +1,8 @@
-# Omafeed
+# omafeed
 
 A native RSS reader for Linux and Omarchy, written in Rust. A three-pane library, article list, and reading view keeps your subscriptions and articles on your computer.
 
-![Omafeed on Omarchy, showing the feed library, article list, and reading pane](docs/images/omafeed-2026-11-03-1122.png)
+![omafeed on Omarchy, showing the feed library, article list, and reading pane](docs/images/omafeed-2026-11-03-1122.png)
 
 ## Features
 
@@ -13,7 +13,8 @@ A native RSS reader for Linux and Omarchy, written in Rust. A three-pane library
 - A command line to list, search, star, and subscribe without the window, with `--json` output for scripts and LLM agents.
 - All Unread, Today, Starred, All Articles, folder and feed views; full-text search and unread filtering.
 - Read/unread, stars, bulk mark read with undo, and offline article text.
-- A context menu on sidebar feeds, folders and views (right-click, Menu key or Shift+F10): open or copy a feed's home page, copy its feed URL, mark all as read, edit, and remove.
+- A context menu on sidebar feeds, folders and views (right-click, Menu key or Shift+F10): open or copy a feed's home page, copy its feed URL, refresh, mark all as read, add a feed or folder inside a folder, edit, and remove.
+- A context menu on articles: mark read or unread, star, mark the articles above or below as read, open in the browser, copy the link, and go to the article's feed.
 - Sanitized HTML articles with images, code blocks, adjustable typography, copy link, and open original.
 - Omarchy palette following across the top bar, menus, sidebar, and reader; light/dark modes, persisted window/pane sizes, keyboard navigation, and favicon caching.
 - Conditional HTTP requests, bounded concurrency, timeouts, retry backoff, and visible per-feed errors.
@@ -37,7 +38,7 @@ It updates with the rest of the system.
 Point your coding agent to [GitHub Releases](https://github.com/pch/omafeed/releases) and tell it to install the latest version for your Linux distribution, or give it this prompt:
 
 ```text
-Install the latest release of Omafeed for my Linux distribution from https://github.com/pch/omafeed/releases. Check my distribution and CPU architecture, choose a compatible installation method from the README, verify downloads against the release's SHA256SUMS, install it with its dependencies, and tell me how to launch it.
+Install the latest release of omafeed for my Linux distribution from https://github.com/pch/omafeed/releases. Check my distribution and CPU architecture, choose a compatible installation method from the README, verify downloads against the release's SHA256SUMS, install it with its dependencies, and tell me how to launch it.
 ```
 
 ### Arch Linux
@@ -70,7 +71,7 @@ Rerun `makepkg -si` in that folder to update. To uninstall: `sudo pacman -R omaf
 
 ### Debian, Ubuntu and Fedora (x86_64 and ARM)
 
-Each release has `.deb` and `.rpm` packages for Debian 13 or newer, Ubuntu 26.04 or newer, and Fedora 43 or newer. Ubuntu 24.04 is too old: Omafeed needs `libadwaita` 1.6. Download the one for your system and architecture from the [latest release](https://github.com/pch/omafeed/releases/latest), then:
+Each release has `.deb` and `.rpm` packages for Debian 13 or newer, Ubuntu 26.04 or newer, and Fedora 43 or newer. Ubuntu 24.04 is too old: omafeed needs `libadwaita` 1.6. Download the one for your system and architecture from the [latest release](https://github.com/pch/omafeed/releases/latest), then:
 
 ```sh
 sudo apt install ./omafeed_VERSION_amd64.deb      # Debian, Ubuntu (arm64.deb on ARM)
@@ -103,7 +104,7 @@ Each release includes `omafeed-VERSION-x86_64-linux.tar.gz` and `omafeed-VERSION
 tar -xzf omafeed-*-$(uname -m)-linux.tar.gz -C ~/.local --strip-components=1
 ```
 
-After installing, open **Omafeed** from your launcher or run `omafeed`.
+After installing, open **omafeed** from your launcher or run `omafeed`.
 
 ## Get started
 
@@ -117,7 +118,7 @@ omafeed
 
 OPML contains subscriptions, not historical articles or read/star state. The first refresh downloads the items currently published by each feed, initially unread. Use the checkmark above the article list to mark the current view read; Ctrl+Z undoes that action.
 
-Click **+** in the header to **Add feed** (Ctrl+N) or create a **New folder** (Ctrl+Shift+N); either goes into the folder you are viewing. Subscribe with a website or feed URL: Omafeed finds the site's RSS, Atom, or JSON feed, lets you choose when there are several, and uses the feed's title if you leave the name blank. Drag feeds and folders in the sidebar to move them: drop on a folder to put it inside, or on a smart view to move it to the top level. Right-click a feed or folder and choose **Edit…** to rename it, move it, or correct its URL without losing saved articles, or **Remove…** to remove it. **Refresh** in the same menu downloads just that feed, or every feed in the folder. Removing a feed deletes its articles after confirmation; removing a folder keeps them.
+Click **+** in the header to **Add feed** (Ctrl+N) or create a **New folder** (Ctrl+Shift+N); either goes into the folder you are viewing. Subscribe with a website or feed URL: omafeed finds the site's RSS, Atom, or JSON feed, lets you choose when there are several, and uses the feed's title if you leave the name blank. Drag feeds and folders in the sidebar to move them: drop on a folder to put it inside, or on a smart view to move it to the top level. Right-click a feed or folder and choose **Edit…** to rename it, move it, or correct its URL without losing saved articles, or **Remove…** to remove it. **Refresh** in the same menu downloads just that feed, or every feed in the folder. Removing a feed deletes its articles after confirmation; removing a folder keeps them.
 
 Search looks through the current view, including nested folders. It forgives typos (`agentc` finds `agentic`), treats regular plural and singular forms alike (`box` and `boxes`, `story` and `stories`), and matches the start of the last word you type, so results appear as you go. Words shorter than five letters are not typo-corrected; the last word can match prefixes from three letters onward. Numbers are matched exactly, and a word that appears in your articles is never swapped for a similar one. Summary-only feeds show the summary; open the original for the rest. Podcast episodes appear as download links.
 
@@ -241,7 +242,7 @@ Feed content is written by strangers. A tool that hands article text to a model 
 | Ctrl+F | Search |
 | Ctrl+N | Add feed |
 | Ctrl+Shift+N | New folder |
-| Menu or Shift+F10 | Context menu of the focused sidebar item |
+| Menu or Shift+F10 | Context menu of the focused sidebar item or article |
 | Ctrl+Shift+A | Mark current view read |
 | Ctrl+Z | Undo bulk mark read |
 | Ctrl+Q | Quit |
@@ -251,9 +252,9 @@ Feed content is written by strangers. A tool that hands article text to a model 
 
 Articles, subscriptions, read state, stars, and the search index live in `$XDG_DATA_HOME/omafeed/omafeed.db` (default `~/.local/share/omafeed`). Settings live in `$XDG_CONFIG_HOME/omafeed/settings.toml`, and website icons are cached under `$XDG_CACHE_HOME/omafeed`.
 
-No account, telemetry, cloud sync, or background daemon. Closing Omafeed stops scheduled refreshes. Requests go to your feed servers, their redirects, favicon URLs, and article image servers when enabled. Remote images can be disabled in Settings. Feeds on your own machine or network work when you enter their address, but a site on the internet cannot send Omafeed to `localhost` or a private, link-local, or loopback IP address, whether by a redirect, a feed link found during discovery, or an icon link. Host names are not resolved for this check, and images in articles are loaded by WebKit without it. Article JavaScript, frames, forms, and embedded media are disabled; links open in your browser.
+No account, telemetry, cloud sync, or background daemon. Closing omafeed stops scheduled refreshes. Requests go to your feed servers, their redirects, favicon URLs, and article image servers when enabled. Remote images can be disabled in Settings. Feeds on your own machine or network work when you enter their address, but a site on the internet cannot send omafeed to `localhost` or a private, link-local, or loopback IP address, whether by a redirect, a feed link found during discovery, or an icon link. Host names are not resolved for this check, and images in articles are loaded by WebKit without it. Article JavaScript, frames, forms, and embedded media are disabled; links open in your browser.
 
-Article text works offline; images need a connection unless they were already loaded. Articles are never deleted automatically. To back up everything, copy the data directory while Omafeed is closed; OPML export saves subscriptions only.
+Article text works offline; images need a connection unless they were already loaded. Articles are never deleted automatically. To back up everything, copy the data directory while omafeed is closed; OPML export saves subscriptions only.
 
 Theme following reads `$XDG_STATE_HOME/omarchy/current/theme/colors.toml`, with the older config location as fallback. Missing/invalid palettes use a built-in dark theme. The top bar, search field, menus, and reader update as soon as the theme files change. No Hyprland configuration is changed.
 
@@ -288,7 +289,7 @@ CI runs formatting, Clippy, tests, the documentation build, the headless desktop
 
 ## Inspiration
 
-[NetNewsWire](https://github.com/Ranchero-Software/NetNewsWire), [Omarchy Meeting Recorder](https://github.com/jankeesvw/omarchy-meeting-recorder), and [Spotifast](https://github.com/crmne/spotifast). Omafeed is an independent Rust implementation; no source or visual assets were copied from those projects.
+[NetNewsWire](https://github.com/Ranchero-Software/NetNewsWire), [Omarchy Meeting Recorder](https://github.com/jankeesvw/omarchy-meeting-recorder), and [Spotifast](https://github.com/crmne/spotifast). omafeed is an independent Rust implementation; no source or visual assets were copied from those projects.
 
 Content filters were contributed by [UnderStackDev](https://github.com/UnderStackDev), modelled on the filters in [Aura News](https://github.com/UnderStackDev/aura_news).
 

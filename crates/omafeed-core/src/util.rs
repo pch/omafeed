@@ -80,7 +80,7 @@ pub fn is_local_host(url: &Url) -> bool {
 }
 
 /// Whether a request to `target` may be made because of content or a redirect from `source`.
-/// Addresses the user typed may be local, but a site on the internet must not point Omafeed at
+/// Addresses the user typed may be local, but a site on the internet must not point omafeed at
 /// the local network: only content that itself came from a local host may.
 pub(crate) fn may_request(source: &Url, target: &Url) -> bool {
     !is_local_host(target) || is_local_host(source)

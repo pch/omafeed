@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<opml version="2.0"><head><title>Omafeed subscriptions</title></head><body>
+<opml version="2.0"><head><title>omafeed subscriptions</title></head><body>
 <outline text="Work">
 <outline text="Sub">
 <outline type="rss" text="Local Feed" xmlUrl="{server}/local.xml" htmlUrl="{server}/"/>

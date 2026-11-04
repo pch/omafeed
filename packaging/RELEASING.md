@@ -1,4 +1,4 @@
-# Releasing Omafeed
+# Releasing omafeed
 
 A stable `vMAJOR.MINOR.PATCH` tag on `main` that matches `Cargo.toml` builds and publishes a
 GitHub release (`.github/workflows/release.yml`). Nothing is published unless CI passes on the
@@ -49,7 +49,7 @@ its `depends` in step with `packaging/omafeed/PKGBUILD`.
 2. Rename `packaging/release-notes/unreleased.md` to `vX.Y.Z.md` and finish it (see below).
    Start a new, empty `unreleased.md`.
 3. Commit as `Release X.Y.Z`, push `main`, check the commit is on `origin/main`, then push an
-   annotated tag: `git tag -a vX.Y.Z -m "Omafeed X.Y.Z" && git push origin vX.Y.Z`. Never put
+   annotated tag: `git tag -a vX.Y.Z -m "omafeed X.Y.Z" && git push origin vX.Y.Z`. Never put
    `[skip ci]` in a release commit: GitHub applies it to the tag push too.
 4. Wait for the Release workflow. Its last job downloads every published asset and checks it
    against `SHA256SUMS`. Read the published release page.
@@ -78,7 +78,7 @@ release commit turns that draft into the release's notes.
 
 1. Read the changes from the previous tag to the release commit, including diffs and pull
    requests, so reverted or partial work is not announced.
-2. Open with a **TL;DR:** of the main changes and what they mean for someone using Omafeed,
+2. Open with a **TL;DR:** of the main changes and what they mean for someone using omafeed,
    then a **Download:** line linking that release's assets directly.
 3. Group the rest under **New**, **Improved**, **Fixed**, **Security**, **Changed** or
    **Removed**, only the sections that apply. Lead each item with a bold result, then a short

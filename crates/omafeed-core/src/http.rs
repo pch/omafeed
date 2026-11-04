@@ -1,7 +1,7 @@
 //! HTTP client configuration and size-limited body reads.
 //!
 //! Addresses the user enters may be on the local network, so local feeds keep working. A site
-//! on the internet must not lead Omafeed to the local network: redirects are checked here, and
+//! on the internet must not lead omafeed to the local network: redirects are checked here, and
 //! links found in fetched content (discovered feeds, icons) by their callers, with
 //! [`crate::util::may_request`]. Only `localhost` and IP literals count as local; names are not
 //! resolved first, so a public name that resolves to a local address is not caught.
@@ -57,7 +57,7 @@ pub fn client() -> Result<Client> {
 pub(crate) fn builder() -> reqwest::ClientBuilder {
     Client::builder()
         .user_agent(concat!(
-            "Omafeed/",
+            "omafeed/",
             env!("CARGO_PKG_VERSION"),
             " (+https://github.com/pch/omafeed)"
         ))

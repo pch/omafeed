@@ -66,7 +66,7 @@ pub fn parse(text: &str) -> Result<Document> {
 pub fn export(lib: &Library) -> String {
     let mut out = String::from(concat!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
-        "<opml version=\"2.0\"><head><title>Omafeed subscriptions</title></head><body>\n",
+        "<opml version=\"2.0\"><head><title>omafeed subscriptions</title></head><body>\n",
     ));
     for item in lib.tree() {
         match item {

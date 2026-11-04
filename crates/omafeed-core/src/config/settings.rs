@@ -138,7 +138,7 @@ impl Settings {
             Ok(None) => Self::default(),
             Err(e) => {
                 eprintln!(
-                    "Omafeed: ignoring invalid settings in {}: {e:#}",
+                    "omafeed: ignoring invalid settings in {}: {e:#}",
                     path.display()
                 );
                 Self::default()

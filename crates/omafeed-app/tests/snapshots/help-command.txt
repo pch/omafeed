@@ -2,7 +2,7 @@ $ omafeed help
 exit: 0
 --- stdout
 omafeed {version}
-Omafeed — a local RSS reader. Run without a command to open the reader.
+omafeed — a local RSS reader. Run without a command to open the reader.
 
 Usage: omafeed [COMMAND]
 

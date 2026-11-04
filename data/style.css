@@ -40,7 +40,6 @@ popover > contents, messagedialog .message-area, dialog {
   background-color: @window_bg_color;
   color: @window_fg_color;
 }
-.section-title { font-size: 10px; font-weight: 700; letter-spacing: 2px; opacity: .55; }
 .sidebar { background: alpha(currentColor, .035); }
 .navigation-sidebar { font-size: 13px; }
 .navigation-sidebar row { min-height: 28px; padding: 4px 8px; margin: 1px 6px; border-radius: 6px; }
@@ -57,9 +56,13 @@ popover > contents, messagedialog .message-area, dialog {
 .articles row.read .article-title { font-weight: 450; opacity: .72; }
 .articles row.read .preview { opacity: .48; }
 
+.brand { font-size: 13px; font-weight: 600; opacity: .6; }
 .list-heading { font-size: 18px; font-weight: 650; }
 .folder-name { font-weight: 600; }
-.folder-expander { min-width: 16px; min-height: 16px; padding: 0; margin: 0; border-radius: 4px; }
+.folder-expander { min-width: 18px; min-height: 18px; padding: 0; margin: 0 -2px 0 0; border-radius: 4px; opacity: .5; }
+.folder-expander:hover { opacity: 1; }
+.folder-expander image { -gtk-icon-size: 12px; }
+.navigation-sidebar row.library-start { margin-top: 14px; }
 .unread-count { font-size: 11px; font-weight: 500; opacity: .6; font-feature-settings: "tnum"; }
 .pagination button { min-height: 24px; min-width: 24px; padding: 0 4px; }
 .refresh-progress trough { min-height: 2px; background: none; }
@@ -68,3 +71,65 @@ popover > contents, messagedialog .message-area, dialog {
 /* Dropping a dragged feed or folder at the top level of the library. */
 .navigation-sidebar.drop-top-level { box-shadow: inset 0 0 0 2px alpha(@accent_color, .55); border-radius: 8px; }
 .navigation-sidebar row:drop(active) { box-shadow: inset 0 0 0 2px @accent_color; background: alpha(@accent_color, .14); }
+
+/* Forms: a title, labeled fields, and the actions at the bottom right. */
+dialog.form-dialog sheet { background-color: mix(@window_bg_color, @window_fg_color, .035); }
+.form { padding: 24px 24px 20px; }
+.form-title { font-size: 17px; font-weight: 650; }
+.form-note { font-size: 13px; opacity: .6; }
+.form-section { font-size: 10px; font-weight: 700; letter-spacing: 2px; opacity: .55; margin-top: 6px; }
+.form-label { font-size: 12px; font-weight: 600; opacity: .7; }
+.form-setting { min-height: 36px; }
+.form-setting-title { font-size: 14px; }
+.form entry, .form dropdown > button, .form spinbutton {
+  min-height: 36px;
+  border-radius: 8px;
+  background: alpha(@window_fg_color, .06);
+  border: 1px solid alpha(@window_fg_color, .09);
+  box-shadow: none;
+  outline: none;
+  color: @window_fg_color;
+}
+.form entry { padding: 0 12px; }
+.form dropdown > button { padding: 0 10px 0 12px; font-weight: 400; }
+.form entry:focus-within, .form spinbutton:focus-within {
+  border-color: @accent_color;
+  box-shadow: 0 0 0 3px alpha(@accent_color, .16);
+}
+.form dropdown > button:hover { background: alpha(@window_fg_color, .09); }
+.form spinbutton button { border: none; background: none; min-width: 28px; }
+.form entry placeholder, .form entry text placeholder { opacity: .45; }
+.form-error { font-size: 13px; color: @error_color; margin-top: 14px; }
+.form-actions { margin-top: 24px; }
+.form-actions button { min-height: 34px; padding: 0 16px; border-radius: 8px; font-weight: 600; font-size: 13px; }
+.form-actions button.flat { color: alpha(@window_fg_color, .75); }
+.form-actions button.flat:hover { background: alpha(@window_fg_color, .07); color: @window_fg_color; }
+.form-actions button.suggested-action { background: @accent_color; color: @accent_fg_color; }
+.form-actions button.suggested-action:disabled { opacity: .5; }
+.form-choices checkbutton { padding: 8px 10px; border-radius: 8px; }
+.form-choices checkbutton:hover { background: alpha(@window_fg_color, .05); }
+.form-choices checkbutton check { margin-right: 10px; }
+
+/* Keyboard shortcuts: an action, then its keys as caps. */
+.shortcut { min-height: 28px; }
+.shortcut-action { font-size: 13px; }
+.shortcut-or { font-size: 11px; opacity: .45; }
+.keycap {
+  font-size: 11px;
+  font-weight: 600;
+  min-width: 12px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: alpha(@window_fg_color, .07);
+  border: 1px solid alpha(@window_fg_color, .12);
+  border-bottom-width: 2px;
+}
+
+/* Content filters. */
+.form-input-row button { min-height: 36px; padding: 0 16px; border-radius: 8px; font-weight: 600; font-size: 13px; }
+.form-error.inline { margin-top: -8px; }
+.filter { padding: 4px 4px 4px 12px; border-radius: 8px; background: alpha(@window_fg_color, .05); }
+.filter-pattern { font-size: 13px; }
+.filter-pattern.regex { font-family: monospace; }
+.filter button { min-width: 28px; min-height: 28px; padding: 0; border-radius: 6px; opacity: .6; }
+.filter button:hover { opacity: 1; }

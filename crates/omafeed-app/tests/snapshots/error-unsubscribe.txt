@@ -2,4 +2,4 @@ $ omafeed unsubscribe 999 --yes
 exit: 1
 --- stdout
 --- stderr
-Omafeed: No feed with id 999
+omafeed: No feed with id 999

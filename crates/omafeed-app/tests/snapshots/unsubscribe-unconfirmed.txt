@@ -2,4 +2,4 @@ $ omafeed unsubscribe 1
 exit: 1
 --- stdout
 --- stderr
-Omafeed: Not removed. This would permanently delete "Local Feed" and its 3 articles (1 starred). Run again with --yes to confirm.
+omafeed: Not removed. This would permanently delete "Local Feed" and its 3 articles (1 starred). Run again with --yes to confirm.

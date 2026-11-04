@@ -1,6 +1,7 @@
 //! Main window: a library sidebar, an article list, and a WebKit reader.
 mod articles;
 mod changes;
+mod context_menu;
 mod keys;
 mod reader;
 mod sidebar;
@@ -53,7 +54,7 @@ enum Layout {
 
 struct Header {
     bar: adw::HeaderBar,
-    brand: gtk::Box,
+    brand: gtk::Label,
     refresh: gtk::Button,
     sidebar_toggle: gtk::Button,
     search: gtk::SearchEntry,
@@ -62,9 +63,7 @@ struct Header {
 impl Header {
     fn new() -> Self {
         let bar = adw::HeaderBar::new();
-        let brand = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-        brand.append(&gtk::Image::from_icon_name("application-rss+xml-symbolic"));
-        brand.append(&label("Omafeed", "title-3"));
+        let brand = label("omafeed", "brand");
         bar.set_title_widget(Some(&brand));
         let refresh = icon("view-refresh-symbolic", REFRESH_TIP);
         let sidebar_toggle = icon("sidebar-show-symbolic", "Show or hide subscriptions");
@@ -88,7 +87,7 @@ impl Header {
             ("Content filters…", "win.filters"),
             ("Settings…", "win.settings"),
             ("Keyboard shortcuts", "win.shortcuts"),
-            ("About Omafeed", "win.about"),
+            ("About omafeed", "win.about"),
         ] {
             menu.append(Some(title), Some(action));
         }
@@ -125,19 +124,11 @@ impl SidebarPane {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
         root.set_width_request(*Settings::SIDEBAR_WIDTHS.start());
         root.add_css_class("sidebar");
-        let title = label("LIBRARY", "section-title");
-        title.set_margin_start(18);
-        title.set_margin_top(18);
-        title.set_margin_bottom(12);
-        root.append(&title);
         let list = gtk::ListBox::new();
+        list.set_margin_top(8);
         list.add_css_class("navigation-sidebar");
         root.append(&scroll(&list));
-        // Parented to the box, not the list: a list box takes every child for a row.
-        let menu = gtk::PopoverMenu::from_model(None::<&gio::MenuModel>);
-        menu.set_has_arrow(false);
-        menu.set_halign(gtk::Align::Start);
-        menu.set_parent(&root);
+        let menu = context_menu::popover(&root);
         Self { root, list, menu }
     }
 }
@@ -149,6 +140,8 @@ struct ListPane {
     unread: gtk::ToggleButton,
     mark: gtk::Button,
     list: gtk::ListBox,
+    /// The context menu of articles, filled in each time it opens.
+    menu: gtk::PopoverMenu,
     /// The page buttons, shown only when there is more than one page.
     pages: gtk::Box,
     previous: gtk::Button,
@@ -191,6 +184,7 @@ impl ListPane {
         list.add_css_class("articles");
         list.set_activate_on_single_click(true);
         root.append(&scroll(&list));
+        let menu = context_menu::popover(&root);
         Self {
             root,
             heading,
@@ -198,6 +192,7 @@ impl ListPane {
             unread,
             mark,
             list,
+            menu,
             pages,
             previous,
             next,
@@ -301,7 +296,7 @@ impl Ui {
         overlay.set_child(Some(&root));
         let window = adw::ApplicationWindow::builder()
             .application(app)
-            .title("Omafeed")
+            .title("omafeed")
             .default_width(settings.width)
             .default_height(settings.height)
             .width_request(*Settings::WIDTHS.start())
@@ -491,6 +486,7 @@ impl Ui {
         ));
         self.connect_reader_signals();
         self.connect_sidebar_menu();
+        self.connect_article_menu();
         self.connect_sidebar_drop();
     }
 

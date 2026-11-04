@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
   <id>io.github.pch.Omafeed</id>
-  <name>Omafeed</name>
+  <name>omafeed</name>
   <summary>A quiet home for your feeds</summary>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>
@@ -10,7 +10,7 @@
   </developer>
   <description>
     <p>
-      Omafeed is a native RSS reader for Linux and Omarchy. A three-pane library, article list,
+      omafeed is a native RSS reader for Linux and Omarchy. A three-pane library, article list,
       and reading view keeps your subscriptions and articles on your computer.
     </p>
     <ul>

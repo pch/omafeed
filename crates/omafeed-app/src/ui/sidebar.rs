@@ -1,6 +1,6 @@
 //! Library sidebar: smart views, folders, and feeds with unread counts, their context menu,
 //! and moving feeds and folders by drag and drop.
-use super::{Ui, reader, widgets::icon, widgets::label};
+use super::{Ui, context_menu, reader, widgets::icon, widgets::label};
 use gtk::{gdk, gio, glib, prelude::*};
 use omafeed_core::{
     ingest::Which,
@@ -296,6 +296,13 @@ impl Ui {
             .into_iter()
             .map(|item| self.sidebar_row(item))
             .collect();
+        // Feeds and folders start a little below the smart views.
+        if let Some(r) = rows
+            .iter()
+            .find(|r| matches!(r.scope, Scope::Feed(_) | Scope::Folder(_)))
+        {
+            r.row.add_css_class("library-start");
+        }
         for r in &rows {
             self.side.list.append(&r.row);
             if r.scope == selected {
@@ -371,10 +378,22 @@ impl Ui {
         let text = label(&item.title, "");
         text.set_ellipsize(gtk::pango::EllipsizeMode::End);
         text.set_hexpand(true);
+        // A folder's icon stands where the others do, so names line up; its expander goes
+        // at the end of the row.
+        let mut expander = None;
         match (&item.scope, &item.feed) {
             (Scope::Folder(id), _) => {
-                content.append(&self.folder_expander(*id));
+                let open = !self.view.borrow().collapsed().contains(id);
+                let symbol = if open {
+                    "folder-open-symbolic"
+                } else {
+                    "folder-symbolic"
+                };
+                let image = gtk::Image::from_icon_name(symbol);
+                image.set_pixel_size(16);
+                content.append(&image);
                 text.add_css_class("folder-name");
+                expander = Some(self.folder_expander(*id));
             }
             (Scope::Feed(_), Some(feed)) => content.append(&self.favicon(feed)),
             (scope, _) => {
@@ -396,6 +415,9 @@ impl Ui {
         let count = label(&item.count.to_string(), "unread-count");
         count.set_visible(item.count > 0);
         content.append(&count);
+        if let Some(expander) = &expander {
+            content.append(expander);
+        }
         let row = gtk::ListBoxRow::new();
         row.set_child(Some(&content));
         if let Some(feed) = &item.feed {
@@ -415,45 +437,12 @@ impl Ui {
     /// Open the context menu on right click, and with the Menu key or Shift+F10 on the
     /// focused entry.
     pub(super) fn connect_sidebar_menu(self: &Rc<Self>) {
-        let click = gtk::GestureClick::new();
-        click.set_button(gdk::BUTTON_SECONDARY);
-        click.connect_pressed(glib::clone!(
-            #[weak(rename_to = u)]
-            self,
-            move |gesture, _, x, y| {
-                #[expect(clippy::cast_possible_truncation, reason = "pixel coordinates")]
-                let row = u.side.list.row_at_y(y as i32);
-                if let Some(row) = row {
-                    gesture.set_state(gtk::EventSequenceState::Claimed);
-                    u.open_sidebar_menu(&row, Some((x, y)));
-                }
+        let weak = Rc::downgrade(self);
+        context_menu::connect(&self.side.list, move |row, at| {
+            if let Some(u) = weak.upgrade() {
+                u.open_sidebar_menu(row, at);
             }
-        ));
-        self.side.list.add_controller(click);
-        let keys = gtk::EventControllerKey::new();
-        keys.connect_key_pressed(glib::clone!(
-            #[weak(rename_to = u)]
-            self,
-            #[upgrade_or]
-            glib::Propagation::Proceed,
-            move |_, key, _, mods| {
-                let menu_key = key == gdk::Key::Menu
-                    || (key == gdk::Key::F10 && mods.contains(gdk::ModifierType::SHIFT_MASK));
-                let list = &u.side.list;
-                let row = list
-                    .focus_child()
-                    .and_downcast::<gtk::ListBoxRow>()
-                    .or_else(|| list.selected_row());
-                match row.filter(|_| menu_key) {
-                    Some(row) => {
-                        u.open_sidebar_menu(&row, None);
-                        glib::Propagation::Stop
-                    }
-                    None => glib::Propagation::Proceed,
-                }
-            }
-        ));
-        self.side.list.add_controller(keys);
+        });
     }
 
     /// Show the context menu of a sidebar row, at `at` in the list's coordinates or, without
@@ -474,50 +463,37 @@ impl Ui {
         if sections.is_empty() {
             return;
         }
-        let model = gio::Menu::new();
-        let group = gio::SimpleActionGroup::new();
-        for section in sections {
-            let part = gio::Menu::new();
-            for (command, enabled) in section {
-                part.append(
-                    Some(command.label()),
-                    Some(&format!("sidebar.{}", command.name())),
-                );
-                let action = gio::SimpleAction::new(command.name(), None);
-                action.set_enabled(enabled);
-                let weak = Rc::downgrade(self);
-                let scope = scope.clone();
-                action.connect_activate(move |_, _| {
-                    if let Some(u) = weak.upgrade() {
-                        u.run_command(command, &scope);
-                    }
-                });
-                group.add_action(&action);
-            }
-            model.append_section(None, &part);
-        }
-        let menu = &self.side.menu;
-        menu.set_menu_model(Some(&model));
-        menu.insert_action_group("sidebar", Some(&group));
-        let root = &self.side.root;
-        let target = match at {
-            Some((x, y)) => self
-                .side
-                .list
-                .compute_point(root, &gtk::graphene::Point::new(x as f32, y as f32))
-                .map(|p| gtk::graphene::Rect::new(p.x(), p.y(), 1.0, 1.0)),
-            None => row.compute_bounds(root),
-        };
-        if let Some(r) = target {
-            #[expect(clippy::cast_possible_truncation, reason = "pixel coordinates")]
-            menu.set_pointing_to(Some(&gdk::Rectangle::new(
-                r.x() as i32,
-                r.y() as i32,
-                (r.width() as i32).max(1),
-                (r.height() as i32).max(1),
-            )));
-        }
-        menu.popup();
+        let sections = sections
+            .into_iter()
+            .map(|section| {
+                section
+                    .into_iter()
+                    .map(|(command, enabled)| {
+                        let weak = Rc::downgrade(self);
+                        let scope = scope.clone();
+                        context_menu::Item {
+                            label: command.label().into(),
+                            name: command.name(),
+                            enabled,
+                            run: Box::new(move || {
+                                if let Some(u) = weak.upgrade() {
+                                    u.run_command(command, &scope);
+                                }
+                            }),
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        context_menu::show(
+            &self.side.menu,
+            "sidebar",
+            sections,
+            self.side.root.upcast_ref(),
+            &self.side.list,
+            row,
+            at,
+        );
     }
 
     /// Close the context menu and forget its actions, and forget a drag in progress. Called
@@ -526,10 +502,7 @@ impl Ui {
     /// folder, so neither may act on it any more.
     pub(crate) fn close_sidebar_menu(&self) {
         self.dragging.replace(None);
-        self.side.menu.popdown();
-        self.side
-            .menu
-            .insert_action_group("sidebar", None::<&gio::ActionGroup>);
+        context_menu::close(&self.side.menu, "sidebar");
     }
 
     fn run_command(self: &Rc<Self>, command: Command, scope: &Scope) {
@@ -663,18 +636,21 @@ impl Ui {
         self.side.list.add_controller(target);
     }
 
+    /// Expand `folder` and the folders above it, so what is in it shows.
+    pub(super) fn expand_to(&self, folder: Option<FolderId>) {
+        let lib = self.library.borrow();
+        let mut view = self.view.borrow_mut();
+        for f in lib.folder_path(folder) {
+            if view.collapsed().contains(&f.id) {
+                view.toggle_folder(f.id);
+            }
+        }
+    }
+
     /// Move a feed or folder into `folder`, or to the top level, and show it there.
     pub(super) fn move_entry(self: &Rc<Self>, scope: Scope, folder: Option<FolderId>) {
         // Open the folders it lands in, so it does not seem to vanish.
-        {
-            let lib = self.library.borrow();
-            let mut view = self.view.borrow_mut();
-            for f in lib.folder_path(folder) {
-                if view.collapsed().contains(&f.id) {
-                    view.toggle_folder(f.id);
-                }
-            }
-        }
+        self.expand_to(folder);
         let u = self.clone();
         glib::spawn_future_local(async move {
             let result =

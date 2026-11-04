@@ -1,6 +1,6 @@
 [package]
 name = "omafeed-core"
-description = "Storage, feed fetching, and OPML support for Omafeed"
+description = "Storage, feed fetching, and OPML support for omafeed"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
