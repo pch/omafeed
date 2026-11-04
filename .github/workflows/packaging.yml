@@ -1,0 +1,187 @@
+name: Packaging
+
+# Builds the Linux archives on Debian 13, turns them into DEB and RPM packages
+# with native-packages, and installs, runs and removes those in clean
+# containers. Pull requests that could change the packages run it on their
+# checkout; the release workflow calls it on the tagged commit.
+on:
+  pull_request:
+    paths:
+      - 'packaging/**'
+      - 'data/**'
+      - 'native-packages.yaml'
+      - 'Makefile'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'crates/*/Cargo.toml'
+      - '.github/workflows/ci.yml'
+      - '.github/workflows/packaging.yml'
+      - '.github/workflows/release.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'packaging/**'
+      - 'data/**'
+      - 'native-packages.yaml'
+      - 'Makefile'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'crates/*/Cargo.toml'
+      - '.github/workflows/ci.yml'
+      - '.github/workflows/packaging.yml'
+      - '.github/workflows/release.yml'
+  workflow_call:
+    inputs:
+      source-ref:
+        description: Exact release source commit to package
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+# As in CI: a newer push supersedes the run in progress, while a release's
+# packaging (called with source-ref) has its own group and is never cancelled.
+concurrency:
+  group: ${{ inputs.source-ref && format('packaging-release-{0}', inputs.source-ref) || format('packaging-{0}', github.ref) }}
+  cancel-in-progress: ${{ !inputs.source-ref }}
+
+jobs:
+  validate:
+    name: Validate workflows and package configuration
+    if: inputs.source-ref == ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1
+        with:
+          ruby-version: '3.3'
+      - run: |
+          GOBIN="$RUNNER_TEMP/tools" go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.11
+          "$RUNNER_TEMP/tools/actionlint"
+          shellcheck packaging/linux/*.sh
+          gem install native-packages --version 0.12.0 --no-document
+          native-packages validate
+
+  source:
+    name: Release source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+      version: ${{ steps.source.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source-ref || github.sha }}
+          persist-credentials: false
+      - id: source
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+          test -n "$version"
+          {
+            echo "sha=$(git rev-parse HEAD)"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
+
+  # Debian 13 is the oldest system the packages support, so the archives are
+  # built on it; they also run on Arch Linux and Fedora.
+  archive:
+    name: Linux archive (${{ matrix.arch }})
+    needs: source
+    runs-on: ${{ matrix.runner }}
+    container: debian:13
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    steps:
+      # Packaging scripts come from the workflow's branch, the app from the
+      # release source, so an existing tag can be rebuilt with newer scripts.
+      # Neither is a git repository (the container has no git yet), and the
+      # build needs none.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+          path: release-source
+          persist-credentials: false
+      - run: packaging/linux/build-archive.sh release-source dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-archive-${{ matrix.arch }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  # native-packages' shared workflow reads one artifact.
+  inputs:
+    name: Gather packaging inputs
+    needs: archive
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: linux-archive-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: package-inputs
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  # Builds the DEB and RPM for each architecture into the native-packages
+  # artifact. Dependencies come from the libraries the binary links, through
+  # the libraries map in native-packages.yaml.
+  packages:
+    needs: [source, inputs]
+    permissions:
+      contents: write
+    uses: crmne/native-packages/.github/workflows/package.yml@51500464793687a52be65abb1b4dfc23639e3f48 # v0.12.0
+    with:
+      version: ${{ needs.source.outputs.version }}
+      source-artifact: package-inputs
+      publish: false
+
+  install:
+    name: Install on ${{ matrix.image }} (${{ matrix.platform.target }})
+    needs: [source, packages]
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['debian:13', 'ubuntu:26.04', 'fedora:43', 'fedora:44']
+        platform:
+          - {runner: ubuntu-24.04, target: linux-amd64}
+          - {runner: ubuntu-24.04-arm, target: linux-arm64}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: native-packages
+          path: native-packages
+      - name: Install, run and remove
+        env:
+          IMAGE: ${{ matrix.image }}
+          TARGET: ${{ matrix.platform.target }}
+          VERSION: ${{ needs.source.outputs.version }}
+        run: |
+          mkdir packages
+          cp "native-packages/packages/$TARGET/deb/"*.deb "native-packages/packages/$TARGET/rpm/"*.rpm packages/
+          docker run --rm -e VERSION -v "$PWD/packages:/packages:ro" -v "$PWD/packaging/linux:/checks:ro" \
+            "$IMAGE" bash /checks/verify.sh

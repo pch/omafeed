@@ -5,12 +5,19 @@ on:
     branches: [main]
   pull_request:
   workflow_call:
+    inputs:
+      source-ref:
+        description: Exact release source commit to check
+        type: string
+        default: ""
 
 permissions:
   contents: read
 
+# A release's run (called with source-ref) has its own group, so it never
+# queues behind or cancels a push run.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ${{ inputs.source-ref && format('ci-release-{0}', inputs.source-ref) || format('ci-{0}', github.ref) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -29,6 +36,8 @@ jobs:
           rust git gtk4 libadwaita webkitgtk-6.0 pkgconf
           xorg-server-xvfb dbus desktop-file-utils appstream
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source-ref || github.sha }}
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Check minimum Rust version
         run: |
@@ -66,6 +75,8 @@ jobs:
       - name: Install dependencies
         run: pacman -Syu --noconfirm --needed rustup git gtk4 libadwaita webkitgtk-6.0 pkgconf
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source-ref || github.sha }}
       - name: Install the toolchain named by rust-version
         run: |
           msrv=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)
@@ -85,6 +96,8 @@ jobs:
       - name: Install dependencies
         run: pacman -Syu --noconfirm --needed rust git gtk4 libadwaita webkitgtk-6.0 pkgconf namcap
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source-ref || github.sha }}
       - name: makepkg (current checkout)
         run: |
           useradd -m builder
@@ -100,4 +113,6 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source-ref || github.sha }}
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
