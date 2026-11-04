@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping with Omafeed. This file covers how to build and test it, and the rules that
+Thanks for helping with omafeed. This file covers how to build and test it, and the rules that
 keep existing users' scripts, settings and libraries working. [ARCHITECTURE.md](ARCHITECTURE.md)
 explains how the code is laid out.
 
@@ -79,7 +79,7 @@ in `tests/fixtures/settings/` are frozen.
 
 Migrations live in `crates/omafeed-core/src/store/schema.rs`. Append new ones; never change,
 reorder or remove an existing one, since libraries in the wild have already run it. A database
-from a newer version is refused, so adding a migration means older Omafeed versions will no
+from a newer version is refused, so adding a migration means older omafeed versions will no
 longer open the library: say so in the release notes.
 
 Migrations that recompute text call `content::plain`. If you change what `plain` produces,

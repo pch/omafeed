@@ -1,4 +1,4 @@
-//! Omafeed, the reader window and the `omafeed` command line. `main.rs` only calls [`main`].
+//! omafeed, the reader window and the `omafeed` command line. `main.rs` only calls [`main`].
 mod cli;
 mod dialogs;
 mod ui;
@@ -18,7 +18,7 @@ pub const DB_FILE: &str = "omafeed.db";
 #[command(
     name = "omafeed",
     version,
-    about = "Omafeed — a local RSS reader. Run without a command to open the reader.",
+    about = "omafeed — a local RSS reader. Run without a command to open the reader.",
     help_template = "{name} {version}\n{about}\n\n{usage-heading} {usage}\n\n{all-args}{after-help}",
     after_help = "OMAFEED_HOME overrides the data, config, and cache directories for testing."
 )]
@@ -45,7 +45,7 @@ pub fn main() {
         None => run_gui(),
     };
     if let Err(e) = result {
-        eprintln!("Omafeed: {e:#}");
+        eprintln!("omafeed: {e:#}");
         std::process::exit(1);
     }
 }

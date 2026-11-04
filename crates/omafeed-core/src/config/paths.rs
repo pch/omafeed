@@ -12,7 +12,7 @@ pub fn xdg(key: &str, fallback: &str) -> PathBuf {
             PathBuf::from,
         )
 }
-/// Where Omafeed keeps its files.
+/// Where omafeed keeps its files.
 #[derive(Clone, Debug)]
 pub struct Paths {
     /// The directory of the library database.

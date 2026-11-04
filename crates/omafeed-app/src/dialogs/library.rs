@@ -1,6 +1,6 @@
 //! Feed and folder forms: subscribing, creating folders, editing and removing either.
-use super::{Form, combo_row, confirm, entry_row, wait_closed};
-use crate::ui::Ui;
+use super::{Form, confirm, wait_closed};
+use crate::ui::{Ui, widgets::label};
 use adw::prelude::*;
 use gtk::glib;
 use omafeed_core::{
@@ -31,7 +31,7 @@ fn folder_paths(lib: &Library) -> Vec<(Option<FolderId>, String)> {
 }
 
 struct FolderPicker {
-    row: adw::ComboRow,
+    dropdown: gtk::DropDown,
     ids: Vec<Option<FolderId>>,
 }
 
@@ -39,7 +39,7 @@ impl FolderPicker {
     /// A folder choice in `group`, leaving out `except` and the folders inside it, where a
     /// folder cannot go.
     fn new(
-        group: &adw::PreferencesGroup,
+        form: &Form,
         lib: &Library,
         selected: Option<FolderId>,
         except: Option<FolderId>,
@@ -55,13 +55,13 @@ impl FolderPicker {
             .unzip();
         let names: Vec<&str> = names.iter().map(String::as_str).collect();
         let index = ids.iter().position(|id| *id == selected).unwrap_or(0);
-        let row = combo_row(group, "Folder", &names, index);
-        Self { row, ids }
+        let dropdown = form.choice("Folder", &names, index);
+        Self { dropdown, ids }
     }
 
     fn selected(&self) -> Option<FolderId> {
         self.ids
-            .get(self.row.selected() as usize)
+            .get(self.dropdown.selected() as usize)
             .copied()
             .flatten()
     }
@@ -115,7 +115,7 @@ async fn remove_confirmed(u: &Rc<Ui>, window: &adw::ApplicationWindow, scope: Sc
         ),
         _ => (
             "Remove subscription?",
-            "This removes the feed and its downloaded articles, stars, and read state from Omafeed.",
+            "This removes the feed and its downloaded articles, stars, and read state from omafeed.",
         ),
     };
     if !confirm(window, heading, body).await {
@@ -157,13 +157,12 @@ async fn edit_folder(
         }
     };
     let form = match id {
-        Some(_) => Form::new(window, "Edit Folder", "Save"),
-        None => Form::new(window, "New Folder", "Create"),
+        Some(_) => Form::new(window, "Edit folder", "Save"),
+        None => Form::new(window, "New folder", "Create"),
     };
-    let group = form.group("", None);
-    let name_entry = entry_row(&group, "Name", &name);
-    let picker = FolderPicker::new(&group, &u.library.borrow(), parent, id);
-    name_entry.grab_focus();
+    let name_entry = form.entry("Name", &name);
+    let picker = FolderPicker::new(&form, &u.library.borrow(), parent, id);
+    form.focus(&name_entry);
     while form.run().await {
         let name = name_entry.text().to_string();
         let parent = picker.selected();
@@ -198,33 +197,32 @@ async fn edit_feed(
         }
     };
     let form = match id {
-        Some(_) => Form::new(window, "Edit Feed", "Save"),
-        None => Form::new(window, "Add Feed", "Add"),
+        Some(_) => Form::new(window, "Edit feed", "Save"),
+        None => Form::new(window, "Add feed", "Add"),
     };
-    let group = form.group(
-        "",
-        id.is_none().then_some(
-            "Paste a website or feed address. Omafeed finds the site's RSS, Atom, or JSON feed.",
-        ),
-    );
     // A new feed starts from its address; an existing one is usually renamed.
     let (url_entry, name_entry) = match id {
         None => {
-            let url = entry_row(&group, "Website or feed URL", &original_url);
-            let name = entry_row(&group, "Name (optional, defaults to the feed's title)", "");
+            form.note(
+                "Paste a website or feed address. omafeed finds its RSS, Atom, or JSON feed.",
+            );
+            let url = form.entry("Address", "");
+            url.set_placeholder_text(Some("example.com"));
+            let name = form.entry("Name", "");
+            name.set_placeholder_text(Some("The feed's own title"));
             (url, name)
         }
         Some(_) => {
-            let name = entry_row(&group, "Name", &title);
-            let url = entry_row(&group, "Feed URL", &original_url);
+            let name = form.entry("Name", &title);
+            let url = form.entry("Feed address", &original_url);
             (url, name)
         }
     };
-    let picker = FolderPicker::new(&group, &u.library.borrow(), parent, None);
+    let picker = FolderPicker::new(&form, &u.library.borrow(), parent, None);
     if id.is_none() {
-        url_entry.grab_focus();
+        form.focus(&url_entry);
     } else {
-        name_entry.grab_focus();
+        form.focus(&name_entry);
     }
     while form.run().await {
         let mut name = name_entry.text().to_string();
@@ -307,34 +305,32 @@ async fn find_feed(
     if feeds.len() == 1 {
         return Some(Ok(feeds.remove(0)));
     }
-    let choose = Form::new(window, "Choose a Feed", "Subscribe");
-    let group = choose.group("", Some("This website offers several feeds."));
+    let choose = Form::new(window, "Choose a feed", "Subscribe");
+    choose.note("This website offers several feeds.");
     // Sites may offer a dozen: past a few, the list scrolls instead of outgrowing the screen.
-    let rows = gtk::ListBox::new();
-    rows.add_css_class("boxed-list");
-    rows.set_selection_mode(gtk::SelectionMode::None);
-    group.add(
+    let rows = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    rows.add_css_class("form-choices");
+    let mut checks: Vec<gtk::CheckButton> = Vec::new();
+    for f in &feeds {
+        let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        text.append(&label(&f.title, "form-setting-title"));
+        let url = label(&f.url, "form-note");
+        url.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+        text.append(&url);
+        let check = gtk::CheckButton::builder().child(&text).build();
+        check.set_group(checks.first());
+        check.set_active(checks.is_empty());
+        rows.append(&check);
+        checks.push(check);
+    }
+    choose.append(
         &gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
             .propagate_natural_height(true)
-            .max_content_height(360)
+            .max_content_height(320)
             .child(&rows)
             .build(),
     );
-    let mut checks: Vec<gtk::CheckButton> = Vec::new();
-    for f in &feeds {
-        let check = gtk::CheckButton::new();
-        check.set_group(checks.first());
-        check.set_active(checks.is_empty());
-        let row = adw::ActionRow::builder()
-            .title(glib::markup_escape_text(&f.title))
-            .subtitle(glib::markup_escape_text(&f.url))
-            .activatable_widget(&check)
-            .build();
-        row.add_prefix(&check);
-        rows.append(&row);
-        checks.push(check);
-    }
     if !choose.run().await {
         return None;
     }

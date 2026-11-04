@@ -13,8 +13,8 @@ pub enum Error {
     /// Another subscription already has this feed URL. The message is SQLite's own.
     #[error(transparent)]
     DuplicateFeed(rusqlite::Error),
-    /// The library was written by a newer Omafeed, whose schema this one does not know.
-    #[error("Database was created by a newer Omafeed version")]
+    /// The library was written by a newer omafeed, whose schema this one does not know.
+    #[error("Database was created by a newer omafeed version")]
     NewerDatabase,
     /// Input that cannot be stored, such as an empty name or a feed URL that is not HTTP(S).
     #[error("{0}")]

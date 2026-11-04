@@ -1,10 +1,14 @@
-//! Article list: paging, selection, and read/star state.
-use super::{Ui, view::PageRequest, widgets::label};
+//! Article list: paging, selection, read/star state, and the context menu of articles.
+use super::{
+    Ui, context_menu, reader,
+    view::{self, PageRequest},
+    widgets::label,
+};
 use chrono::{DateTime, Datelike, Local};
 use gtk::{glib, prelude::*};
 use omafeed_core::{
     content::one_line,
-    model::{Article, ArticleId, Query, Scope, StatePatch},
+    model::{Article, ArticleId, FeedId, Query, Scope, StatePatch},
     reading,
 };
 use std::rc::Rc;
@@ -99,7 +103,190 @@ fn format_date(timestamp: i64, now: DateTime<Local>) -> String {
     date.format(format).to_string()
 }
 
+/// What the context menu of an article can do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ArticleCommand {
+    ToggleRead,
+    ToggleStar,
+    MarkAboveRead,
+    MarkBelowRead,
+    OpenOriginal,
+    CopyLink,
+    GoToFeed,
+}
+
+impl ArticleCommand {
+    /// The action's name, under the `article.` prefix.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::ToggleRead => "toggle-read",
+            Self::ToggleStar => "toggle-star",
+            Self::MarkAboveRead => "mark-above-read",
+            Self::MarkBelowRead => "mark-below-read",
+            Self::OpenOriginal => "open-original",
+            Self::CopyLink => "copy-link",
+            Self::GoToFeed => "go-to-feed",
+        }
+    }
+
+    fn label(self, a: &Article) -> &'static str {
+        match self {
+            Self::ToggleRead if a.read => "Mark as unread",
+            Self::ToggleRead => "Mark as read",
+            Self::ToggleStar if a.starred => "Unstar",
+            Self::ToggleStar => "Star",
+            Self::MarkAboveRead => "Mark above as read",
+            Self::MarkBelowRead => "Mark below as read",
+            Self::OpenOriginal => "Open in browser",
+            Self::CopyLink => "Copy link",
+            Self::GoToFeed => "Go to feed",
+        }
+    }
+}
+
+/// The unread articles listed above (`below` false) or below the one at `index`.
+fn unread_beside(articles: &[Article], index: usize, below: bool) -> Vec<ArticleId> {
+    let (above, rest) = articles.split_at(index.min(articles.len()));
+    let side = if below {
+        rest.get(1..).unwrap_or_default()
+    } else {
+        above
+    };
+    side.iter().filter(|a| !a.read).map(|a| a.id).collect()
+}
+
+/// The context menu of the article at `index` in `articles`, listed in `scope`: sections of
+/// commands, each with whether it can be used now. Empty if there is no such article.
+fn article_menu(
+    articles: &[Article],
+    index: usize,
+    scope: &Scope,
+) -> Vec<Vec<(ArticleCommand, bool)>> {
+    use ArticleCommand::*;
+    let Some(a) = articles.get(index) else {
+        return Vec::new();
+    };
+    vec![
+        vec![(ToggleRead, true), (ToggleStar, true)],
+        vec![
+            (
+                MarkAboveRead,
+                !unread_beside(articles, index, false).is_empty(),
+            ),
+            (
+                MarkBelowRead,
+                !unread_beside(articles, index, true).is_empty(),
+            ),
+        ],
+        vec![
+            (OpenOriginal, reader::opens(&a.url)),
+            (CopyLink, !a.url.is_empty()),
+        ],
+        vec![(GoToFeed, *scope != Scope::Feed(a.feed_id))],
+    ]
+}
+
 impl Ui {
+    /// Open an article's context menu on right click, and with the Menu key or Shift+F10.
+    pub(super) fn connect_article_menu(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        context_menu::connect(&self.list.list, move |row, at| {
+            if let Some(u) = weak.upgrade() {
+                u.open_article_menu(row, at);
+            }
+        });
+    }
+
+    /// Show the context menu of an article row, at `at` in the list's coordinates or, without
+    /// it, below the row. The article is not opened.
+    pub(super) fn open_article_menu(
+        self: &Rc<Self>,
+        row: &gtk::ListBoxRow,
+        at: Option<(f64, f64)>,
+    ) {
+        let Ok(index) = usize::try_from(row.index()) else {
+            return;
+        };
+        let view = self.view.borrow();
+        let Some(article) = view.articles().get(index) else {
+            return;
+        };
+        let id = article.id;
+        let sections = article_menu(view.articles(), index, &view.query.scope)
+            .into_iter()
+            .map(|section| {
+                section
+                    .into_iter()
+                    .map(|(command, enabled)| {
+                        let weak = Rc::downgrade(self);
+                        context_menu::Item {
+                            label: command.label(article).into(),
+                            name: command.name(),
+                            enabled,
+                            run: Box::new(move || {
+                                if let Some(u) = weak.upgrade() {
+                                    u.run_article_command(command, id);
+                                }
+                            }),
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        drop(view);
+        self.list.menu_article.set(Some(id));
+        context_menu::show(
+            &self.list.menu,
+            "article",
+            sections,
+            self.list.root.upcast_ref(),
+            &self.list.list,
+            row,
+            at,
+        );
+    }
+
+    /// Run a command of an article's context menu, if the article is still listed.
+    fn run_article_command(self: &Rc<Self>, command: ArticleCommand, id: ArticleId) {
+        let (index, article) = {
+            let view = self.view.borrow();
+            let Some(index) = view.articles().iter().position(|a| a.id == id) else {
+                return;
+            };
+            (index, view.articles()[index].clone())
+        };
+        match command {
+            ArticleCommand::ToggleRead => self.set_state(id, StatePatch::read(!article.read)),
+            ArticleCommand::ToggleStar => {
+                self.set_state(id, StatePatch::starred(!article.starred));
+            }
+            ArticleCommand::MarkAboveRead | ArticleCommand::MarkBelowRead => {
+                let below = command == ArticleCommand::MarkBelowRead;
+                let ids = unread_beside(self.view.borrow().articles(), index, below);
+                self.mark_articles_read(ids);
+            }
+            ArticleCommand::OpenOriginal => reader::open_uri(&article.url),
+            ArticleCommand::CopyLink if !article.url.is_empty() => {
+                self.window.clipboard().set_text(&article.url);
+                self.toast("Link copied");
+            }
+            ArticleCommand::GoToFeed => self.go_to_feed(article.feed_id),
+            ArticleCommand::CopyLink => {}
+        }
+    }
+
+    /// Show `feed` in the sidebar and its articles in the list, keeping the open article.
+    fn go_to_feed(self: &Rc<Self>, feed: FeedId) {
+        let folder = self.library.borrow().feed(feed).and_then(|f| f.folder);
+        self.expand_to(folder);
+        let scope = Scope::Feed(feed);
+        self.view.borrow_mut().set_scope(scope.clone());
+        self.settings.borrow_mut().scope = scope;
+        self.rebuild_sidebar();
+        self.reload_articles();
+        self.save();
+    }
+
     pub(super) fn reload_articles(self: &Rc<Self>) {
         let request = self.view.borrow_mut().request_page();
         let u = self.clone();
@@ -122,6 +309,16 @@ impl Ui {
             .borrow_mut()
             .receive_page(request, articles, remembered);
         self.rebuilding.set(true);
+        // The menu stays open over a reload unless its article is no longer listed.
+        let gone = self
+            .list
+            .menu_article
+            .get()
+            .is_some_and(|id| !self.view.borrow().articles().iter().any(|a| a.id == id));
+        if gone {
+            context_menu::close(&self.list.menu, "article");
+            self.list.menu_article.set(None);
+        }
         let list = &self.list.list;
         list.remove_all();
         self.list.next.set_sensitive(shown.has_next);
@@ -255,21 +452,55 @@ impl Ui {
         let u = self.clone();
         glib::spawn_future_local(async move {
             match reading::mark_view_read(&u.db, q).await {
-                Ok(ids) => {
-                    u.toast(&format!(
-                        "Marked {} articles read · Ctrl+Z to undo",
-                        ids.len()
-                    ));
-                    let open = u.view.borrow_mut().finish_bulk(bulk, &ids, true);
-                    if let Some(id) = open {
-                        u.show_state(id, StatePatch::read(true));
-                    }
-                    u.view.borrow_mut().push_undo(ids);
-                    u.reload();
-                }
+                Ok(ids) => u.marked_read(bulk, ids),
                 Err(e) => u.error(e),
             }
         });
+    }
+
+    /// Mark the articles `ids` read, as [`Self::mark_read`] does a view.
+    fn mark_articles_read(self: &Rc<Self>, ids: Vec<ArticleId>) {
+        if ids.is_empty() {
+            return;
+        }
+        let bulk = self.view.borrow_mut().start_bulk();
+        let u = self.clone();
+        glib::spawn_future_local(async move {
+            // Only those still unread, so Ctrl+Z never unmarks one read before; any deleted
+            // meanwhile are skipped. One transaction, so nothing changes in between.
+            let marked =
+                u.db.call(move |s| {
+                    s.immediate(|s| {
+                        let mut unread = Vec::new();
+                        for id in ids {
+                            if s.article_if_exists(id)?.is_some_and(|a| !a.read) {
+                                unread.push(id);
+                            }
+                        }
+                        s.set_article_states(&unread, StatePatch::read(true))?;
+                        Ok(unread)
+                    })
+                })
+                .await;
+            match marked {
+                Ok(ids) => u.marked_read(bulk, ids),
+                Err(e) => u.error(e),
+            }
+        });
+    }
+
+    /// Show articles a bulk change `bulk` marked read, and keep them for Ctrl+Z.
+    fn marked_read(self: &Rc<Self>, bulk: view::Bulk, ids: Vec<ArticleId>) {
+        self.toast(&format!(
+            "Marked {} articles read · Ctrl+Z to undo",
+            ids.len()
+        ));
+        let open = self.view.borrow_mut().finish_bulk(bulk, &ids, true);
+        if let Some(id) = open {
+            self.show_state(id, StatePatch::read(true));
+        }
+        self.view.borrow_mut().push_undo(ids);
+        self.reload();
     }
 
     pub(super) fn undo(self: &Rc<Self>) {
@@ -321,6 +552,73 @@ impl Ui {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    fn article(id: i64, read: bool, url: &str) -> Article {
+        Article {
+            id: ArticleId(id),
+            feed_id: FeedId(1),
+            url: url.into(),
+            read,
+            ..Default::default()
+        }
+    }
+
+    fn commands(menu: &[Vec<(ArticleCommand, bool)>]) -> Vec<Vec<ArticleCommand>> {
+        menu.iter()
+            .map(|section| section.iter().map(|(c, _)| *c).collect())
+            .collect()
+    }
+
+    fn enabled(menu: &[Vec<(ArticleCommand, bool)>], command: ArticleCommand) -> bool {
+        menu.iter()
+            .flatten()
+            .find(|(c, _)| *c == command)
+            .unwrap()
+            .1
+    }
+
+    #[test]
+    fn article_menus_offer_what_applies() {
+        use ArticleCommand::*;
+        let list = [
+            article(1, false, "https://example.org/1"),
+            article(2, true, ""),
+            article(3, true, "feed://example.org/3"),
+            article(4, false, "https://example.org/4"),
+        ];
+        let first = article_menu(&list, 0, &Scope::All);
+        assert_eq!(
+            commands(&first),
+            [
+                vec![ToggleRead, ToggleStar],
+                vec![MarkAboveRead, MarkBelowRead],
+                vec![OpenOriginal, CopyLink],
+                vec![GoToFeed],
+            ]
+        );
+        // Nothing above the first; an unread one below it.
+        assert!(!enabled(&first, MarkAboveRead));
+        assert!(enabled(&first, MarkBelowRead));
+        assert!(enabled(&first, OpenOriginal));
+        assert!(enabled(&first, GoToFeed));
+        // No link to open or copy; a link the browser is not given can still be copied.
+        let second = article_menu(&list, 1, &Scope::All);
+        assert!(!enabled(&second, OpenOriginal));
+        assert!(!enabled(&second, CopyLink));
+        let third = article_menu(&list, 2, &Scope::Feed(FeedId(1)));
+        assert!(!enabled(&third, OpenOriginal));
+        assert!(enabled(&third, CopyLink));
+        // Already showing its feed.
+        assert!(!enabled(&third, GoToFeed));
+        assert_eq!(unread_beside(&list, 2, false), [ArticleId(1)]);
+        assert_eq!(unread_beside(&list, 2, true), [ArticleId(4)]);
+        assert!(unread_beside(&list, 3, true).is_empty());
+        assert_eq!(ToggleRead.label(&list[0]), "Mark as read");
+        assert_eq!(ToggleRead.label(&list[1]), "Mark as unread");
+        assert!(article_menu(&list, 9, &Scope::All).is_empty());
+    }
+
     #[test]
     fn dates_get_coarser_with_age() {
         use super::format_date;

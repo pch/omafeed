@@ -1,6 +1,6 @@
 # Architecture
 
-Omafeed is one binary, `omafeed`, built from a Cargo workspace of two crates:
+omafeed is one binary, `omafeed`, built from a Cargo workspace of two crates:
 
 | Crate | Path | Role |
 | --- | --- | --- |
@@ -35,8 +35,8 @@ Run without a command, `omafeed` opens the reader window; with a command (`omafe
 | --- | --- |
 | `lib` | Argument parsing (`main`), which dispatches to `cli::run` or builds the GTK application. `main.rs` only calls it. With the `test-support` feature, `test_support` exposes the desktop smoke test to `tests/desktop_smoke.rs`. |
 | `cli` | Every command: argument definitions and text output. `cli/json.rs` has one `Serialize` type per `--json` shape, printed through `serde_json::Value` so the keys stay sorted, byte for byte as before. |
-| `ui` | The main window. `Ui` coordinates: it owns the panes (`Header`, `SidebarPane`, `ListPane`, `ReaderPane`), each holding its own widgets, and a `View` (`view.rs`) with what is shown: view and page, the articles on it, the open article, collapsed folders, and the read/star changes (`changes.rs`) and undo in flight. `View` has no GTK and decides what each late database result may change, and what a removed feed or folder takes with it; it is unit-tested on its own. `articles`, `sidebar`, `reader`, `keys` and `theme` add methods to `Ui`. `sidebar` also builds the sidebar's context menu: which commands an entry has and which apply now is a pure function, unit-tested; the menu is one `gtk::PopoverMenu` filled from a `gio::Menu` with a fresh `sidebar.` action group each time it opens, closed with its actions dropped whenever the library is read again (an entry's ID may since belong to another feed or folder), and its commands open the feed and folder forms and confirmations (`dialogs::add_feed`, `dialogs::new_folder`, `dialogs::edit`, `dialogs::remove`). Feeds and folders move by drag and drop: each row is a drag source carrying its `Scope` as text, the list is the drop target, and where a drop lands is another pure function (`destination`), unit-tested; `widgets` has small constructors; `tests` holds the desktop smoke test (only with `test-support`). |
-| `dialogs` | Feed and folder forms (a reusable `Form`: an `adw::Dialog` of preference rows that stays open across attempts to show errors), OPML import/export, content filters, settings, shortcuts and about. |
+| `ui` | The main window. `Ui` coordinates: it owns the panes (`Header`, `SidebarPane`, `ListPane`, `ReaderPane`), each holding its own widgets, and a `View` (`view.rs`) with what is shown: view and page, the articles on it, the open article, collapsed folders, and the read/star changes (`changes.rs`) and undo in flight. `View` has no GTK and decides what each late database result may change, and what a removed feed or folder takes with it; it is unit-tested on its own. `articles`, `sidebar`, `reader`, `keys` and `theme` add methods to `Ui`. `sidebar` and `articles` also build the context menus of sidebar entries and articles: which commands a row has and which apply now are pure functions, unit-tested; `context_menu` opens either menu on a right click or the Menu key and fills its one `gtk::PopoverMenu` from a `gio::Menu` with a fresh action group (`sidebar.`, `article.`) each time. The sidebar's menu is closed with its actions dropped whenever the library is read again (an entry's ID may since belong to another feed or folder), the article menu whenever the list is; the sidebar's commands open the feed and folder forms and confirmations (`dialogs::add_feed`, `dialogs::new_folder`, `dialogs::edit`, `dialogs::remove`). Feeds and folders move by drag and drop: each row is a drag source carrying its `Scope` as text, the list is the drop target, and where a drop lands is another pure function (`destination`), unit-tested; `widgets` has small constructors; `tests` holds the desktop smoke test (only with `test-support`). |
+| `dialogs` | Feed and folder forms (a reusable `Form`: an `adw::Dialog` with a title, labeled fields styled in `style.css`, and its actions at the bottom; it stays open across attempts to show errors), OPML import/export, content filters, settings, shortcuts and about. |
 
 ## Data flow
 
@@ -83,7 +83,7 @@ this client, and are not covered.
 The library is `omafeed.db` in the data directory (`$XDG_DATA_HOME/omafeed`, or
 `$OMAFEED_HOME/data`). The schema version is SQLite's `user_version`; migration `n` upgrades
 version `n` to `n + 1`, each in its own transaction. The upgrades to versions 2 and 3
-recompute article text from stored HTML; the upgrade to version 4 adds feed revisions. A database from a newer Omafeed is
+recompute article text from stored HTML; the upgrade to version 4 adds feed revisions. A database from a newer omafeed is
 refused, not modified.
 
 Each feed has a `revision`, drawn from a counter in the one-row `meta` table whenever a feed
@@ -147,7 +147,7 @@ These are properties of the current design, not promises. Change them deliberate
   was edited, removed or replaced.
 - Unit tests next to the code, notably `ingest/schedule.rs` (when feeds are due), `http.rs`
   and `util.rs` (the network policy), and the app's `ui/view.rs` and `ui/changes.rs` (what late
-  database results may change on screen) and `ui/sidebar.rs` (the context menu's commands).
+  database results may change on screen) and `ui/sidebar.rs` and `ui/articles.rs` (the context menus' commands).
 - `crates/omafeed-core/tests/files.rs`: frozen database fixtures from every schema version and
   settings files, which must keep opening (`tests/fixtures/`).
 - `crates/omafeed-core/tests/fuzzy_speed.rs`: ignored search benchmarks.

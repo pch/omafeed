@@ -1,4 +1,4 @@
-//! Where Omafeed keeps its files, the user's settings, and the reader's colors.
+//! Where omafeed keeps its files, the user's settings, and the reader's colors.
 mod palette;
 mod paths;
 mod settings;

@@ -1,4 +1,4 @@
-//! Files written by earlier Omafeed versions: databases at every schema version, and settings.
+//! Files written by earlier omafeed versions: databases at every schema version, and settings.
 //!
 //! The fixtures in `tests/fixtures/` are frozen copies of what those versions wrote. Never edit
 //! them to make a test pass; a failure here means existing users' files would break.
@@ -171,7 +171,7 @@ fn a_database_from_a_newer_version_is_refused_and_left_alone() {
     ));
     assert_eq!(
         error.to_string(),
-        "Database was created by a newer Omafeed version"
+        "Database was created by a newer omafeed version"
     );
     assert_eq!(user_version(&path), current + 1);
 }
@@ -184,7 +184,7 @@ fn paths(dir: &Path) -> Paths {
     }
 }
 
-/// Load a settings fixture as Omafeed would find it in its config directory.
+/// Load a settings fixture as omafeed would find it in its config directory.
 fn load(name: &str) -> Settings {
     let dir = tempfile::tempdir().unwrap();
     std::fs::copy(

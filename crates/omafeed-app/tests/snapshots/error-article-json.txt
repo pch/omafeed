@@ -2,4 +2,4 @@ $ omafeed article 999 --json
 exit: 1
 --- stdout
 --- stderr
-Omafeed: No article with id 999
+omafeed: No article with id 999

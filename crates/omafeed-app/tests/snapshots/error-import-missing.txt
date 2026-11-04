@@ -2,4 +2,4 @@ $ omafeed import {home}/missing.opml
 exit: 1
 --- stdout
 --- stderr
-Omafeed: Read {home}/missing.opml: No such file or directory (os error 2)
+omafeed: Read {home}/missing.opml: No such file or directory (os error 2)

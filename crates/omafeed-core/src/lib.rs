@@ -1,4 +1,4 @@
-//! Omafeed's core, independent of GTK: the library database, getting feeds into it, article
+//! omafeed's core, independent of GTK: the library database, getting feeds into it, article
 //! text and the reader document, OPML, and settings.
 #![forbid(unsafe_code)]
 // Every public item says what it is for; keep it that way.

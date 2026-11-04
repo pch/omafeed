@@ -32,7 +32,7 @@ impl Db {
     pub fn set_filters(&self, patterns: Vec<String>) {
         let _ = self.sender.send(Box::new(move |s| {
             if let Err(e) = s.set_filters(&patterns) {
-                eprintln!("Omafeed: could not apply content filters: {e:#}");
+                eprintln!("omafeed: could not apply content filters: {e:#}");
             }
         }));
     }

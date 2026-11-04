@@ -2,62 +2,65 @@
 mod filters;
 mod library;
 
-use crate::ui::Ui;
+use crate::ui::{Ui, widgets::label};
 use adw::prelude::*;
 use gtk::{gio, glib};
 use omafeed_core::{Settings, config::Theme};
-use std::{cell::Cell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 pub use filters::filters;
 pub use library::{add_feed, edit, new_folder, remove};
 
-/// A dialog of grouped form rows under a header bar with Cancel and a suggested action. It
-/// stays open across attempts, so a failed save can show its error beside the fields, and
-/// closes when dropped.
+/// A form dialog in omafeed's own style: a title, labeled fields, and Cancel and a primary
+/// action at the bottom. It stays open across attempts, so a failed save can show its error
+/// beside the fields, and closes when dropped.
 struct Form {
     dialog: adw::Dialog,
-    fields: gtk::Box,
+    /// The title, an optional note, and the fields, in order.
+    body: gtk::Box,
     error: gtk::Label,
+    cancel: gtk::Button,
     save: gtk::Button,
     parent: gtk::Widget,
     responses: async_channel::Receiver<bool>,
     presented: Cell<bool>,
     closed: Rc<Cell<bool>>,
+    /// The widget to focus once the dialog is shown.
+    focus: RefCell<Option<gtk::Widget>>,
 }
 
 impl Form {
     fn new(parent: &impl IsA<gtk::Widget>, title: &str, save_label: &str) -> Self {
+        let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        root.add_css_class("form");
+        let body = gtk::Box::new(gtk::Orientation::Vertical, 16);
+        let heading = label(title, "form-title");
+        body.append(&heading);
+        root.append(&body);
+        let error = label("", "form-error");
+        error.set_wrap(true);
+        error.set_visible(false);
+        root.append(&error);
         let cancel = gtk::Button::with_label("Cancel");
+        cancel.add_css_class("flat");
         let save = gtk::Button::with_label(save_label);
         save.add_css_class("suggested-action");
-        let header = adw::HeaderBar::builder()
-            .show_start_title_buttons(false)
-            .show_end_title_buttons(false)
-            .build();
-        header.pack_start(&cancel);
-        header.pack_end(&save);
-        let groups = gtk::Box::new(gtk::Orientation::Vertical, 12);
-        groups.set_margin_top(12);
-        groups.set_margin_bottom(24);
-        groups.set_margin_start(24);
-        groups.set_margin_end(24);
-        let fields = gtk::Box::new(gtk::Orientation::Vertical, 24);
-        groups.append(&fields);
-        let error = gtk::Label::new(None);
-        error.set_wrap(true);
-        error.set_xalign(0.0);
-        error.add_css_class("error");
-        error.set_visible(false);
-        groups.append(&error);
-        let view = adw::ToolbarView::new();
-        view.add_top_bar(&header);
-        view.set_content(Some(&groups));
+        let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        actions.add_css_class("form-actions");
+        actions.set_halign(gtk::Align::End);
+        actions.append(&cancel);
+        actions.append(&save);
+        root.append(&actions);
         let dialog = adw::Dialog::builder()
             .title(title)
-            .content_width(520)
-            .child(&view)
+            .content_width(460)
+            .child(&root)
             .default_widget(&save)
             .build();
+        dialog.add_css_class("form-dialog");
         let (tx, responses) = async_channel::unbounded();
         let closed = Rc::new(Cell::new(false));
         save.connect_clicked(glib::clone!(
@@ -86,26 +89,97 @@ impl Form {
         ));
         Self {
             dialog,
-            fields,
+            body,
             error,
+            cancel,
             save,
             parent: parent.clone().upcast(),
             responses,
             presented: Cell::new(false),
             closed,
+            focus: RefCell::default(),
         }
     }
 
-    /// A new group of rows, with an optional title and description above it.
-    fn group(&self, title: &str, description: Option<&str>) -> adw::PreferencesGroup {
-        let group = adw::PreferencesGroup::builder()
-            .title(glib::markup_escape_text(title))
+    /// Only the primary action, for a dialog that has nothing to cancel.
+    fn without_cancel(self) -> Self {
+        self.cancel.set_visible(false);
+        self
+    }
+
+    /// Wider than the default, for content laid out in columns.
+    fn width(self, width: i32) -> Self {
+        self.dialog.set_content_width(width);
+        self
+    }
+
+    /// A line of explanation under the title.
+    fn note(&self, text: &str) {
+        let note = label(text, "form-note");
+        note.set_wrap(true);
+        note.set_margin_top(-8);
+        self.body.append(&note);
+    }
+
+    /// A heading over the fields that follow, for forms with several groups.
+    fn section(&self, title: &str) {
+        let heading = label(title, "form-section");
+        self.body.append(&heading);
+    }
+
+    /// Add `widget` below the fields so far.
+    fn append(&self, widget: &impl IsA<gtk::Widget>) {
+        self.body.append(widget);
+    }
+
+    /// `widget` with a label above it.
+    fn field(&self, title: &str, widget: &impl IsA<gtk::Widget>) {
+        let field = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        let caption = label(title, "form-label");
+        caption.set_mnemonic_widget(Some(widget));
+        field.append(&caption);
+        field.append(widget);
+        self.body.append(&field);
+    }
+
+    /// A text field that saves the form on Enter.
+    fn entry(&self, title: &str, value: &str) -> gtk::Entry {
+        let entry = gtk::Entry::builder()
+            .text(value)
+            .activates_default(true)
             .build();
-        if let Some(d) = description {
-            group.set_description(Some(&glib::markup_escape_text(d)));
+        self.field(title, &entry);
+        entry
+    }
+
+    /// A choice among `names`, starting at `selected`.
+    fn choice(&self, title: &str, names: &[&str], selected: usize) -> gtk::DropDown {
+        let dropdown = gtk::DropDown::from_strings(names);
+        dropdown.set_selected(u32::try_from(selected).unwrap_or(0));
+        self.field(title, &dropdown);
+        dropdown
+    }
+
+    /// A setting: its name, with an optional explanation, beside `control`.
+    fn setting(&self, title: &str, subtitle: Option<&str>, control: &impl IsA<gtk::Widget>) {
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        row.add_css_class("form-setting");
+        let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        text.set_hexpand(true);
+        text.set_valign(gtk::Align::Center);
+        text.append(&label(title, "form-setting-title"));
+        if let Some(s) = subtitle {
+            text.append(&label(s, "form-note"));
         }
-        self.fields.append(&group);
-        group
+        row.append(&text);
+        control.as_ref().set_valign(gtk::Align::Center);
+        row.append(control);
+        self.body.append(&row);
+    }
+
+    /// Focus `widget` when the form is shown.
+    fn focus(&self, widget: &impl IsA<gtk::Widget>) {
+        self.focus.replace(Some(widget.clone().upcast()));
     }
 
     /// Show an error below the fields, replacing any previous one.
@@ -115,7 +189,7 @@ impl Form {
     }
 
     /// Present the form, or bring it back for another attempt; returns true if the user
-    /// chose the suggested action, false once they cancel or close it.
+    /// chose the primary action, false once they cancel or close it.
     async fn run(&self) -> bool {
         if self.closed.get() {
             return false;
@@ -123,6 +197,9 @@ impl Form {
         self.save.set_sensitive(true);
         if !self.presented.replace(true) {
             self.dialog.present(Some(&self.parent));
+            if let Some(widget) = self.focus.take() {
+                self.dialog.set_focus(Some(&widget));
+            }
         }
         self.responses.recv().await.unwrap_or(false) && !self.closed.get()
     }
@@ -134,33 +211,6 @@ impl Drop for Form {
             self.dialog.close();
         }
     }
-}
-
-/// A text field that saves the form on Enter.
-fn entry_row(group: &adw::PreferencesGroup, title: &str, value: &str) -> adw::EntryRow {
-    let row = adw::EntryRow::builder()
-        .title(title)
-        .activates_default(true)
-        .build();
-    row.set_text(value);
-    group.add(&row);
-    row
-}
-
-/// A choice among `names`, starting at `selected`.
-fn combo_row(
-    group: &adw::PreferencesGroup,
-    title: &str,
-    names: &[&str],
-    selected: usize,
-) -> adw::ComboRow {
-    let row = adw::ComboRow::builder()
-        .title(title)
-        .model(&gtk::StringList::new(names))
-        .selected(u32::try_from(selected).unwrap_or(0))
-        .build();
-    group.add(&row);
-    row
 }
 
 /// Resolves once the dialog has fully closed, so its child can be detached safely.
@@ -233,7 +283,7 @@ pub fn export(u: Rc<Ui>) {
     glib::spawn_future_local(async move {
         let dialog = gtk::FileDialog::builder()
             .title("Export subscriptions")
-            .initial_name("Omafeed.opml")
+            .initial_name("omafeed.opml")
             .build();
         let Ok(file) = dialog.save_future(Some(&u.window)).await else {
             return;
@@ -261,35 +311,38 @@ pub fn settings(u: Rc<Ui>) {
     glib::spawn_future_local(async move {
         let form = Form::new(&u.window, "Settings", "Save");
         let current = u.settings.borrow().clone();
-        let reading = form.group("Reading", None);
+        form.section("READING");
         let sizes = Settings::FONT_SIZES;
-        let font = adw::SpinRow::with_range((*sizes.start()).into(), (*sizes.end()).into(), 1.0);
-        font.set_title("Text size");
+        let font = gtk::SpinButton::with_range((*sizes.start()).into(), (*sizes.end()).into(), 1.0);
         font.set_value(current.font_size.into());
-        reading.add(&font);
-        let images = adw::SwitchRow::builder()
-            .title("Load remote images")
-            .subtitle("When reading articles online")
-            .active(current.remote_images)
-            .build();
-        reading.add(&images);
+        form.setting("Text size", None, &font);
+        let images = gtk::Switch::builder().active(current.remote_images).build();
+        form.setting(
+            "Load remote images",
+            Some("When reading articles online"),
+            &images,
+        );
         let labels = Theme::ALL.map(Theme::label);
         let selected = Theme::ALL.iter().position(|t| *t == current.theme);
-        let theme = combo_row(&reading, "Appearance", &labels, selected.unwrap_or(0));
-        let feeds = form.group("Feeds", None);
+        let theme = gtk::DropDown::from_strings(&labels);
+        theme.set_selected(selected.unwrap_or(0) as u32);
+        form.setting("Appearance", None, &theme);
+        form.section("FEEDS");
         let minutes = Settings::REFRESH_MINUTES;
         let refresh =
-            adw::SpinRow::with_range((*minutes.start()).into(), (*minutes.end()).into(), 5.0);
-        refresh.set_title("Refresh every");
-        refresh.set_subtitle("Minutes, while Omafeed is open");
+            gtk::SpinButton::with_range((*minutes.start()).into(), (*minutes.end()).into(), 5.0);
         refresh.set_value(current.refresh_minutes.into());
-        feeds.add(&refresh);
+        form.setting(
+            "Refresh every",
+            Some("Minutes, while omafeed is open"),
+            &refresh,
+        );
         if !form.run().await {
             return;
         }
         let mut s = u.settings.borrow().clone();
-        s.font_size = font.value() as u32;
-        s.refresh_minutes = refresh.value() as u32;
+        s.font_size = font.value_as_int() as u32;
+        s.refresh_minutes = refresh.value_as_int() as u32;
         s.remote_images = images.is_active();
         s.theme = Theme::ALL
             .get(theme.selected() as usize)
@@ -299,35 +352,100 @@ pub fn settings(u: Rc<Ui>) {
     });
 }
 
-const SHORTCUTS: &str = "\
-J / K or ↓ / ↑   Next / previous article
-N   Next unread article
-M   Toggle read
-S   Toggle star
-O   Open original
-Space / Shift+Space   Scroll article
-Ctrl+R   Refresh
-Ctrl+F   Search
-Ctrl+N   Add feed
-Ctrl+Shift+N   New folder
-Menu / Shift+F10   Menu of the sidebar item
-Ctrl+Shift+A   Mark current view read
-Ctrl+Z   Undo bulk mark read
-Ctrl+Q   Quit
-?   Show shortcuts";
+/// The shortcuts dialog's columns: sections of actions, each with its keys. A key's `+`
+/// joins keys pressed together; several keys for one action are alternatives.
+/// An action and its keys.
+type Shortcut = (&'static str, &'static [&'static str]);
+/// A titled section of shortcuts.
+type Section = (&'static str, &'static [Shortcut]);
+
+const SHORTCUTS: [&[Section]; 2] = [
+    &[(
+        "READING",
+        &[
+            ("Next article", &["J", "↓"]),
+            ("Previous article", &["K", "↑"]),
+            ("Next unread article", &["N"]),
+            ("Scroll article", &["Space"]),
+            ("Scroll back", &["Shift+Space"]),
+            ("Toggle read", &["M"]),
+            ("Toggle star", &["S"]),
+            ("Open original", &["O"]),
+        ],
+    )],
+    &[
+        (
+            "LIBRARY",
+            &[
+                ("Refresh", &["Ctrl+R"]),
+                ("Search", &["Ctrl+F"]),
+                ("Add feed", &["Ctrl+N"]),
+                ("New folder", &["Ctrl+Shift+N"]),
+                ("Mark view as read", &["Ctrl+Shift+A"]),
+                ("Undo mark as read", &["Ctrl+Z"]),
+                ("Context menu", &["Menu", "Shift+F10"]),
+            ],
+        ),
+        (
+            "OMAFEED",
+            &[("Keyboard shortcuts", &["?"]), ("Quit", &["Ctrl+Q"])],
+        ),
+    ],
+];
+
+/// `keys` as key caps: alternatives apart, keys pressed together side by side.
+fn key_caps(keys: &[&str]) -> gtk::Box {
+    let caps = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    caps.set_valign(gtk::Align::Center);
+    for (i, alternative) in keys.iter().enumerate() {
+        if i > 0 {
+            caps.append(&label("or", "shortcut-or"));
+        }
+        let chord = gtk::Box::new(gtk::Orientation::Horizontal, 3);
+        for key in alternative.split('+') {
+            chord.append(&label(key, "keycap"));
+        }
+        caps.append(&chord);
+    }
+    caps
+}
 
 pub fn shortcuts(u: Rc<Ui>) {
-    let d = adw::AlertDialog::builder()
-        .heading("Keyboard shortcuts")
-        .body(SHORTCUTS)
-        .build();
-    d.add_response("ok", "Done");
-    d.present(Some(&u.window));
+    glib::spawn_future_local(async move {
+        let form = Form::new(&u.window, "Keyboard shortcuts", "Done")
+            .without_cancel()
+            .width(640);
+        let columns = gtk::Box::new(gtk::Orientation::Horizontal, 32);
+        columns.set_homogeneous(true);
+        for sections in SHORTCUTS {
+            let column = gtk::Box::new(gtk::Orientation::Vertical, 8);
+            for (i, (title, rows)) in sections.iter().enumerate() {
+                let heading = label(title, "form-section");
+                if i > 0 {
+                    heading.set_margin_top(18);
+                }
+                column.append(&heading);
+                for (action, keys) in *rows {
+                    let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+                    row.add_css_class("shortcut");
+                    let name = label(action, "shortcut-action");
+                    name.set_hexpand(true);
+                    name.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                    row.append(&name);
+                    row.append(&key_caps(keys));
+                    column.append(&row);
+                }
+            }
+            columns.append(&column);
+        }
+        form.append(&columns);
+        form.run().await;
+    });
 }
 
 pub fn about(u: Rc<Ui>) {
     let d = adw::AboutDialog::builder()
-        .application_name("Omafeed")
+        .application_name("omafeed")
         .application_icon(crate::APP_ID)
         .developer_name("pch")
         .version(env!("CARGO_PKG_VERSION"))

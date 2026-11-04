@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=Omafeed
+Name=omafeed
 GenericName=RSS Reader
 Comment=A quiet home for your feeds
 Exec=omafeed
