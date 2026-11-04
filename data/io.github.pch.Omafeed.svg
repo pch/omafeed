@@ -1,28 +1,31 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
  <defs>
   <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-   <stop offset="0" stop-color="#3a6f5b"/>
-   <stop offset="1" stop-color="#17332a"/>
+   <stop offset="0" stop-color="#ff8a5b"/>
+   <stop offset=".5" stop-color="#d9467a"/>
+   <stop offset="1" stop-color="#5a3fd6"/>
   </linearGradient>
-  <linearGradient id="shine" x1="0" y1="0" x2="0" y2="1">
-   <stop offset="0" stop-color="#fff" stop-opacity=".16"/>
-   <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+  <linearGradient id="card" x1="0" y1="0" x2="1" y2="1">
+   <stop offset="0" stop-color="#fff" stop-opacity=".38"/>
+   <stop offset="1" stop-color="#fff" stop-opacity=".1"/>
   </linearGradient>
-  <linearGradient id="page" x1="0" y1="0" x2="0" y2="1">
-   <stop offset="0" stop-color="#fbf8f1"/>
-   <stop offset="1" stop-color="#ebe6da"/>
+  <linearGradient id="edge" x1="0" y1="0" x2="1" y2="1">
+   <stop offset="0" stop-color="#fff" stop-opacity=".9"/>
+   <stop offset="1" stop-color="#fff" stop-opacity=".12"/>
   </linearGradient>
-  <linearGradient id="wave" x1="0" y1="1" x2="1" y2="0">
-   <stop offset="0" stop-color="#e8613a"/>
-   <stop offset="1" stop-color="#f7b24a"/>
-  </linearGradient>
+  <filter id="blur" x="-50%" y="-50%" width="200%" height="200%">
+   <feGaussianBlur stdDeviation="7"/>
+  </filter>
+  <clipPath id="glass">
+   <rect x="28" y="28" width="72" height="72" rx="20"/>
+  </clipPath>
  </defs>
  <rect x="8" y="8" width="112" height="112" rx="28" fill="url(#bg)"/>
- <path d="M36 8h56a28 28 0 0 1 28 28v8C92 30 52 26 8 40v-4A28 28 0 0 1 36 8z" fill="url(#shine)"/>
- <rect x="34" y="26" width="64" height="76" rx="11" fill="#9cc4ad" opacity=".55" transform="rotate(-9 66 64)"/>
- <rect x="32" y="31" width="64" height="76" rx="11" fill="#000" opacity=".22"/>
- <rect x="32" y="28" width="64" height="76" rx="11" fill="url(#page)"/>
- <path d="M44 42h40M44 51h26" stroke="#b7c4ba" stroke-width="5" stroke-linecap="round"/>
- <circle cx="48.5" cy="87.5" r="5.5" fill="url(#wave)"/>
- <path d="M47 71a17 17 0 0 1 18 18M47 59a29 29 0 0 1 30 30" fill="none" stroke="url(#wave)" stroke-width="6.5" stroke-linecap="round"/>
+ <circle cx="94" cy="36" r="18" fill="#ffd36e"/>
+ <g clip-path="url(#glass)">
+  <circle cx="94" cy="36" r="18" fill="#ffd36e" filter="url(#blur)"/>
+ </g>
+ <rect x="28" y="28" width="72" height="72" rx="20" fill="url(#card)" stroke="url(#edge)" stroke-width="1.5"/>
+ <circle cx="46" cy="82" r="6.5" fill="#fff"/>
+ <path d="M46 62A20 20 0 0 1 66 82M46 46A36 36 0 0 1 82 82" fill="none" stroke="#fff" stroke-width="8" stroke-linecap="round"/>
 </svg>
