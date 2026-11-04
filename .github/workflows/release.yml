@@ -1,124 +1,226 @@
 name: Release
 
+# A vX.Y.Z tag on main builds and publishes a release: CI on the tagged
+# commit, the Linux archives with their DEB and RPM packages, and the Arch
+# package and recipe, with the reviewed notes in
+# packaging/release-notes/vX.Y.Z.md. Run it by hand to rehearse a tag
+# (publish off) or to rebuild one (publish on); packaging/RELEASING.md has the
+# details.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing stable tag to build (for example v0.2.5)
+        type: string
+        required: true
+      publish:
+        description: Publish to the tag's GitHub release once every check passes
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
-
-env:
-  CARGO_TERM_COLOR: always
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
-  ci:
-    uses: ./.github/workflows/ci.yml
-
-  build:
-    name: Build release artifacts (x86_64)
-    needs: ci
-    runs-on: ubuntu-latest
-    container: archlinux:base-devel
-    timeout-minutes: 45
+  prepare:
+    name: Check the tag and its release notes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      sha: ${{ steps.tag.outputs.sha }}
+      version: ${{ steps.tag.outputs.version }}
+      latest: ${{ steps.tag.outputs.latest }}
     steps:
-      - name: Install dependencies
-        run: pacman -Syu --noconfirm --needed rust git gtk4 libadwaita webkitgtk-6.0 pkgconf
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Check tag matches Cargo version
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Stable tag on main, matching Cargo.toml
+        id: tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "Tag $GITHUB_REF_NAME does not match Cargo version $version"
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::$RELEASE_TAG is not a stable vX.Y.Z tag"; exit 1; }
+          sha=$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")
+          version=$(git show "$sha:Cargo.toml" | sed -n 's/^version = "\(.*\)"/\1/p' | head -n1)
+          test "$RELEASE_TAG" = "v$version" || { echo "::error::$RELEASE_TAG does not match Cargo version $version"; exit 1; }
+          git merge-base --is-ancestor "$sha" origin/main || { echo "::error::$RELEASE_TAG is not on main"; exit 1; }
+          # Only the newest stable tag becomes the Latest release, which
+          # the README's releases/latest/download/... links follow.
+          newest=$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1)
+          {
+            echo "tag=$RELEASE_TAG"
+            echo "sha=$sha"
+            echo "version=$version"
+            echo "latest=$([ "$RELEASE_TAG" = "$newest" ] && echo true || echo false)"
+          } >> "$GITHUB_OUTPUT"
+      # A tag push reads the notes from the tagged commit; a manual run from
+      # the selected branch, so notes can be written for an existing tag
+      # without moving it.
+      - name: Reviewed release notes
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          notes="packaging/release-notes/$RELEASE_TAG.md"
+          if ! grep -q '[^[:space:]]' "$notes" 2>/dev/null; then
+            echo "::error::Write $notes before releasing."
             exit 1
           fi
-          echo "VERSION=$version" >> "$GITHUB_ENV"
-      - name: Build and stage
-        run: |
-          make build
-          make install DESTDIR="$PWD/stage" PREFIX=/usr
-      - name: Package
-        run: |
-          mkdir dist
-          name="omafeed-$VERSION-$(uname -m)-linux"
-          tar -C stage -czf "dist/$name.tar.gz" usr
-          # Fill the source checksum into the release PKGBUILD.
-          curl -fsSL "https://github.com/$GITHUB_REPOSITORY/archive/refs/tags/$GITHUB_REF_NAME.tar.gz" -o source.tar.gz
-          sum=$(sha256sum source.tar.gz | cut -d' ' -f1)
-          sed -e "s/^pkgver=.*/pkgver=$VERSION/" -e "s/^sha256sums=.*/sha256sums=('$sum')/" \
-            packaging/omafeed/PKGBUILD > dist/PKGBUILD
+          mkdir -p "$RUNNER_TEMP/notes"
+          cp "$notes" "$RUNNER_TEMP/notes/notes.md"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: dist-x86_64
-          path: dist/
+          name: release-notes
+          path: ${{ runner.temp }}/notes/notes.md
           if-no-files-found: error
 
-  # Arch Linux has no official aarch64 container image, and Ubuntu 24.04's
-  # libadwaita is older than 1.6, so build on Debian 13. The binary links the
-  # same GTK, libadwaita and WebKitGTK sonames as Arch Linux ARM.
-  build-aarch64:
-    name: Build release artifacts (aarch64)
-    needs: ci
-    runs-on: ubuntu-24.04-arm
-    container: debian:13
-    timeout-minutes: 60
+  ci:
+    needs: prepare
+    uses: ./.github/workflows/ci.yml
+    with:
+      source-ref: ${{ needs.prepare.outputs.sha }}
+
+  # Linux archives (linux-archive-*) and their DEB and RPM packages
+  # (native-packages), installed and run on each supported system.
+  packages:
+    needs: prepare
+    permissions:
+      contents: write
+    uses: ./.github/workflows/packaging.yml
+    with:
+      source-ref: ${{ needs.prepare.outputs.sha }}
+
+  arch:
+    name: Arch package and recipe
+    needs: prepare
+    runs-on: ubuntu-24.04
+    container: archlinux:base-devel
+    timeout-minutes: 45
+    env:
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+      VERSION: ${{ needs.prepare.outputs.version }}
     steps:
       - name: Install dependencies
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends build-essential ca-certificates curl git pkg-config \
-            libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+        run: pacman -Syu --noconfirm --needed rust git gtk4 libadwaita webkitgtk-6.0 pkgconf namcap
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Check tag matches Cargo version
+        with:
+          persist-credentials: false
+      # The recipe builds the tag's source archive, as Arch and Omarchy users
+      # do, with its checksum filled in.
+      - name: Build, install, run and remove
         run: |
-          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "Tag $GITHUB_REF_NAME does not match Cargo version $version"
-            exit 1
-          fi
-          echo "VERSION=$version" >> "$GITHUB_ENV"
-      - name: Build and stage
-        run: |
-          make build
-          make install DESTDIR="$PWD/stage" PREFIX=/usr
-          # The command line loads GTK without a display, so this checks the libraries link.
-          stage/usr/bin/omafeed --version
-      - name: Package
-        run: |
-          mkdir dist
-          tar -C stage -czf "dist/omafeed-$VERSION-$(uname -m)-linux.tar.gz" usr
+          mkdir -p dist/arch dist/upload
+          curl --fail --location --retry 3 -o dist/arch/source.tar.gz \
+            "https://github.com/$GITHUB_REPOSITORY/archive/refs/tags/$RELEASE_TAG.tar.gz"
+          sum=$(sha256sum dist/arch/source.tar.gz | cut -d' ' -f1)
+          rm dist/arch/source.tar.gz
+          sed -e "s/^pkgver=.*/pkgver=$VERSION/" -e "s/^sha256sums=.*/sha256sums=('$sum')/" \
+            packaging/omafeed/PKGBUILD > dist/arch/PKGBUILD
+          useradd -m builder
+          chown -R builder dist
+          # CI runs the tests on this commit; check() stays in the recipe for
+          # anyone building it themselves.
+          su builder -c "cd '$GITHUB_WORKSPACE/dist/arch' && makepkg --noconfirm --nocheck && makepkg --printsrcinfo > .SRCINFO"
+          # namcap always exits 0; its errors (E:) fail the release, warnings don't.
+          namcap dist/arch/PKGBUILD dist/arch/*.pkg.tar.zst | tee namcap.txt
+          if grep -q ' E: ' namcap.txt; then exit 1; fi
+          pacman -U --noconfirm dist/arch/*.pkg.tar.zst
+          test "$(omafeed --version)" = "omafeed $VERSION"
+          OMAFEED_HOME=$(mktemp -d) omafeed status
+          pacman -R --noconfirm omafeed
+          test ! -e /usr/bin/omafeed
+          cp dist/arch/*.pkg.tar.zst dist/arch/PKGBUILD dist/upload/
+          tar -C dist/arch -czf "dist/upload/omafeed-$VERSION-arch-recipe.tar.gz" PKGBUILD .SRCINFO
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: dist-aarch64
-          path: dist/
+          name: arch
+          path: dist/upload/*
           if-no-files-found: error
 
   publish:
-    name: Publish GitHub release
-    needs: [build, build-aarch64]
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    name: Publish the GitHub release
+    needs: [prepare, ci, packages, arch]
+    if: github.event_name == 'push' || inputs.publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: write
+    env:
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      LATEST: ${{ needs.prepare.outputs.latest }}
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: dist-*
+          pattern: linux-archive-*
           path: dist
           merge-multiple: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: arch
+          path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: native-packages
+          path: native-packages
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-notes
+          path: notes
       - name: Checksums
-        run: cd dist && sha256sum -- * > SHA256SUMS
-      - name: Create release
+        run: |
+          cp native-packages/packages/*/deb/*.deb native-packages/packages/*/rpm/*.rpm dist/
+          cd dist
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+          cp SHA256SUMS "$RUNNER_TEMP/expected-checksums.txt"
+      # A release that already exists (a rebuild) keeps its other assets; ones
+      # with the same names are replaced, and so is its description.
+      - name: Create or update the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* \
-            --repo "$GITHUB_REPOSITORY" \
-            --verify-tag \
-            --title "Omafeed ${GITHUB_REF_NAME#v}" \
-            --generate-notes \
-            --notes "Binaries are built on Arch Linux and need gtk4, libadwaita, and webkitgtk-6.0. The aarch64 build is made on Debian 13 and needs the same libraries. For an Arch package, download PKGBUILD and run makepkg -si."
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --notes-file notes/notes.md
+          else
+            gh release create "$RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "Omafeed $VERSION" --notes-file notes/notes.md --latest="$LATEST"
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: expected-checksums
+          path: ${{ runner.temp }}/expected-checksums.txt
+          if-no-files-found: error
+
+  verify:
+    name: Verify the published downloads
+    needs: [prepare, publish]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: expected-checksums
+          path: expected
+      - name: Download every asset and compare
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir assets
+          while read -r _ name; do
+            gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir assets --pattern "$name"
+          done < expected/expected-checksums.txt
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir assets --pattern SHA256SUMS --clobber
+          cmp assets/SHA256SUMS expected/expected-checksums.txt
+          (cd assets && sha256sum --check --strict SHA256SUMS)
+          echo "Every published asset matches the bytes uploaded." >> "$GITHUB_STEP_SUMMARY"

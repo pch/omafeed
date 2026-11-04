@@ -52,8 +52,8 @@ Existing tests are part of the contract. Move or adapt them; do not delete cover
 ### Command-line output
 
 Scripts and LLM agents parse what `omafeed` prints. Its stdout, stderr, exit codes, help text
-and JSON must stay byte for byte the same unless a change is intended and noted in
-[CHANGELOG.md](CHANGELOG.md).
+and JSON must stay byte for byte the same unless a change is intended and noted in the
+[release notes](packaging/release-notes/unreleased.md).
 
 `crates/omafeed-app/tests/cli_output.rs` compares every command with a transcript in
 `tests/snapshots/`. If one fails, your change altered output. If that was the point, rewrite the
@@ -80,7 +80,7 @@ in `tests/fixtures/settings/` are frozen.
 Migrations live in `crates/omafeed-core/src/store/schema.rs`. Append new ones; never change,
 reorder or remove an existing one, since libraries in the wild have already run it. A database
 from a newer version is refused, so adding a migration means older Omafeed versions will no
-longer open the library: say so in the changelog.
+longer open the library: say so in the release notes.
 
 Migrations that recompute text call `content::plain`. If you change what `plain` produces,
 copy the current version into the migration module and make the existing migrations call
@@ -94,6 +94,8 @@ wrote. Never edit them; add a new one for a new schema version.
 - One change per pull request. Keep moving files apart from changing behaviour.
 - Commit messages are imperative and say what changed for the user or the code, for example
   "Find imported folders by their trimmed names".
-- Update README.md, ARCHITECTURE.md, doc comments and the "Unreleased" section of
-  CHANGELOG.md in the same pull request.
+- Update README.md, ARCHITECTURE.md, doc comments and
+  [packaging/release-notes/unreleased.md](packaging/release-notes/unreleased.md) (user-visible
+  changes, as described in [packaging/RELEASING.md](packaging/RELEASING.md#writing-release-notes))
+  in the same pull request.
 - CI must pass before merging.
