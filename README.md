@@ -22,14 +22,6 @@ A native RSS reader for Linux and Omarchy, written in Rust. A three-pane library
 
 Download the package for your system from [GitHub Releases](https://github.com/pch/omafeed/releases). Every option keeps your articles and settings when you update or uninstall. Releases before 0.2.5 have only the archives and the `PKGBUILD`; check that release's notes for what they need.
 
-### Let your agent install it
-
-Point your coding agent to [GitHub Releases](https://github.com/pch/omafeed/releases) and tell it to install the latest version for your Linux distribution, or give it this prompt:
-
-```text
-Install the latest release of Omafeed for my Linux distribution from https://github.com/pch/omafeed/releases. Check my distribution and CPU architecture, choose a compatible installation method from the README, verify downloads against the release's SHA256SUMS, install it with its dependencies, and tell me how to launch it.
-```
-
 ### Omarchy
 
 Install `omafeed` from **Omarchy menu → Install → Package**, or from a terminal:
@@ -39,6 +31,14 @@ omarchy pkg add omafeed
 ```
 
 It updates with the rest of the system.
+
+### Let your agent install it
+
+Point your coding agent to [GitHub Releases](https://github.com/pch/omafeed/releases) and tell it to install the latest version for your Linux distribution, or give it this prompt:
+
+```text
+Install the latest release of Omafeed for my Linux distribution from https://github.com/pch/omafeed/releases. Check my distribution and CPU architecture, choose a compatible installation method from the README, verify downloads against the release's SHA256SUMS, install it with its dependencies, and tell me how to launch it.
+```
 
 ### Arch Linux
 
