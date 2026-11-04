@@ -56,11 +56,9 @@ pub fn client() -> Result<Client> {
 /// The client's configuration, for tests that add their own name resolution.
 pub(crate) fn builder() -> reqwest::ClientBuilder {
     Client::builder()
-        .user_agent(concat!(
-            "omafeed/",
-            env!("CARGO_PKG_VERSION"),
-            " (+https://github.com/pch/omafeed)"
-        ))
+        // Product and version only. Akamai's bot filtering (cbc.ca, for one) never answers a
+        // request whose agent mentions "github" or carries most `+https://…` contact URLs.
+        .user_agent(concat!("omafeed/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::custom(redirect))
