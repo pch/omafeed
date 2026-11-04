@@ -229,33 +229,48 @@ fn destination(lib: &Library, dragged: &Scope, onto: Option<&Scope>) -> Option<O
     (current != target).then_some(target)
 }
 
-/// Let a feed or folder row be dragged, carrying its scope as text and showing the row.
-fn drag_source(scope: &Scope, content: &gtk::Box) -> gtk::DragSource {
-    let source = gtk::DragSource::new();
-    source.set_actions(gdk::DragAction::MOVE);
-    source.set_content(Some(&gdk::ContentProvider::for_value(
-        &scope.to_string().to_value(),
-    )));
-    let content = content.downgrade();
-    source.connect_drag_begin(move |source, _| {
-        if let Some(content) = content.upgrade() {
-            let icon = gtk::WidgetPaintable::new(Some(&content));
-            source.set_icon(Some(&icon), 0, 0);
-        }
-    });
-    source
-}
-
-/// The feed or folder being dragged over a drop target, once its text has loaded.
-fn dragged(target: &gtk::DropTarget) -> Option<Scope> {
-    target.value()?.get::<String>().ok()?.parse().ok()
-}
-
 /// Distance (px) from the sidebar's top or bottom edge within which a drag scrolls it.
 const DRAG_SCROLL_EDGE: f64 = 32.0;
 const DRAG_SCROLL_STEP: f64 = 12.0;
 
 impl Ui {
+    /// Let a feed or folder row be dragged, carrying its scope as text and showing the row.
+    fn drag_source(self: &Rc<Self>, scope: &Scope, content: &gtk::Box) -> gtk::DragSource {
+        let source = gtk::DragSource::new();
+        source.set_actions(gdk::DragAction::MOVE);
+        source.set_content(Some(&gdk::ContentProvider::for_value(
+            &scope.to_string().to_value(),
+        )));
+        let content = content.downgrade();
+        let scope = scope.clone();
+        source.connect_drag_begin(glib::clone!(
+            #[weak(rename_to = u)]
+            self,
+            move |source, _| {
+                u.dragging.replace(Some(scope.clone()));
+                if let Some(content) = content.upgrade() {
+                    let icon = gtk::WidgetPaintable::new(Some(&content));
+                    source.set_icon(Some(&icon), 0, 0);
+                }
+            }
+        ));
+        source.connect_drag_end(glib::clone!(
+            #[weak(rename_to = u)]
+            self,
+            move |_, _, _| {
+                u.dragging.replace(None);
+            }
+        ));
+        source
+    }
+
+    /// The feed or folder a drop carries, if it is the one this window's drag started with
+    /// and the library has not been read again since: its ID may now be another's.
+    fn dragged(&self, value: Option<glib::Value>) -> Option<Scope> {
+        let scope: Scope = value?.get::<String>().ok()?.parse().ok()?;
+        (self.dragging.borrow().as_ref() == Some(&scope)).then_some(scope)
+    }
+
     /// The folder new feeds and folders go into: the one shown, or the shown feed's.
     pub(super) fn selected_folder(&self) -> Option<FolderId> {
         match &self.view.borrow().query.scope {
@@ -387,7 +402,7 @@ impl Ui {
             row.set_tooltip_text(Some(&tooltip(feed)));
         }
         if matches!(item.scope, Scope::Feed(_) | Scope::Folder(_)) {
-            row.add_controller(drag_source(&item.scope, &content));
+            row.add_controller(self.drag_source(&item.scope, &content));
         }
         Row {
             scope: item.scope,
@@ -505,10 +520,12 @@ impl Ui {
         menu.popup();
     }
 
-    /// Close the context menu and forget its actions. Called whenever the library is read
-    /// again: the entry it was opened on may have been removed meanwhile, and its ID reused
-    /// for another feed or folder, so its actions must not outlive what it showed.
+    /// Close the context menu and forget its actions, and forget a drag in progress. Called
+    /// whenever the library is read again: the entry the menu was opened on or the drag
+    /// started from may have been removed meanwhile, and its ID reused for another feed or
+    /// folder, so neither may act on it any more.
     pub(crate) fn close_sidebar_menu(&self) {
+        self.dragging.replace(None);
         self.side.menu.popdown();
         self.side
             .menu
@@ -607,7 +624,7 @@ impl Ui {
             gdk::DragAction::empty(),
             move |target, _, y| {
                 u.scroll_during_drag(y);
-                let to = dragged(target).and_then(|scope| {
+                let to = u.dragged(target.value()).and_then(|scope| {
                     destination(&u.library.borrow(), &scope, u.scope_at(y).as_ref())
                 });
                 u.highlight_drop(to);
@@ -630,7 +647,7 @@ impl Ui {
             false,
             move |_, value, _, y| {
                 u.highlight_drop(None);
-                let Some(scope) = value.get::<String>().ok().and_then(|t| t.parse().ok()) else {
+                let Some(scope) = u.dragged(Some(value.clone())) else {
                     return false;
                 };
                 let to = destination(&u.library.borrow(), &scope, u.scope_at(y).as_ref());

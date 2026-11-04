@@ -1,5 +1,6 @@
 //! Window actions, accelerators, and single-key reading shortcuts.
 use super::Ui;
+use adw::prelude::AdwApplicationWindowExt;
 use gtk::{gdk, gio, glib, prelude::*};
 use omafeed_core::ingest::Which;
 use std::rc::Rc;
@@ -81,7 +82,9 @@ impl Ui {
         let modified = gdk::ModifierType::CONTROL_MASK
             | gdk::ModifierType::ALT_MASK
             | gdk::ModifierType::SUPER_MASK;
-        if mods.intersects(modified) || self.typing() {
+        // A dialog's own controls (a list of choices, a switch) take keys while it is open.
+        let dialog = self.window.visible_dialog().is_some();
+        if mods.intersects(modified) || self.typing() || dialog {
             return glib::Propagation::Proceed;
         }
         match key {

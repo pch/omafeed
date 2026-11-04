@@ -309,6 +309,18 @@ async fn find_feed(
     }
     let choose = Form::new(window, "Choose a Feed", "Subscribe");
     let group = choose.group("", Some("This website offers several feeds."));
+    // Sites may offer a dozen: past a few, the list scrolls instead of outgrowing the screen.
+    let rows = gtk::ListBox::new();
+    rows.add_css_class("boxed-list");
+    rows.set_selection_mode(gtk::SelectionMode::None);
+    group.add(
+        &gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .propagate_natural_height(true)
+            .max_content_height(360)
+            .child(&rows)
+            .build(),
+    );
     let mut checks: Vec<gtk::CheckButton> = Vec::new();
     for f in &feeds {
         let check = gtk::CheckButton::new();
@@ -320,7 +332,7 @@ async fn find_feed(
             .activatable_widget(&check)
             .build();
         row.add_prefix(&check);
-        group.add(&row);
+        rows.append(&row);
         checks.push(check);
     }
     if !choose.run().await {

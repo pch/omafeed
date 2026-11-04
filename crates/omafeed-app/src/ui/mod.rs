@@ -252,6 +252,9 @@ pub struct Ui {
     sidebar_rows: RefCell<Vec<sidebar::Row>>,
     /// Decoded favicons by cache path; `None` records a missing icon.
     favicons: RefCell<HashMap<PathBuf, Option<gdk::Texture>>>,
+    /// The feed or folder being dragged in the sidebar, until the drag ends or the library
+    /// is read again.
+    dragging: RefCell<Option<Scope>>,
     /// Suppresses selection signals while lists are repopulated.
     rebuilding: Cell<bool>,
     busy: Cell<bool>,
@@ -349,6 +352,7 @@ impl Ui {
             article_rows: RefCell::default(),
             sidebar_rows: RefCell::default(),
             favicons: RefCell::default(),
+            dragging: RefCell::default(),
             rebuilding: Cell::new(false),
             busy: Cell::new(false),
             data_version: Cell::new(None),
