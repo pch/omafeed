@@ -17,6 +17,7 @@ A native RSS reader for Linux and Omarchy, written in Rust. A three-pane library
 - A context menu on articles: mark read or unread, star, mark the articles above or below as read, open in the browser, copy the link, and go to the article's feed.
 - Sanitized HTML articles with images, code blocks, adjustable typography, copy link, and open original.
 - Omarchy palette following across the top bar, menus, sidebar, and reader; light/dark modes, persisted window/pane sizes, keyboard navigation, and favicon caching.
+- A companion [Omarchy bar plugin](https://github.com/pch/omafeed-bar): an RSS icon that lights up when something is unread, with the newest articles one click away.
 - Conditional HTTP requests, bounded concurrency, timeouts, retry backoff, and visible per-feed errors.
 
 ## Install
@@ -32,6 +33,16 @@ omarchy pkg add omafeed
 ```
 
 It updates with the rest of the system.
+
+### Omarchy bar plugin
+
+[omafeed-bar](https://github.com/pch/omafeed-bar) puts an RSS icon in the Omarchy bar. Its dot lights up when something is unread; click it for the newest unread articles, filter them by feed, and open, star or mark them read without opening the window. Install omafeed first, then:
+
+```sh
+omarchy plugin add https://github.com/pch/omafeed-bar --enable
+```
+
+Remove it with `omarchy plugin remove io.github.pch.omafeed`. The plugin uses the command line below and never touches the database directly.
 
 ### Let your agent install it
 
@@ -226,6 +237,8 @@ omafeed read 42 43 44                                     # mark what was covere
 ```
 
 Feed content is written by strangers. A tool that hands article text to a model should treat it as untrusted data, never as instructions.
+
+The [Omarchy bar plugin](https://github.com/pch/omafeed-bar) is built on this output: it reads `feeds --json` and `articles --json` and runs `read`, `star`, `unstar` and `refresh`. Renaming or removing those fields breaks it.
 
 ## Keyboard
 
