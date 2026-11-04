@@ -5,7 +5,7 @@ use super::{
 };
 use crate::{
     Db, http,
-    model::{Download, Feed},
+    model::{Download, Feed, FeedId},
 };
 use anyhow::{Context, Result};
 use futures_util::{StreamExt, stream};
@@ -23,6 +23,33 @@ use tokio::sync::Semaphore;
 
 const CONCURRENT_FEEDS: usize = 8;
 const CONCURRENT_PER_HOST: usize = 2;
+
+/// Which feeds a refresh pass downloads.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Which {
+    /// Those whose refresh interval has elapsed.
+    Due,
+    /// Every feed, due or not.
+    All,
+    /// These feeds, due or not. IDs no longer in the library are skipped.
+    Only(Vec<FeedId>),
+}
+
+impl Which {
+    fn includes(&self, feed: &Feed, now: i64) -> bool {
+        match self {
+            Self::Due => feed.next_fetch <= now,
+            Self::All => true,
+            Self::Only(ids) => ids.contains(&feed.id),
+        }
+    }
+
+    /// Whether the user asked for it, rather than its interval coming round: retry failed
+    /// icons too.
+    fn forced(&self) -> bool {
+        *self != Self::Due
+    }
+}
 
 /// What a refresh pass reports as it goes.
 #[derive(Clone, Debug)]
@@ -104,11 +131,11 @@ impl Refresher {
         .context("Feed discovery timed out")?
     }
 
-    /// Refresh due feeds (or all with `force`). Overlapping calls return immediately.
+    /// Refresh the feeds `which` chooses. Overlapping calls return immediately.
     pub async fn refresh(
         &self,
         db: Db,
-        force: bool,
+        which: Which,
         minutes: u32,
         events: async_channel::Sender<Progress>,
     ) -> Result<()> {
@@ -127,7 +154,7 @@ impl Refresher {
             .call(|s| Ok(s.library()?.feeds))
             .await?
             .into_iter()
-            .filter(|f| force || f.next_fetch <= now)
+            .filter(|f| which.includes(f, now))
             .collect::<Vec<_>>();
         let total = feeds.len();
         let _ = events.send(Progress::Started(total)).await;
@@ -139,7 +166,7 @@ impl Refresher {
             db,
             client: self.client.clone(),
             cache: self.cache.clone(),
-            force,
+            force: which.forced(),
             minutes,
             now,
             hosts,
@@ -259,7 +286,7 @@ mod tests {
             cache: Some(dir.path().join("cache")),
         };
         let (tx, _rx) = async_channel::unbounded();
-        refresher.refresh(db, true, 30, tx).await.unwrap();
+        refresher.refresh(db, Which::All, 30, tx).await.unwrap();
     }
 
     fn feed_naming(site: &str) -> String {
@@ -314,7 +341,10 @@ mod tests {
         };
         for _ in 0..2 {
             let (tx, _rx) = async_channel::unbounded();
-            refresher.refresh(db.clone(), true, 30, tx).await.unwrap();
+            refresher
+                .refresh(db.clone(), Which::All, 30, tx)
+                .await
+                .unwrap();
         }
         let stored = db
             .call(|s| Ok(s.library()?.feeds[0].site_url.clone()))
@@ -337,5 +367,38 @@ mod tests {
             !hits.lock().unwrap().is_empty(),
             "the local site's icon was not looked for"
         );
+    }
+
+    #[tokio::test]
+    async fn a_refresh_of_chosen_feeds_downloads_only_those() {
+        let (server, hits) = server(|_| ok("application/rss+xml", &feed_naming(""))).await;
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(dir.path().join("test.db")).unwrap();
+        let (a, _b) = db
+            .call(move |s| {
+                Ok((
+                    s.add_feed("A", &format!("http://{server}/a"), None)?,
+                    s.add_feed("B", &format!("http://{server}/b"), None)?,
+                ))
+            })
+            .await
+            .unwrap();
+        let refresher = Refresher {
+            client: client(&[]),
+            busy: Arc::default(),
+            cache: None,
+        };
+        let (tx, rx) = async_channel::unbounded();
+        refresher
+            .refresh(db.clone(), Which::Only(vec![a, FeedId(999)]), 30, tx)
+            .await
+            .unwrap();
+        assert_eq!(*hits.lock().unwrap(), ["GET /a HTTP/1.1"]);
+        assert!(matches!(rx.recv().await, Ok(Progress::Started(1))));
+        // Both are now due, B never having been fetched and A forced: Due takes only B.
+        let (tx, _rx) = async_channel::unbounded();
+        refresher.refresh(db, Which::Due, 30, tx).await.unwrap();
+        assert_eq!(hits.lock().unwrap().len(), 2);
+        assert_eq!(hits.lock().unwrap()[1], "GET /b HTTP/1.1");
     }
 }

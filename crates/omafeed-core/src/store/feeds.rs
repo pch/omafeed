@@ -148,6 +148,20 @@ impl Store {
         })
     }
 
+    /// Move a feed to `folder`, or to the top level, keeping everything else about it; a
+    /// refresh in progress still saves what it downloads. Fails with
+    /// [`Error::FeedNotFound`] if there is no such feed.
+    pub fn move_feed(&self, id: FeedId, folder: Option<FolderId>) -> Result<()> {
+        let moved = self.conn.execute(
+            "UPDATE feeds SET folder = ?1 WHERE id = ?2",
+            params![folder, id],
+        )?;
+        if moved == 0 {
+            return Err(Error::FeedNotFound(id).into());
+        }
+        Ok(())
+    }
+
     /// Stored articles for a feed, and how many of them are starred.
     pub fn feed_article_counts(&self, id: FeedId) -> Result<(i64, i64)> {
         Ok(self.conn.query_row(

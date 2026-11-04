@@ -1,6 +1,7 @@
 //! Window actions, accelerators, and single-key reading shortcuts.
 use super::Ui;
 use gtk::{gdk, gio, glib, prelude::*};
+use omafeed_core::ingest::Which;
 use std::rc::Rc;
 use webkit6::prelude::*;
 
@@ -26,14 +27,21 @@ impl Ui {
 
     pub(super) fn actions(self: &Rc<Self>, app: &adw::Application) {
         use crate::dialogs;
-        self.action("library", dialogs::library);
+        self.action("add-feed", |u| {
+            let folder = u.selected_folder();
+            dialogs::add_feed(u, folder);
+        });
+        self.action("new-folder", |u| {
+            let folder = u.selected_folder();
+            dialogs::new_folder(u, folder);
+        });
         self.action("import", dialogs::import);
         self.action("export", dialogs::export);
         self.action("filters", dialogs::filters);
         self.action("settings", dialogs::settings);
         self.action("shortcuts", dialogs::shortcuts);
         self.action("about", dialogs::about);
-        self.action("refresh", |u| u.start_refresh(true));
+        self.action("refresh", |u| u.start_refresh(Which::All));
         self.action("search", |u| {
             u.header.search.grab_focus();
         });
@@ -45,7 +53,8 @@ impl Ui {
             ("search", "<Control>f"),
             ("undo", "<Control>z"),
             ("quit", "<Control>q"),
-            ("library", "<Control>l"),
+            ("add-feed", "<Control>n"),
+            ("new-folder", "<Control><Shift>n"),
             ("mark", "<Control><Shift>a"),
         ] {
             app.set_accels_for_action(&format!("win.{action}"), &[accel]);

@@ -117,7 +117,7 @@ omafeed
 
 OPML contains subscriptions, not historical articles or read/star state. The first refresh downloads the items currently published by each feed, initially unread. Use the checkmark above the article list to mark the current view read; Ctrl+Z undoes that action.
 
-Click **Manage library** (Ctrl+L) to create folders and subscribe using a website or feed URL. Omafeed finds the site's RSS, Atom, or JSON feed, lets you choose when there are several, and uses the feed's title if you leave the name blank. Select a feed or folder and choose **Edit / Move** to rename it, move it, or correct its URL without losing saved articles. Removing a feed deletes its articles after confirmation; removing a folder keeps them.
+Click **+** in the header to **Add feed** (Ctrl+N) or create a **New folder** (Ctrl+Shift+N); either goes into the folder you are viewing. Subscribe with a website or feed URL: Omafeed finds the site's RSS, Atom, or JSON feed, lets you choose when there are several, and uses the feed's title if you leave the name blank. Drag feeds and folders in the sidebar to move them: drop on a folder to put it inside, or on a smart view to move it to the top level. Right-click a feed or folder and choose **Edit…** to rename it, move it, or correct its URL without losing saved articles, or **Remove…** to remove it. **Refresh** in the same menu downloads just that feed, or every feed in the folder. Removing a feed deletes its articles after confirmation; removing a folder keeps them.
 
 Search looks through the current view, including nested folders. It forgives typos (`agentc` finds `agentic`), treats regular plural and singular forms alike (`box` and `boxes`, `story` and `stories`), and matches the start of the last word you type, so results appear as you go. Words shorter than five letters are not typo-corrected; the last word can match prefixes from three letters onward. Numbers are matched exactly, and a word that appears in your articles is never swapped for a similar one. Summary-only feeds show the summary; open the original for the rest. Podcast episodes appear as download links.
 
@@ -239,7 +239,8 @@ Feed content is written by strangers. A tool that hands article text to a model 
 | O | Open original in browser |
 | Ctrl+R | Refresh |
 | Ctrl+F | Search |
-| Ctrl+L | Manage library |
+| Ctrl+N | Add feed |
+| Ctrl+Shift+N | New folder |
 | Menu or Shift+F10 | Context menu of the focused sidebar item |
 | Ctrl+Shift+A | Mark current view read |
 | Ctrl+Z | Undo bulk mark read |

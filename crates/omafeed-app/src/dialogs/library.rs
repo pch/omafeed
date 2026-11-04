@@ -1,23 +1,15 @@
-//! "Manage library" window: add, edit, move, and remove feeds and folders.
-use super::{Form, confirm, wait_closed};
-use crate::ui::{Ui, widgets::margins};
+//! Feed and folder forms: subscribing, creating folders, editing and removing either.
+use super::{Form, combo_row, confirm, entry_row, wait_closed};
+use crate::ui::Ui;
 use adw::prelude::*;
 use gtk::glib;
 use omafeed_core::{
     Error,
-    ingest::discovery::Candidate,
+    ingest::{Which, discovery::Candidate},
     model::{FeedId, FolderId, Library, Scope, TreeItem},
     subscriptions,
 };
-use std::{cell::RefCell, rc::Rc};
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Action {
-    NewFolder,
-    AddFeed,
-    Edit,
-    Remove,
-}
+use std::rc::Rc;
 
 /// Folder choices as (id, "Parent / Child" path), starting with the top level.
 fn folder_paths(lib: &Library) -> Vec<(Option<FolderId>, String)> {
@@ -39,222 +31,62 @@ fn folder_paths(lib: &Library) -> Vec<(Option<FolderId>, String)> {
 }
 
 struct FolderPicker {
-    dropdown: gtk::DropDown,
+    row: adw::ComboRow,
     ids: Vec<Option<FolderId>>,
 }
 
 impl FolderPicker {
-    fn new(form: &Form, lib: &Library, selected: Option<FolderId>) -> Self {
-        let (ids, names): (Vec<_>, Vec<_>) = folder_paths(lib).into_iter().unzip();
+    /// A folder choice in `group`, leaving out `except` and the folders inside it, where a
+    /// folder cannot go.
+    fn new(
+        group: &adw::PreferencesGroup,
+        lib: &Library,
+        selected: Option<FolderId>,
+        except: Option<FolderId>,
+    ) -> Self {
+        let (ids, names): (Vec<_>, Vec<_>) = folder_paths(lib)
+            .into_iter()
+            .filter(|(id, _)| match (id, except) {
+                (Some(id), Some(except)) => {
+                    !lib.folder_path(Some(*id)).iter().any(|f| f.id == except)
+                }
+                _ => true,
+            })
+            .unzip();
         let names: Vec<&str> = names.iter().map(String::as_str).collect();
-        let dropdown = gtk::DropDown::from_strings(&names);
         let index = ids.iter().position(|id| *id == selected).unwrap_or(0);
-        dropdown.set_selected(index as u32);
-        form.labeled("Folder", &dropdown);
-        Self { dropdown, ids }
+        let row = combo_row(group, "Folder", &names, index);
+        Self { row, ids }
     }
 
     fn selected(&self) -> Option<FolderId> {
         self.ids
-            .get(self.dropdown.selected() as usize)
+            .get(self.row.selected() as usize)
             .copied()
             .flatten()
     }
 }
 
-struct Manager {
-    window: gtk::Window,
-    list: gtk::ListBox,
-    rows: Rc<RefCell<Vec<Scope>>>,
-    actions: async_channel::Receiver<Action>,
+/// Subscribe to a feed in `folder`, or at the top level.
+pub fn add_feed(u: Rc<Ui>, folder: Option<FolderId>) {
+    glib::spawn_future_local(async move {
+        let window = u.window.clone();
+        edit_feed(&u, &window, None, folder).await;
+    });
 }
 
-impl Manager {
-    fn new(u: &Rc<Ui>) -> Self {
-        let window = gtk::Window::builder()
-            .title("Manage library")
-            .transient_for(&u.window)
-            .modal(true)
-            .default_width(740)
-            .default_height(650)
-            .build();
-        let root = gtk::Box::new(gtk::Orientation::Vertical, 12);
-        margins(&root, 16);
-        let desc = gtk::Label::new(Some(
-            "Organize your subscriptions. Edit a feed to rename it or move it to another folder.",
-        ));
-        desc.set_wrap(true);
-        desc.set_xalign(0.0);
-        root.append(&desc);
-        let toolbar = gtk::FlowBox::builder()
-            .selection_mode(gtk::SelectionMode::None)
-            .min_children_per_line(1)
-            .max_children_per_line(4)
-            .column_spacing(8)
-            .row_spacing(8)
-            .build();
-        let (tx, actions) = async_channel::unbounded();
-        for (label, action) in [
-            ("New folder", Action::NewFolder),
-            ("Add feed", Action::AddFeed),
-            ("Edit / Move", Action::Edit),
-            ("Remove", Action::Remove),
-        ] {
-            let button = gtk::Button::with_label(label);
-            if action == Action::Remove {
-                button.add_css_class("destructive-action");
-            }
-            let tx = tx.clone();
-            button.connect_clicked(move |_| {
-                let _ = tx.try_send(action);
-            });
-            toolbar.insert(&button, -1);
-        }
-        root.append(&toolbar);
-        let list = gtk::ListBox::new();
-        list.add_css_class("boxed-list");
-        root.append(
-            &gtk::ScrolledWindow::builder()
-                .vexpand(true)
-                .child(&list)
-                .build(),
-        );
-        let detail = gtk::Label::new(None);
-        detail.set_wrap(true);
-        detail.set_xalign(0.0);
-        detail.set_selectable(true);
-        root.append(&detail);
-        let close = gtk::Button::with_label("Done");
-        root.append(&close);
-        window.set_child(Some(&root));
-        close.connect_clicked(glib::clone!(
-            #[weak]
-            window,
-            move |_| window.close()
-        ));
-        // Closing the channel ends the manager's event loop.
-        window.connect_close_request(move |_| {
-            tx.close();
-            glib::Propagation::Proceed
-        });
-        let rows = Rc::new(RefCell::new(Vec::new()));
-        list.connect_row_selected(glib::clone!(
-            #[weak]
-            u,
-            #[strong]
-            rows,
-            move |_, row| {
-                let scope = row.and_then(|r| rows.borrow().get(r.index() as usize).cloned());
-                let text = match scope {
-                    Some(Scope::Feed(id)) => u
-                        .library
-                        .borrow()
-                        .feed(id)
-                        .map(|f| match &f.error {
-                            Some(e) => format!("{}\nLast refresh: {e}", f.url),
-                            None => f.url.clone(),
-                        })
-                        .unwrap_or_default(),
-                    _ => String::new(),
-                };
-                detail.set_text(&text);
-            }
-        ));
-        Self {
-            window,
-            list,
-            rows,
-            actions,
-        }
-    }
-
-    fn populate(&self, lib: &Library) {
-        self.list.remove_all();
-        let mut rows = self.rows.borrow_mut();
-        rows.clear();
-        for (folder, path) in folder_paths(lib) {
-            if let Some(id) = folder {
-                let row = gtk::Label::new(Some(&path));
-                row.set_xalign(0.0);
-                margins(&row, 12);
-                row.set_margin_end(0);
-                row.add_css_class("heading");
-                self.list.append(&row);
-                rows.push(Scope::Folder(id));
-            }
-            for f in lib.feeds_in(folder) {
-                let warning = if f.error.is_some() { "  ⚠" } else { "" };
-                let row = gtk::Label::new(Some(&format!("    {}{warning}", f.title)));
-                row.set_xalign(0.0);
-                row.set_ellipsize(gtk::pango::EllipsizeMode::End);
-                row.set_margin_start(16);
-                row.set_margin_top(10);
-                row.set_margin_bottom(10);
-                self.list.append(&row);
-                rows.push(Scope::Feed(f.id));
-            }
-        }
-    }
-
-    fn selected(&self) -> Option<Scope> {
-        let row = self.list.selected_row()?;
-        self.rows.borrow().get(row.index() as usize).cloned()
-    }
+/// Create a folder inside `parent`, or at the top level.
+pub fn new_folder(u: Rc<Ui>, parent: Option<FolderId>) {
+    glib::spawn_future_local(async move {
+        let window = u.window.clone();
+        edit_folder(&u, &window, None, parent).await;
+    });
 }
 
-pub fn library(u: Rc<Ui>) {
-    glib::spawn_future_local(run(u));
-}
-
-async fn run(u: Rc<Ui>) {
-    let m = Manager::new(&u);
-    m.window.present();
-    loop {
-        match u.db.call(|s| s.library()).await {
-            Ok(lib) => {
-                u.close_sidebar_menu();
-                *u.library.borrow_mut() = lib;
-            }
-            Err(e) => {
-                u.error(e);
-                break;
-            }
-        }
-        m.populate(&u.library.borrow());
-        let Ok(action) = m.actions.recv().await else {
-            break;
-        };
-        let selected = m.selected();
-        // New items go into the selected folder, or the selected feed's folder.
-        let parent = match selected {
-            Some(Scope::Folder(id)) => Some(id),
-            Some(Scope::Feed(id)) => u.library.borrow().feed(id).and_then(|f| f.folder),
-            _ => None,
-        };
-        match (action, selected) {
-            (Action::Remove, Some(scope)) => {
-                if remove_confirmed(&u, &m.window, scope).await {
-                    u.reset_selection();
-                }
-            }
-            (Action::Remove | Action::Edit, None) => u.toast("Select a feed or folder first"),
-            (Action::Edit, Some(Scope::Folder(id))) => {
-                edit_folder(&u, &m.window, Some(id), None).await;
-            }
-            (Action::Edit, Some(Scope::Feed(id))) => edit_feed(&u, &m.window, Some(id), None).await,
-            (Action::NewFolder, _) => edit_folder(&u, &m.window, None, parent).await,
-            (Action::AddFeed, _) => edit_feed(&u, &m.window, None, parent).await,
-            (Action::Edit, Some(_)) => {}
-        }
-    }
-    m.window.close();
-    u.reload();
-}
-
-/// Edit a feed or folder from the main window, as "Edit / Move" does in the manager.
+/// Edit a feed or folder: rename it, move it, or change a feed's URL.
 pub fn edit(u: Rc<Ui>, scope: Scope) {
     glib::spawn_future_local(async move {
-        let window = u.window.clone().upcast::<gtk::Window>();
+        let window = u.window.clone();
         match scope {
             Scope::Feed(id) => edit_feed(&u, &window, Some(id), None).await,
             Scope::Folder(id) => edit_folder(&u, &window, Some(id), None).await,
@@ -263,11 +95,11 @@ pub fn edit(u: Rc<Ui>, scope: Scope) {
     });
 }
 
-/// Remove a feed or folder from the main window after the manager's confirmation, keeping
-/// the view shown unless it was the one removed.
+/// Remove a feed or folder after confirmation, keeping the view shown unless it was the one
+/// removed.
 pub fn remove(u: Rc<Ui>, scope: Scope) {
     glib::spawn_future_local(async move {
-        let window = u.window.clone().upcast::<gtk::Window>();
+        let window = u.window.clone();
         if remove_confirmed(&u, &window, scope.clone()).await {
             u.removed(&scope);
         }
@@ -275,7 +107,7 @@ pub fn remove(u: Rc<Ui>, scope: Scope) {
 }
 
 /// Ask, then remove a feed or folder. Returns whether it is gone.
-async fn remove_confirmed(u: &Rc<Ui>, window: &gtk::Window, scope: Scope) -> bool {
+async fn remove_confirmed(u: &Rc<Ui>, window: &adw::ApplicationWindow, scope: Scope) -> bool {
     let (heading, body) = match scope {
         Scope::Folder(_) => (
             "Remove folder?",
@@ -313,11 +145,10 @@ async fn remove_confirmed(u: &Rc<Ui>, window: &gtk::Window, scope: Scope) -> boo
 /// Create a folder (`id` is `None`) or rename/move an existing one.
 async fn edit_folder(
     u: &Rc<Ui>,
-    window: &gtk::Window,
+    window: &adw::ApplicationWindow,
     id: Option<FolderId>,
     parent: Option<FolderId>,
 ) {
-    let form = Form::new(window, "Folder");
     let (name, parent) = {
         let lib = u.library.borrow();
         match id.and_then(|id| lib.folder(id)) {
@@ -325,8 +156,14 @@ async fn edit_folder(
             None => (String::new(), parent),
         }
     };
-    let name_entry = form.entry("Name", &name);
-    let picker = FolderPicker::new(&form, &u.library.borrow(), parent);
+    let form = match id {
+        Some(_) => Form::new(window, "Edit Folder", "Save"),
+        None => Form::new(window, "New Folder", "Create"),
+    };
+    let group = form.group("", None);
+    let name_entry = entry_row(&group, "Name", &name);
+    let picker = FolderPicker::new(&group, &u.library.borrow(), parent, id);
+    name_entry.grab_focus();
     while form.run().await {
         let name = name_entry.text().to_string();
         let parent = picker.selected();
@@ -347,8 +184,12 @@ async fn edit_folder(
 }
 
 /// Subscribe (`id` is `None`) or edit a feed. New or changed URLs go through discovery.
-async fn edit_feed(u: &Rc<Ui>, window: &gtk::Window, id: Option<FeedId>, parent: Option<FolderId>) {
-    let form = Form::new(window, "Subscription");
+async fn edit_feed(
+    u: &Rc<Ui>,
+    window: &adw::ApplicationWindow,
+    id: Option<FeedId>,
+    parent: Option<FolderId>,
+) {
     let (title, original_url, parent) = {
         let lib = u.library.borrow();
         match id.and_then(|id| lib.feed(id)) {
@@ -356,13 +197,38 @@ async fn edit_feed(u: &Rc<Ui>, window: &gtk::Window, id: Option<FeedId>, parent:
             None => (String::new(), String::new(), parent),
         }
     };
-    let name_entry = form.entry("Name (optional)", &title);
-    name_entry.set_placeholder_text(Some("Use feed title"));
-    let url_entry = form.entry("Website or feed URL", &original_url);
-    let picker = FolderPicker::new(&form, &u.library.borrow(), parent);
+    let form = match id {
+        Some(_) => Form::new(window, "Edit Feed", "Save"),
+        None => Form::new(window, "Add Feed", "Add"),
+    };
+    let group = form.group(
+        "",
+        id.is_none().then_some(
+            "Paste a website or feed address. Omafeed finds the site's RSS, Atom, or JSON feed.",
+        ),
+    );
+    // A new feed starts from its address; an existing one is usually renamed.
+    let (url_entry, name_entry) = match id {
+        None => {
+            let url = entry_row(&group, "Website or feed URL", &original_url);
+            let name = entry_row(&group, "Name (optional, defaults to the feed's title)", "");
+            (url, name)
+        }
+        Some(_) => {
+            let name = entry_row(&group, "Name", &title);
+            let url = entry_row(&group, "Feed URL", &original_url);
+            (url, name)
+        }
+    };
+    let picker = FolderPicker::new(&group, &u.library.borrow(), parent, None);
+    if id.is_none() {
+        url_entry.grab_focus();
+    } else {
+        name_entry.grab_focus();
+    }
     while form.run().await {
         let mut name = name_entry.text().to_string();
-        let mut url = url_entry.text().to_string();
+        let mut url = url_entry.text().trim().to_string();
         let parent = picker.selected();
         if id.is_none() || url != original_url {
             let feed = match find_feed(u, window, url).await {
@@ -379,15 +245,15 @@ async fn edit_feed(u: &Rc<Ui>, window: &gtk::Window, id: Option<FeedId>, parent:
             }
         }
         let result = match id {
-            Some(id) => subscriptions::update(&u.db, id, name, url.clone(), parent).await,
-            None => subscriptions::subscribe(&u.db, name, url.clone(), parent)
+            Some(id) => subscriptions::update(&u.db, id, name, url.clone(), parent)
                 .await
-                .map(drop),
+                .map(|()| id),
+            None => subscriptions::subscribe(&u.db, name, url.clone(), parent).await,
         };
         match result {
-            Ok(()) => {
+            Ok(id) => {
                 u.reload();
-                u.start_refresh(true);
+                u.start_refresh(Which::Only(vec![id]));
                 return;
             }
             Err(e) if matches!(e.downcast_ref::<Error>(), Some(Error::DuplicateFeed(_))) => {
@@ -408,10 +274,9 @@ async fn edit_feed(u: &Rc<Ui>, window: &gtk::Window, id: Option<FeedId>, parent:
 /// choose when a site offers several. Returns `None` if the user cancelled.
 async fn find_feed(
     u: &Rc<Ui>,
-    window: &gtk::Window,
+    window: &adw::ApplicationWindow,
     url: String,
 ) -> Option<anyhow::Result<Candidate>> {
-    u.set_status("Looking for feeds…");
     let progress = adw::AlertDialog::builder()
         .heading("Looking for feeds…")
         .body("Checking the website for RSS, Atom, and JSON feeds.")
@@ -435,7 +300,6 @@ async fn find_feed(
         progress.close();
     }
     closed.await;
-    u.set_status("Ready");
     let mut feeds = match discovered? {
         Ok(feeds) => feeds,
         Err(e) => return Some(Err(e)),
@@ -443,17 +307,25 @@ async fn find_feed(
     if feeds.len() == 1 {
         return Some(Ok(feeds.remove(0)));
     }
-    let choose = Form::new(window, "Choose a feed").save_label("Subscribe");
-    let labels: Vec<String> = feeds
-        .iter()
-        .map(|f| format!("{} — {}", f.title, f.url))
-        .collect();
-    let names: Vec<&str> = labels.iter().map(String::as_str).collect();
-    let picker = gtk::DropDown::from_strings(&names);
-    choose.append(&picker);
+    let choose = Form::new(window, "Choose a Feed", "Subscribe");
+    let group = choose.group("", Some("This website offers several feeds."));
+    let mut checks: Vec<gtk::CheckButton> = Vec::new();
+    for f in &feeds {
+        let check = gtk::CheckButton::new();
+        check.set_group(checks.first());
+        check.set_active(checks.is_empty());
+        let row = adw::ActionRow::builder()
+            .title(glib::markup_escape_text(&f.title))
+            .subtitle(glib::markup_escape_text(&f.url))
+            .activatable_widget(&check)
+            .build();
+        row.add_prefix(&check);
+        group.add(&row);
+        checks.push(check);
+    }
     if !choose.run().await {
         return None;
     }
-    let index = (picker.selected() as usize).min(feeds.len() - 1);
+    let index = checks.iter().position(|c| c.is_active()).unwrap_or(0);
     Some(Ok(feeds.remove(index)))
 }

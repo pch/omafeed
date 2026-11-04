@@ -222,7 +222,7 @@ async fn refresh_racing_an_edit(response: String) {
             let (tx, _rx) = async_channel::unbounded();
             Refresher::new()
                 .unwrap()
-                .refresh(db, true, 30, tx)
+                .refresh(db, omafeed_core::ingest::Which::All, 30, tx)
                 .await
                 .unwrap();
         }
