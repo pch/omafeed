@@ -126,6 +126,9 @@ impl Ui {
         list.remove_all();
         self.list.next.set_sensitive(shown.has_next);
         self.list.previous.set_sensitive(shown.has_previous);
+        self.list
+            .pages
+            .set_visible(shown.has_next || shown.has_previous);
         let view = self.view.borrow();
         // Inside a single feed, repeating its name on every row is noise.
         let show_feed = !matches!(view.query.scope, Scope::Feed(_));

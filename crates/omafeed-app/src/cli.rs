@@ -238,7 +238,7 @@ async fn refresh(db: &Db, paths: &Paths, minutes: u32, json: bool) -> Result<()>
     });
     Refresher::new()?
         .with_cache(paths.cache.clone())
-        .refresh(db.clone(), true, minutes, tx)
+        .refresh(db.clone(), omafeed_core::ingest::Which::All, minutes, tx)
         .await?;
     let (feeds, totals) = logger.await?;
     if json {

@@ -90,7 +90,24 @@ fn folder_moves_reject_cycles_and_delete_preserves_contents() {
     let b = s.add_folder("B", Some(a)).unwrap();
     let c = s.add_folder("C", Some(b)).unwrap();
     assert!(s.move_folder(a, Some(c)).is_err());
+    // A name already taken among the new siblings is refused in words, not SQLite's.
+    let other = s.add_folder("C", None).unwrap();
+    let taken = s.move_folder(other, Some(b)).unwrap_err();
+    assert_eq!(
+        taken.to_string(),
+        "A folder with this name is already there"
+    );
+    assert!(s.rename_folder(other, "A").is_err());
+    s.delete_folder(other).unwrap();
     let f = s.add_feed("Blog", "https://example.org", Some(b)).unwrap();
+    // Moving a feed keeps its revision, so a refresh in progress still lands.
+    let revision = s.library().unwrap().feed(f).unwrap().revision;
+    s.move_feed(f, None).unwrap();
+    s.move_feed(f, Some(b)).unwrap();
+    let moved = s.library().unwrap();
+    assert_eq!(moved.feed(f).unwrap().folder, Some(b));
+    assert_eq!(moved.feed(f).unwrap().revision, revision);
+    assert!(s.move_feed(FeedId(999), None).is_err());
     s.delete_folder(b).unwrap();
     let lib = s.library().unwrap();
     assert_eq!(
@@ -295,7 +312,10 @@ async fn conditional_refresh_and_failures_keep_cached_articles() {
     let refresh = Refresher::new().unwrap();
     for _ in 0..4 {
         let (tx, _rx) = async_channel::unbounded();
-        refresh.refresh(db.clone(), true, 30, tx).await.unwrap();
+        refresh
+            .refresh(db.clone(), ingest::Which::All, 30, tx)
+            .await
+            .unwrap();
     }
     let lib = db.call(|s| s.library()).await.unwrap();
     assert!(lib.feeds[0].error.is_some());
@@ -1189,9 +1209,10 @@ fn callers_can_tell_the_errors_they_act_on_apart() {
         "validation"
     );
     assert_eq!(kind(s.add_folder(" ", None).unwrap_err()), "validation");
-    // Other constraints are not mistaken for a duplicate feed.
+    // Other constraints are not mistaken for a duplicate feed: a folder name taken beside
+    // it is refused in words.
     s.add_folder("Same", None).unwrap();
-    assert!(kind(s.add_folder("Same", None).unwrap_err()).starts_with("other: UNIQUE"));
+    assert_eq!(kind(s.add_folder("Same", None).unwrap_err()), "validation");
     let missing = s.set_article_states(&[ArticleId(404)], StatePatch::read(true));
     assert_eq!(kind(missing.unwrap_err()), "article 404");
     // A single article that is gone is left alone, without an error.

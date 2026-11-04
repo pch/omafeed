@@ -1,6 +1,6 @@
 //! Folders: creating, renaming, moving and removing them.
 use super::Store;
-use crate::model::FolderId;
+use crate::{Error, model::FolderId};
 use anyhow::Result;
 use rusqlite::params;
 
@@ -15,19 +15,23 @@ SELECT EXISTS(SELECT 1 FROM descendants WHERE id = ?2)";
 impl Store {
     /// Create a folder in `parent`, or at the top level.
     pub fn add_folder(&self, name: &str, parent: Option<FolderId>) -> Result<FolderId> {
-        self.conn.execute(
-            "INSERT INTO folders(name, parent) VALUES(?1, ?2)",
-            params![Self::name(name)?, parent],
-        )?;
+        self.conn
+            .execute(
+                "INSERT INTO folders(name, parent) VALUES(?1, ?2)",
+                params![Self::name(name)?, parent],
+            )
+            .map_err(Error::folder_name)?;
         Ok(FolderId(self.conn.last_insert_rowid()))
     }
 
     /// Rename a folder; the name must be unique among its siblings.
     pub fn rename_folder(&self, id: FolderId, name: &str) -> Result<()> {
-        self.conn.execute(
-            "UPDATE folders SET name = ?1 WHERE id = ?2",
-            params![Self::name(name)?, id],
-        )?;
+        self.conn
+            .execute(
+                "UPDATE folders SET name = ?1 WHERE id = ?2",
+                params![Self::name(name)?, id],
+            )
+            .map_err(Error::folder_name)?;
         Ok(())
     }
 
@@ -38,15 +42,17 @@ impl Store {
                 .conn
                 .query_row(FOLDER_CYCLE, params![id, p], |r| r.get::<_, bool>(0))?
         {
-            return Err(crate::Error::Validation(
+            return Err(Error::Validation(
                 "A folder cannot be moved inside itself or its children".into(),
             )
             .into());
         }
-        self.conn.execute(
-            "UPDATE folders SET parent = ?1 WHERE id = ?2",
-            params![parent, id],
-        )?;
+        self.conn
+            .execute(
+                "UPDATE folders SET parent = ?1 WHERE id = ?2",
+                params![parent, id],
+            )
+            .map_err(Error::folder_name)?;
         Ok(())
     }
 

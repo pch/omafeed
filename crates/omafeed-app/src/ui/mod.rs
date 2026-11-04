@@ -15,7 +15,7 @@ use gtk::{gdk, gio, glib};
 use omafeed_core::{
     Db, Paths, Settings,
     config::Palette,
-    ingest::{Progress, Refresher},
+    ingest::{Progress, Refresher, Which},
     model::{Library, Query, Scope},
 };
 use std::{
@@ -29,6 +29,8 @@ use std::{
 use view::Reloaded;
 use widgets::{icon, label, margins, scroll};
 
+/// The refresh button's tooltip when nothing has been refreshed yet.
+const REFRESH_TIP: &str = "Refresh feeds (Ctrl+R)";
 /// Widths (px) at which panes collapse; see [`Layout`].
 const NARROW_MAX_WIDTH: f64 = 849.0;
 const MEDIUM_MAX_WIDTH: f64 = 999.0;
@@ -54,7 +56,6 @@ struct Header {
     brand: gtk::Box,
     refresh: gtk::Button,
     sidebar_toggle: gtk::Button,
-    library: gtk::Button,
     search: gtk::SearchEntry,
 }
 
@@ -65,15 +66,23 @@ impl Header {
         brand.append(&gtk::Image::from_icon_name("application-rss+xml-symbolic"));
         brand.append(&label("Omafeed", "title-3"));
         bar.set_title_widget(Some(&brand));
-        let refresh = icon("view-refresh-symbolic", "Refresh feeds (Ctrl+R)");
+        let refresh = icon("view-refresh-symbolic", REFRESH_TIP);
         let sidebar_toggle = icon("sidebar-show-symbolic", "Show or hide subscriptions");
-        let library = icon("folder-new-symbolic", "Manage feeds and folders");
-        for b in [&refresh, &sidebar_toggle, &library] {
+        for b in [&refresh, &sidebar_toggle] {
             bar.pack_start(b);
         }
+        let add_menu = gio::Menu::new();
+        add_menu.append(Some("Add feed…"), Some("win.add-feed"));
+        add_menu.append(Some("New folder…"), Some("win.new-folder"));
+        bar.pack_start(
+            &gtk::MenuButton::builder()
+                .icon_name("list-add-symbolic")
+                .tooltip_text("Add a feed or folder")
+                .menu_model(&add_menu)
+                .build(),
+        );
         let menu = gio::Menu::new();
         for (title, action) in [
-            ("Manage library…", "win.library"),
             ("Import OPML…", "win.import"),
             ("Export OPML…", "win.export"),
             ("Content filters…", "win.filters"),
@@ -99,7 +108,6 @@ impl Header {
             brand,
             refresh,
             sidebar_toggle,
-            library,
             search,
         }
     }
@@ -108,7 +116,6 @@ impl Header {
 struct SidebarPane {
     root: gtk::Box,
     list: gtk::ListBox,
-    manage: gtk::Button,
     /// The context menu of feeds, folders and views, filled in each time it opens.
     menu: gtk::PopoverMenu,
 }
@@ -126,20 +133,12 @@ impl SidebarPane {
         let list = gtk::ListBox::new();
         list.add_css_class("navigation-sidebar");
         root.append(&scroll(&list));
-        let manage = gtk::Button::with_label("Manage library");
-        margins(&manage, 12);
-        root.append(&manage);
         // Parented to the box, not the list: a list box takes every child for a row.
         let menu = gtk::PopoverMenu::from_model(None::<&gio::MenuModel>);
         menu.set_has_arrow(false);
         menu.set_halign(gtk::Align::Start);
         menu.set_parent(&root);
-        Self {
-            root,
-            list,
-            manage,
-            menu,
-        }
+        Self { root, list, menu }
     }
 }
 
@@ -150,6 +149,8 @@ struct ListPane {
     unread: gtk::ToggleButton,
     mark: gtk::Button,
     list: gtk::ListBox,
+    /// The page buttons, shown only when there is more than one page.
+    pages: gtk::Box,
     previous: gtk::Button,
     next: gtk::Button,
 }
@@ -167,6 +168,18 @@ impl ListPane {
         let count = label("", "dim-label");
         count.set_hexpand(true);
         options.append(&count);
+        // Pages hold hundreds of articles, so these rarely show.
+        let previous = icon("go-previous-symbolic", "Previous page");
+        let next = icon("go-next-symbolic", "Next page");
+        let pages = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        pages.add_css_class("linked");
+        pages.add_css_class("pagination");
+        for b in [&previous, &next] {
+            b.set_sensitive(false);
+            pages.append(b);
+        }
+        pages.set_visible(false);
+        options.append(&pages);
         let unread = gtk::ToggleButton::with_label("Unread");
         unread.set_active(unread_only);
         options.append(&unread);
@@ -178,20 +191,6 @@ impl ListPane {
         list.add_css_class("articles");
         list.set_activate_on_single_click(true);
         root.append(&scroll(&list));
-        let previous = gtk::Button::with_label("Previous");
-        previous.set_tooltip_text(Some("Previous page"));
-        let next = gtk::Button::with_label("Next");
-        next.set_tooltip_text(Some("Next page"));
-        let pages = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        margins(&pages, 12);
-        pages.set_homogeneous(true);
-        pages.add_css_class("pagination");
-        for b in [&previous, &next] {
-            b.set_sensitive(false);
-            b.add_css_class("flat");
-            pages.append(b);
-        }
-        root.append(&pages);
         Self {
             root,
             heading,
@@ -199,6 +198,7 @@ impl ListPane {
             unread,
             mark,
             list,
+            pages,
             previous,
             next,
         }
@@ -237,7 +237,8 @@ pub struct Ui {
     reader: reader::ReaderPane,
     inner: gtk::Paned,
     outer: gtk::Paned,
-    status: gtk::Label,
+    /// The line along the top of the panes showing how far a refresh got.
+    refresh_line: gtk::ProgressBar,
     overlay: adw::ToastOverlay,
     narrow: adw::Breakpoint,
     css: gtk::CssProvider,
@@ -251,6 +252,9 @@ pub struct Ui {
     sidebar_rows: RefCell<Vec<sidebar::Row>>,
     /// Decoded favicons by cache path; `None` records a missing icon.
     favicons: RefCell<HashMap<PathBuf, Option<gdk::Texture>>>,
+    /// The feed or folder being dragged in the sidebar, until the drag ends or the library
+    /// is read again.
+    dragging: RefCell<Option<Scope>>,
     /// Suppresses selection signals while lists are repopulated.
     rebuilding: Cell<bool>,
     busy: Cell<bool>,
@@ -279,15 +283,20 @@ impl Ui {
         let inner = paned(settings.list_width, &list.root, &reader.root);
         let outer = paned(settings.sidebar_width, &side.root, &inner);
         outer.set_vexpand(true);
-        let status = label("Ready", "status-text");
-        status.set_margin_start(16);
-        status.set_margin_top(6);
-        status.set_margin_bottom(6);
-        status.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        // A thin line along the top of the panes while feeds refresh, over them rather than
+        // pushing them down.
+        let refresh_line = gtk::ProgressBar::builder()
+            .valign(gtk::Align::Start)
+            .can_target(false)
+            .visible(false)
+            .build();
+        refresh_line.add_css_class("refresh-progress");
+        let panes = gtk::Overlay::new();
+        panes.set_child(Some(&outer));
+        panes.add_overlay(&refresh_line);
         let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
         root.append(&header.bar);
-        root.append(&outer);
-        root.append(&status);
+        root.append(&panes);
         let overlay = adw::ToastOverlay::new();
         overlay.set_child(Some(&root));
         let window = adw::ApplicationWindow::builder()
@@ -332,7 +341,7 @@ impl Ui {
             reader,
             inner,
             outer,
-            status,
+            refresh_line,
             overlay,
             narrow,
             css,
@@ -343,6 +352,7 @@ impl Ui {
             article_rows: RefCell::default(),
             sidebar_rows: RefCell::default(),
             favicons: RefCell::default(),
+            dragging: RefCell::default(),
             rebuilding: Cell::new(false),
             busy: Cell::new(false),
             data_version: Cell::new(None),
@@ -360,7 +370,7 @@ impl Ui {
         ui.apply_layout();
         ui.window.present();
         ui.reload();
-        ui.start_refresh(false);
+        ui.start_refresh(Which::Due);
         ui
     }
 
@@ -393,17 +403,10 @@ impl Ui {
                 }
             }
         ));
-        for button in [&self.header.library, &self.side.manage] {
-            button.connect_clicked(clone!(
-                #[weak(rename_to = u)]
-                self,
-                move |_| crate::dialogs::library(u)
-            ));
-        }
         self.header.refresh.connect_clicked(clone!(
             #[weak(rename_to = u)]
             self,
-            move |_| u.start_refresh(true)
+            move |_| u.start_refresh(Which::All)
         ));
         self.header.search.connect_search_changed(clone!(
             #[weak(rename_to = u)]
@@ -488,6 +491,7 @@ impl Ui {
         ));
         self.connect_reader_signals();
         self.connect_sidebar_menu();
+        self.connect_sidebar_drop();
     }
 
     fn listen_for_progress(self: &Rc<Self>, events: async_channel::Receiver<Progress>) {
@@ -506,29 +510,23 @@ impl Ui {
         match event {
             Progress::Started(n) => {
                 self.busy.set(true);
-                self.header.refresh.set_sensitive(false);
+                // Most scheduled checks find nothing due; those pass without a trace.
                 if n > 0 {
-                    self.set_status(&format!("Refreshing {n} feeds…"));
+                    self.show_refreshing(0, n);
                 }
             }
-            Progress::Feed {
-                title,
-                error,
-                done,
-                total,
-            } => {
-                let suffix = if error.is_some() {
-                    " · unavailable"
-                } else {
-                    ""
-                };
-                self.set_status(&format!("{done}/{total} · {title}{suffix}"));
-            }
+            Progress::Feed { done, total, .. } => self.show_refreshing(done, total),
             Progress::Finished { total, failed } => {
-                self.busy.set(false);
-                self.header.refresh.set_sensitive(true);
+                self.refresh_stopped();
+                let refresh = &self.header.refresh;
                 if total > 0 {
-                    self.set_status(&format!("Refreshed {total} feeds · {failed} unavailable"));
+                    let feeds = if total == 1 { "feed" } else { "feeds" };
+                    let time = chrono::Local::now().format("%H:%M");
+                    let mut tip = format!("Refreshed {total} {feeds} at {time}");
+                    if failed > 0 {
+                        tip.push_str(&format!(" · {failed} unavailable"));
+                    }
+                    refresh.set_tooltip_text(Some(&format!("{tip}\n{REFRESH_TIP}")));
                     // Pick up newly downloaded favicons.
                     self.favicons.borrow_mut().clear();
                     self.reload();
@@ -537,13 +535,34 @@ impl Ui {
         }
     }
 
+    /// Back to idle after a refresh, finished or failed.
+    fn refresh_stopped(&self) {
+        self.busy.set(false);
+        self.header.refresh.set_icon_name("view-refresh-symbolic");
+        self.refresh_line.set_visible(false);
+    }
+
+    /// Show a refresh under way: a spinner in the refresh button, which tells how far it
+    /// got, and a progress line along the top of the panes.
+    fn show_refreshing(&self, done: usize, total: usize) {
+        let refresh = &self.header.refresh;
+        if !refresh.child().is_some_and(|c| c.is::<adw::Spinner>()) {
+            refresh.set_child(Some(&adw::Spinner::new()));
+        }
+        refresh.set_tooltip_text(Some(&format!("Refreshing feeds · {done} of {total}")));
+        #[expect(clippy::cast_precision_loss, reason = "feed counts")]
+        self.refresh_line
+            .set_fraction(done as f64 / total.max(1) as f64);
+        self.refresh_line.set_visible(true);
+    }
+
     fn schedule_refreshes(self: &Rc<Self>) {
         let weak = Rc::downgrade(self);
         glib::timeout_add_seconds_local(REFRESH_CHECK_SECONDS, move || {
             let Some(u) = weak.upgrade() else {
                 return glib::ControlFlow::Break;
             };
-            u.start_refresh(false);
+            u.start_refresh(Which::Due);
             glib::ControlFlow::Continue
         });
     }
@@ -671,13 +690,8 @@ impl Ui {
         self.overlay.add_toast(adw::Toast::new(text));
     }
 
-    pub fn set_status(&self, text: &str) {
-        self.status.set_text(text);
-    }
-
     pub fn error(&self, e: impl std::fmt::Display) {
         let text = e.to_string();
-        self.set_status(&text);
         self.toast(&text);
         eprintln!("{text}");
     }
@@ -802,7 +816,7 @@ impl Ui {
         task.await?
     }
 
-    pub fn start_refresh(self: &Rc<Self>, force: bool) {
+    pub fn start_refresh(self: &Rc<Self>, which: Which) {
         if self.busy.get() {
             return;
         }
@@ -812,15 +826,14 @@ impl Ui {
         let tx = self.progress.clone();
         let (err_tx, err_rx) = async_channel::bounded(1);
         self.runtime.spawn(async move {
-            if let Err(e) = refresher.refresh(db, force, minutes, tx).await {
+            if let Err(e) = refresher.refresh(db, which, minutes, tx).await {
                 let _ = err_tx.send(e.to_string()).await;
             }
         });
         let u = self.clone();
         glib::spawn_future_local(async move {
             if let Ok(e) = err_rx.recv().await {
-                u.busy.set(false);
-                u.header.refresh.set_sensitive(true);
+                u.refresh_stopped();
                 u.error(e);
             }
         });

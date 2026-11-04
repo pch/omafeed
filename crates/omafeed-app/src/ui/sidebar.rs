@@ -1,8 +1,11 @@
-//! Library sidebar: smart views, folders, and feeds with unread counts, and their context
-//! menu.
+//! Library sidebar: smart views, folders, and feeds with unread counts, their context menu,
+//! and moving feeds and folders by drag and drop.
 use super::{Ui, reader, widgets::icon, widgets::label};
 use gtk::{gdk, gio, glib, prelude::*};
-use omafeed_core::model::{Feed, FolderId, Library, Query, Scope, TreeItem};
+use omafeed_core::{
+    ingest::Which,
+    model::{Feed, FeedId, FolderId, Library, Query, Scope, TreeItem},
+};
 use std::rc::Rc;
 
 /// One sidebar entry before it becomes a widget.
@@ -102,6 +105,9 @@ pub(super) enum Command {
     CopyFeedUrl,
     CopyHomePageUrl,
     MarkRead,
+    Refresh,
+    AddFeed,
+    NewFolder,
     Edit,
     Remove,
 }
@@ -114,6 +120,9 @@ impl Command {
             Self::CopyFeedUrl => "copy-feed-url",
             Self::CopyHomePageUrl => "copy-home-page-url",
             Self::MarkRead => "mark-read",
+            Self::Refresh => "refresh",
+            Self::AddFeed => "add-feed",
+            Self::NewFolder => "new-folder",
             Self::Edit => "edit",
             Self::Remove => "remove",
         }
@@ -125,15 +134,34 @@ impl Command {
             Self::CopyFeedUrl => "Copy feed URL",
             Self::CopyHomePageUrl => "Copy home page URL",
             Self::MarkRead => "Mark all as read",
+            Self::Refresh => "Refresh",
+            Self::AddFeed => "Add feed here…",
+            Self::NewFolder => "New folder inside…",
             Self::Edit => "Edit…",
             Self::Remove => "Remove…",
         }
     }
 }
 
+/// The feeds a refresh of `scope` downloads: the feed, or every feed in the folder and the
+/// folders inside it.
+fn feeds_of(lib: &Library, scope: &Scope) -> Vec<FeedId> {
+    match scope {
+        Scope::Feed(id) => vec![*id],
+        Scope::Folder(id) => lib
+            .feeds
+            .iter()
+            .filter(|f| lib.folder_path(f.folder).iter().any(|p| p.id == *id))
+            .map(|f| f.id)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// The context menu of the sidebar entry for `scope`: sections of commands, each with
 /// whether it can be used now. Empty for a feed or folder no longer in the library.
-fn menu(scope: &Scope, lib: &Library) -> Vec<Vec<(Command, bool)>> {
+/// `refreshing` tells whether a refresh is under way, which leaves no room for another.
+fn menu(scope: &Scope, lib: &Library, refreshing: bool) -> Vec<Vec<(Command, bool)>> {
     // Smart views other than All Unread show no count, so they may always have unread ones.
     let unread = match scope {
         Scope::Unread => Some(lib.unread),
@@ -145,7 +173,11 @@ fn menu(scope: &Scope, lib: &Library) -> Vec<Vec<(Command, bool)>> {
         }
         _ => None,
     };
-    let mark = vec![(Command::MarkRead, unread.is_none_or(|n| n > 0))];
+    let mark = (Command::MarkRead, unread.is_none_or(|n| n > 0));
+    let refresh = (
+        Command::Refresh,
+        !refreshing && !feeds_of(lib, scope).is_empty(),
+    );
     let manage = vec![(Command::Edit, true), (Command::Remove, true)];
     match scope {
         Scope::Feed(id) => {
@@ -160,16 +192,94 @@ fn menu(scope: &Scope, lib: &Library) -> Vec<Vec<(Command, bool)>> {
                     (Command::CopyFeedUrl, true),
                     (Command::CopyHomePageUrl, home),
                 ],
-                mark,
+                vec![refresh, mark],
                 manage,
             ]
         }
-        Scope::Folder(_) => vec![mark, manage],
-        _ => vec![mark],
+        Scope::Folder(_) => vec![
+            vec![refresh, mark],
+            vec![(Command::AddFeed, true), (Command::NewFolder, true)],
+            manage,
+        ],
+        _ => vec![vec![mark]],
     }
 }
 
+/// Where dropping `dragged` on the sidebar entry `onto` moves it: into the folder dropped on,
+/// into the folder of the feed dropped on, or to the top level when dropped on a smart view
+/// or below the last entry. `None` if it would stay where it is, or if a folder would go
+/// inside itself.
+fn destination(lib: &Library, dragged: &Scope, onto: Option<&Scope>) -> Option<Option<FolderId>> {
+    let target = match onto {
+        Some(Scope::Folder(id)) => Some(*id),
+        Some(Scope::Feed(id)) => lib.feed(*id)?.folder,
+        _ => None,
+    };
+    let current = match dragged {
+        Scope::Feed(id) => lib.feed(*id)?.folder,
+        Scope::Folder(id) => {
+            let inside = lib.folder_path(target).iter().any(|f| f.id == *id);
+            if inside {
+                return None;
+            }
+            lib.folder(*id)?.parent
+        }
+        _ => return None,
+    };
+    (current != target).then_some(target)
+}
+
+/// Distance (px) from the sidebar's top or bottom edge within which a drag scrolls it.
+const DRAG_SCROLL_EDGE: f64 = 32.0;
+const DRAG_SCROLL_STEP: f64 = 12.0;
+
 impl Ui {
+    /// Let a feed or folder row be dragged, carrying its scope as text and showing the row.
+    fn drag_source(self: &Rc<Self>, scope: &Scope, content: &gtk::Box) -> gtk::DragSource {
+        let source = gtk::DragSource::new();
+        source.set_actions(gdk::DragAction::MOVE);
+        source.set_content(Some(&gdk::ContentProvider::for_value(
+            &scope.to_string().to_value(),
+        )));
+        let content = content.downgrade();
+        let scope = scope.clone();
+        source.connect_drag_begin(glib::clone!(
+            #[weak(rename_to = u)]
+            self,
+            move |source, _| {
+                u.dragging.replace(Some(scope.clone()));
+                if let Some(content) = content.upgrade() {
+                    let icon = gtk::WidgetPaintable::new(Some(&content));
+                    source.set_icon(Some(&icon), 0, 0);
+                }
+            }
+        ));
+        source.connect_drag_end(glib::clone!(
+            #[weak(rename_to = u)]
+            self,
+            move |_, _, _| {
+                u.dragging.replace(None);
+            }
+        ));
+        source
+    }
+
+    /// The feed or folder a drop carries, if it is the one this window's drag started with
+    /// and the library has not been read again since: its ID may now be another's.
+    fn dragged(&self, value: Option<glib::Value>) -> Option<Scope> {
+        let scope: Scope = value?.get::<String>().ok()?.parse().ok()?;
+        (self.dragging.borrow().as_ref() == Some(&scope)).then_some(scope)
+    }
+
+    /// The folder new feeds and folders go into: the one shown, or the shown feed's.
+    pub(super) fn selected_folder(&self) -> Option<FolderId> {
+        match &self.view.borrow().query.scope {
+            Scope::Folder(id) => Some(*id),
+            Scope::Feed(id) => self.library.borrow().feed(*id).and_then(|f| f.folder),
+            _ => None,
+        }
+    }
+
     fn sidebar_items(&self) -> Vec<Item> {
         visible(
             items(&self.library.borrow()),
@@ -291,6 +401,9 @@ impl Ui {
         if let Some(feed) = &item.feed {
             row.set_tooltip_text(Some(&tooltip(feed)));
         }
+        if matches!(item.scope, Scope::Feed(_) | Scope::Folder(_)) {
+            row.add_controller(self.drag_source(&item.scope, &content));
+        }
         Row {
             scope: item.scope,
             row,
@@ -357,7 +470,7 @@ impl Ui {
             };
             r.scope.clone()
         };
-        let sections = menu(&scope, &self.library.borrow());
+        let sections = menu(&scope, &self.library.borrow(), self.busy.get());
         if sections.is_empty() {
             return;
         }
@@ -407,10 +520,12 @@ impl Ui {
         menu.popup();
     }
 
-    /// Close the context menu and forget its actions. Called whenever the library is read
-    /// again: the entry it was opened on may have been removed meanwhile, and its ID reused
-    /// for another feed or folder, so its actions must not outlive what it showed.
+    /// Close the context menu and forget its actions, and forget a drag in progress. Called
+    /// whenever the library is read again: the entry the menu was opened on or the drag
+    /// started from may have been removed meanwhile, and its ID reused for another feed or
+    /// folder, so neither may act on it any more.
     pub(crate) fn close_sidebar_menu(&self) {
+        self.dragging.replace(None);
         self.side.menu.popdown();
         self.side
             .menu
@@ -432,10 +547,148 @@ impl Ui {
                 scope: scope.clone(),
                 ..Default::default()
             }),
+            (Command::Refresh, _) => {
+                let feeds = feeds_of(&self.library.borrow(), scope);
+                self.start_refresh(Which::Only(feeds));
+            }
+            (Command::AddFeed | Command::NewFolder, _) => {
+                let Scope::Folder(id) = scope else { return };
+                if command == Command::AddFeed {
+                    crate::dialogs::add_feed(self.clone(), Some(*id));
+                } else {
+                    crate::dialogs::new_folder(self.clone(), Some(*id));
+                }
+            }
             (Command::Edit, _) => crate::dialogs::edit(self.clone(), scope.clone()),
             (Command::Remove, _) => crate::dialogs::remove(self.clone(), scope.clone()),
             _ => {}
         }
+    }
+
+    /// The sidebar entry at `y` in the list's coordinates, if any.
+    fn scope_at(&self, y: f64) -> Option<Scope> {
+        #[expect(clippy::cast_possible_truncation, reason = "pixel coordinates")]
+        let row = self.side.list.row_at_y(y as i32)?;
+        let index = usize::try_from(row.index()).ok()?;
+        self.sidebar_rows
+            .borrow()
+            .get(index)
+            .map(|r| r.scope.clone())
+    }
+
+    /// Highlight where a drop would put the dragged entry: the folder's row, or the whole
+    /// list for the top level. Nothing for a drop that would not move it.
+    fn highlight_drop(&self, to: Option<Option<FolderId>>) {
+        let list = &self.side.list;
+        list.drag_unhighlight_row();
+        list.remove_css_class("drop-top-level");
+        match to {
+            Some(Some(folder)) => {
+                let rows = self.sidebar_rows.borrow();
+                if let Some(r) = rows.iter().find(|r| r.scope == Scope::Folder(folder)) {
+                    list.drag_highlight_row(&r.row);
+                }
+            }
+            Some(None) => list.add_css_class("drop-top-level"),
+            None => {}
+        }
+    }
+
+    /// Scroll the sidebar while a drag is near its top or bottom edge.
+    fn scroll_during_drag(&self, y: f64) {
+        let Some(scrolled) = self
+            .side
+            .list
+            .ancestor(gtk::ScrolledWindow::static_type())
+            .and_downcast::<gtk::ScrolledWindow>()
+        else {
+            return;
+        };
+        let adj = scrolled.vadjustment();
+        let visible = y - adj.value();
+        if visible < DRAG_SCROLL_EDGE {
+            adj.set_value(adj.value() - DRAG_SCROLL_STEP);
+        } else if visible > adj.page_size() - DRAG_SCROLL_EDGE {
+            adj.set_value(adj.value() + DRAG_SCROLL_STEP);
+        }
+    }
+
+    /// Accept feeds and folders dragged within the sidebar, moving them where they land.
+    pub(super) fn connect_sidebar_drop(self: &Rc<Self>) {
+        let target = gtk::DropTarget::new(glib::Type::STRING, gdk::DragAction::MOVE);
+        target.set_preload(true);
+        target.connect_motion(glib::clone!(
+            #[weak(rename_to = u)]
+            self,
+            #[upgrade_or]
+            gdk::DragAction::empty(),
+            move |target, _, y| {
+                u.scroll_during_drag(y);
+                let to = u.dragged(target.value()).and_then(|scope| {
+                    destination(&u.library.borrow(), &scope, u.scope_at(y).as_ref())
+                });
+                u.highlight_drop(to);
+                if to.is_some() {
+                    gdk::DragAction::MOVE
+                } else {
+                    gdk::DragAction::empty()
+                }
+            }
+        ));
+        target.connect_leave(glib::clone!(
+            #[weak(rename_to = u)]
+            self,
+            move |_| u.highlight_drop(None)
+        ));
+        target.connect_drop(glib::clone!(
+            #[weak(rename_to = u)]
+            self,
+            #[upgrade_or]
+            false,
+            move |_, value, _, y| {
+                u.highlight_drop(None);
+                let Some(scope) = u.dragged(Some(value.clone())) else {
+                    return false;
+                };
+                let to = destination(&u.library.borrow(), &scope, u.scope_at(y).as_ref());
+                match to {
+                    Some(folder) => {
+                        u.move_entry(scope, folder);
+                        true
+                    }
+                    None => false,
+                }
+            }
+        ));
+        self.side.list.add_controller(target);
+    }
+
+    /// Move a feed or folder into `folder`, or to the top level, and show it there.
+    pub(super) fn move_entry(self: &Rc<Self>, scope: Scope, folder: Option<FolderId>) {
+        // Open the folders it lands in, so it does not seem to vanish.
+        {
+            let lib = self.library.borrow();
+            let mut view = self.view.borrow_mut();
+            for f in lib.folder_path(folder) {
+                if view.collapsed().contains(&f.id) {
+                    view.toggle_folder(f.id);
+                }
+            }
+        }
+        let u = self.clone();
+        glib::spawn_future_local(async move {
+            let result =
+                u.db.call(move |s| match scope {
+                    Scope::Feed(id) => s.move_feed(id, folder),
+                    Scope::Folder(id) => s.move_folder(id, folder),
+                    _ => Ok(()),
+                })
+                .await;
+            if let Err(e) = result {
+                u.error(e);
+            }
+            u.reload();
+        });
     }
 
     fn copy(&self, text: &str, done: &str) {
@@ -504,13 +757,13 @@ mod tests {
             unread: 3,
             starred: 0,
         };
-        let new = menu(&Scope::Feed(FeedId(1)), &lib);
+        let new = menu(&Scope::Feed(FeedId(1)), &lib, false);
         assert_eq!(
             commands(&new),
             [
                 vec![OpenHomePage],
                 vec![CopyFeedUrl, CopyHomePageUrl],
-                vec![MarkRead],
+                vec![Refresh, MarkRead],
                 vec![Edit, Remove],
             ]
         );
@@ -519,26 +772,115 @@ mod tests {
         assert!(!enabled(&new, CopyHomePageUrl));
         assert!(!enabled(&new, MarkRead));
         assert!(enabled(&new, CopyFeedUrl));
-        let known = menu(&Scope::Feed(FeedId(2)), &lib);
+        assert!(enabled(&new, Refresh));
+        // One refresh at a time.
+        assert!(!enabled(
+            &menu(&Scope::Feed(FeedId(1)), &lib, true),
+            Refresh
+        ));
+        let known = menu(&Scope::Feed(FeedId(2)), &lib, false);
         assert!(enabled(&known, OpenHomePage));
         assert!(enabled(&known, CopyHomePageUrl));
         assert!(enabled(&known, MarkRead));
         // A website the browser is not given can still be copied.
-        let other = menu(&Scope::Feed(FeedId(3)), &lib);
+        let other = menu(&Scope::Feed(FeedId(3)), &lib, false);
         assert!(!enabled(&other, OpenHomePage));
         assert!(enabled(&other, CopyHomePageUrl));
         // A folder counts the unread articles of the folders inside it.
-        let folder = menu(&Scope::Folder(FolderId(1)), &lib);
-        assert_eq!(commands(&folder), [vec![MarkRead], vec![Edit, Remove]]);
+        let folder = menu(&Scope::Folder(FolderId(1)), &lib, false);
+        assert_eq!(
+            commands(&folder),
+            [
+                vec![Refresh, MarkRead],
+                vec![AddFeed, NewFolder],
+                vec![Edit, Remove]
+            ]
+        );
         assert!(enabled(&folder, MarkRead));
-        assert_eq!(commands(&menu(&Scope::Starred, &lib)), [vec![MarkRead]]);
-        assert!(enabled(&menu(&Scope::Today, &lib), MarkRead));
+        // A folder refreshes the feeds in it and in the folders inside it.
+        assert!(enabled(&folder, Refresh));
+        assert_eq!(
+            feeds_of(&lib, &Scope::Folder(FolderId(1))),
+            [FeedId(1), FeedId(2)]
+        );
+        assert_eq!(feeds_of(&lib, &Scope::Folder(FolderId(2))), [FeedId(2)]);
+        let empty = Library {
+            folders: lib.folders.clone(),
+            ..Library::default()
+        };
+        assert!(!enabled(
+            &menu(&Scope::Folder(FolderId(1)), &empty, false),
+            Refresh
+        ));
+        assert_eq!(
+            commands(&menu(&Scope::Starred, &lib, false)),
+            [vec![MarkRead]]
+        );
+        assert!(enabled(&menu(&Scope::Today, &lib, false), MarkRead));
         let read = Library {
             unread: 0,
             ..Library::default()
         };
-        assert!(!enabled(&menu(&Scope::Unread, &read), MarkRead));
-        assert!(menu(&Scope::Feed(FeedId(9)), &lib).is_empty());
-        assert!(menu(&Scope::Folder(FolderId(9)), &lib).is_empty());
+        assert!(!enabled(&menu(&Scope::Unread, &read, false), MarkRead));
+        assert!(menu(&Scope::Feed(FeedId(9)), &lib, false).is_empty());
+        assert!(menu(&Scope::Folder(FolderId(9)), &lib, false).is_empty());
+    }
+
+    #[test]
+    fn drops_move_into_folders_or_to_the_top_level() {
+        let lib = Library {
+            folders: vec![
+                Folder {
+                    id: FolderId(1),
+                    parent: None,
+                    name: "Read".into(),
+                },
+                Folder {
+                    id: FolderId(2),
+                    parent: Some(FolderId(1)),
+                    name: "Nested".into(),
+                },
+                Folder {
+                    id: FolderId(3),
+                    parent: None,
+                    name: "Other".into(),
+                },
+            ],
+            feeds: vec![
+                feed(1, Some(1), "", 0),
+                feed(2, None, "", 0),
+                feed(3, Some(3), "", 0),
+            ],
+            ..Library::default()
+        };
+        let feed1 = Scope::Feed(FeedId(1));
+        let into = |scope: &Scope, onto: Scope| destination(&lib, scope, Some(&onto));
+        // Onto a folder, into the folder; onto a feed, beside it.
+        assert_eq!(
+            into(&feed1, Scope::Folder(FolderId(2))),
+            Some(Some(FolderId(2)))
+        );
+        assert_eq!(
+            into(&feed1, Scope::Feed(FeedId(3))),
+            Some(Some(FolderId(3)))
+        );
+        // Onto a smart view, a top-level feed, or below everything: the top level.
+        assert_eq!(into(&feed1, Scope::Starred), Some(None));
+        assert_eq!(into(&feed1, Scope::Feed(FeedId(2))), Some(None));
+        assert_eq!(destination(&lib, &feed1, None), Some(None));
+        // Where it already is: nothing to do.
+        assert_eq!(into(&feed1, Scope::Folder(FolderId(1))), None);
+        assert_eq!(destination(&lib, &Scope::Feed(FeedId(2)), None), None);
+        // A folder never goes inside itself or its children.
+        let read = Scope::Folder(FolderId(1));
+        assert_eq!(into(&read, Scope::Folder(FolderId(1))), None);
+        assert_eq!(into(&read, Scope::Folder(FolderId(2))), None);
+        assert_eq!(
+            into(&read, Scope::Folder(FolderId(3))),
+            Some(Some(FolderId(3)))
+        );
+        assert_eq!(into(&Scope::Folder(FolderId(2)), Scope::All), Some(None));
+        assert_eq!(into(&Scope::Starred, Scope::Folder(FolderId(3))), None);
+        assert_eq!(into(&Scope::Feed(FeedId(9)), Scope::All), None);
     }
 }

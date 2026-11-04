@@ -36,4 +36,20 @@ impl Error {
             error.into()
         }
     }
+
+    /// `error` as [`Error::Validation`] if it is a folder name already taken among its
+    /// siblings, which SQLite would otherwise report by its index name.
+    pub(crate) fn folder_name(error: rusqlite::Error) -> anyhow::Error {
+        let taken = matches!(
+            &error,
+            rusqlite::Error::SqliteFailure(e, Some(message))
+                if e.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE
+                    && message.contains("folder_siblings")
+        );
+        if taken {
+            Error::Validation("A folder with this name is already there".into()).into()
+        } else {
+            error.into()
+        }
+    }
 }

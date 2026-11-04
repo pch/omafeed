@@ -47,6 +47,17 @@ fn form_button(text: &str) -> gtk::Button {
         .find(|b| b.label().as_deref() == Some(text))
         .unwrap_or_else(|| panic!("Missing form button {text}"))
 }
+/// The text field of the open form whose title starts with `title`.
+fn entry_row(title: &str) -> Option<adw::EntryRow> {
+    all_widgets()
+        .into_iter()
+        .filter_map(|w| w.downcast::<adw::EntryRow>().ok())
+        .find(|r| r.title().starts_with(title))
+}
+/// Whether a feed or folder form is open.
+fn open_form() -> bool {
+    all_widgets().iter().any(|w| w.is::<adw::EntryRow>())
+}
 /// The current time, as a refresh would record it.
 fn now() -> i64 {
     chrono::Utc::now().timestamp()
@@ -338,25 +349,11 @@ pub(crate) fn desktop_smoke() {
     pump_until(|| u.list.heading.text() == "Starred");
     assert!(u.view.borrow().open().is_none());
     assert!(u.settings.borrow().selected_article.is_none());
-    crate::dialogs::library(u.clone());
-    let window = Rc::new(RefCell::new(None::<gtk::Window>));
-    pump_until(|| {
-        *window.borrow_mut() = gtk::Window::list_toplevels()
-            .into_iter()
-            .filter_map(|w| w.downcast::<gtk::Window>().ok())
-            .find(|w| w.title().as_deref() == Some("Manage library"));
-        window.borrow().is_some()
-    });
-    let library = window.borrow().clone().unwrap();
-    let root = library.clone().upcast::<gtk::Widget>();
-    button(&root, "New folder").emit_clicked();
-    pump_until(|| all_widgets().iter().any(|w| w.is::<gtk::Entry>()));
-    let name = all_widgets()
-        .into_iter()
-        .find_map(|w| w.downcast::<gtk::Entry>().ok())
-        .unwrap();
-    name.set_text("Created through UI");
-    form_button("Save").emit_clicked();
+    // New folders, new feeds and edits go through forms that stay open until they succeed.
+    WidgetExt::activate_action(&u.window, "win.new-folder", None).unwrap();
+    pump_until(|| entry_row("Name").is_some());
+    entry_row("Name").unwrap().set_text("Created through UI");
+    form_button("Create").emit_clicked();
     pump_until(|| {
         runtime
             .block_on(db.call(|s| {
@@ -367,38 +364,61 @@ pub(crate) fn desktop_smoke() {
             }))
             .unwrap()
     });
-    pump_until(|| !all_widgets().iter().any(|w| w.is::<gtk::Entry>()));
+    pump_until(|| !open_form());
+    let (fixture_feed, created) = runtime
+        .block_on(db.call(|s| {
+            let lib = s.library()?;
+            let created = lib
+                .folders
+                .iter()
+                .find(|f| f.name == "Created through UI")
+                .unwrap()
+                .id;
+            Ok((lib.feeds[0].id, created))
+        }))
+        .unwrap();
     pump_until(|| {
-        widgets(&root)
+        u.sidebar_rows
+            .borrow()
+            .iter()
+            .any(|r| r.scope == Scope::Folder(created))
+    });
+    // A name already taken beside it is refused in the form, which stays open.
+    WidgetExt::activate_action(&u.window, "win.new-folder", None).unwrap();
+    pump_until(|| entry_row("Name").is_some());
+    entry_row("Name").unwrap().set_text("Created through UI");
+    form_button("Create").emit_clicked();
+    pump_until(|| {
+        all_widgets()
             .into_iter()
             .filter_map(|w| w.downcast::<gtk::Label>().ok())
-            .any(|l| l.text() == "Created through UI")
+            .any(|l| l.is_visible() && l.text() == "A folder with this name is already there")
     });
-    let list = widgets(&root)
-        .into_iter()
-        .find_map(|w| w.downcast::<gtk::ListBox>().ok())
-        .unwrap();
-    let feed_row = widgets(&list.clone().upcast())
-        .into_iter()
-        .filter_map(|w| w.downcast::<gtk::ListBoxRow>().ok())
-        .find(|r| {
-            widgets(&r.clone().upcast())
-                .into_iter()
-                .filter_map(|w| w.downcast::<gtk::Label>().ok())
-                .any(|l| l.text().contains("Fixture feed"))
-        })
-        .unwrap();
-    list.select_row(Some(&feed_row));
-    button(&root, "Edit / Move").emit_clicked();
-    pump_until(|| all_widgets().iter().any(|w| w.is::<gtk::Entry>()));
-    let fields = all_widgets()
-        .into_iter()
-        .filter_map(|w| w.downcast::<gtk::Entry>().ok())
-        .collect::<Vec<_>>();
-    fields[0].set_text("Renamed through UI");
+    assert!(open_form());
+    form_button("Cancel").emit_clicked();
+    pump_until(|| !open_form());
+    // Dropping a feed on a folder moves it there.
+    u.move_entry(Scope::Feed(fixture_feed), Some(created));
+    pump_until(|| {
+        runtime
+            .block_on(db.call(move |s| Ok(s.library()?.feed(fixture_feed).unwrap().folder)))
+            .unwrap()
+            == Some(created)
+    });
+    u.move_entry(Scope::Feed(fixture_feed), None);
+    pump_until(|| {
+        runtime
+            .block_on(db.call(move |s| Ok(s.library()?.feed(fixture_feed).unwrap().folder)))
+            .unwrap()
+            .is_none()
+    });
+    // Editing renames and moves it.
+    crate::dialogs::edit(u.clone(), Scope::Feed(fixture_feed));
+    pump_until(|| entry_row("Name").is_some());
+    entry_row("Name").unwrap().set_text("Renamed through UI");
     let picker = all_widgets()
         .into_iter()
-        .find_map(|w| w.downcast::<gtk::DropDown>().ok())
+        .find_map(|w| w.downcast::<adw::ComboRow>().ok())
         .unwrap();
     picker.set_selected(2);
     form_button("Save").emit_clicked();
@@ -414,7 +434,7 @@ pub(crate) fn desktop_smoke() {
             }))
             .unwrap()
     });
-    pump_until(|| !all_widgets().iter().any(|w| w.is::<gtk::Entry>()));
+    pump_until(|| !open_form());
     let listener = runtime
         .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
         .unwrap();
@@ -435,15 +455,11 @@ pub(crate) fn desktop_smoke() {
             let _ = socket.write_all(response.as_bytes()).await;
         }
     });
-    button(&root, "Add feed").emit_clicked();
-    pump_until(|| all_widgets().iter().any(|w| w.is::<gtk::Entry>()));
-    let fields = all_widgets()
-        .into_iter()
-        .filter_map(|w| w.downcast::<gtk::Entry>().ok())
-        .collect::<Vec<_>>();
-    assert!(fields[0].text().is_empty());
-    fields[1].set_text(&website);
-    form_button("Save").emit_clicked();
+    WidgetExt::activate_action(&u.window, "win.add-feed", None).unwrap();
+    pump_until(|| entry_row("Website").is_some());
+    assert!(entry_row("Name").unwrap().text().is_empty());
+    entry_row("Website").unwrap().set_text(&website);
+    form_button("Add").emit_clicked();
     pump_until(|| {
         runtime
             .block_on(db.call(|s| {
@@ -454,17 +470,13 @@ pub(crate) fn desktop_smoke() {
             }))
             .unwrap()
     });
-    pump_until(|| !all_widgets().iter().any(|w| w.is::<gtk::Entry>()));
+    pump_until(|| !open_form());
     // Subscribing to it again closes the form without adding anything.
-    button(&root, "Add feed").emit_clicked();
-    pump_until(|| all_widgets().iter().any(|w| w.is::<gtk::Entry>()));
-    let fields = all_widgets()
-        .into_iter()
-        .filter_map(|w| w.downcast::<gtk::Entry>().ok())
-        .collect::<Vec<_>>();
-    fields[1].set_text(&website);
-    form_button("Save").emit_clicked();
-    pump_until(|| !all_widgets().iter().any(|w| w.is::<gtk::Entry>()));
+    WidgetExt::activate_action(&u.window, "win.add-feed", None).unwrap();
+    pump_until(|| entry_row("Website").is_some());
+    entry_row("Website").unwrap().set_text(&website);
+    form_button("Add").emit_clicked();
+    pump_until(|| !open_form());
     assert_eq!(
         runtime
             .block_on(db.call(|s| Ok(s.library()?.feeds.len())))
@@ -472,12 +484,6 @@ pub(crate) fn desktop_smoke() {
         2
     );
     server.abort();
-    pump_until(|| {
-        widgets(&root)
-            .into_iter()
-            .filter_map(|w| w.downcast::<gtk::Label>().ok())
-            .any(|l| l.text().contains("Discovered feed"))
-    });
     let listener = runtime
         .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
         .unwrap();
@@ -486,17 +492,20 @@ pub(crate) fn desktop_smoke() {
         let (_socket, _) = listener.accept().await.unwrap();
         tokio::time::sleep(Duration::from_secs(60)).await;
     });
-    button(&root, "Add feed").emit_clicked();
-    pump_until(|| all_widgets().iter().any(|w| w.is::<gtk::Entry>()));
-    let fields = all_widgets()
-        .into_iter()
-        .filter_map(|w| w.downcast::<gtk::Entry>().ok())
-        .collect::<Vec<_>>();
-    fields[1].set_text(&slow_url);
-    form_button("Save").emit_clicked();
+    WidgetExt::activate_action(&u.window, "win.add-feed", None).unwrap();
+    pump_until(|| entry_row("Website").is_some());
+    entry_row("Website").unwrap().set_text(&slow_url);
+    form_button("Add").emit_clicked();
     pump_until(|| all_widgets().iter().any(|w| w.is::<gtk::Spinner>()));
-    form_button("Cancel").emit_clicked();
-    pump_until(|| all_widgets().iter().any(|w| w.is::<gtk::Entry>()));
+    // Cancelling the search leaves the form open for another try.
+    let progress = all_widgets()
+        .into_iter()
+        .find(|w| w.is::<gtk::Spinner>())
+        .and_then(|w| w.ancestor(adw::AlertDialog::static_type()))
+        .unwrap();
+    button(&progress, "Cancel").emit_clicked();
+    pump_until(|| !all_widgets().iter().any(|w| w.is::<gtk::Spinner>()));
+    assert!(open_form());
     assert_eq!(
         runtime
             .block_on(db.call(|s| Ok(s.library()?.feeds.len())))
@@ -504,9 +513,8 @@ pub(crate) fn desktop_smoke() {
         2
     );
     form_button("Cancel").emit_clicked();
+    pump_until(|| !open_form());
     slow.abort();
-    library.close();
-    pump_until(|| !library.is_visible());
     // The sidebar's context menu, as a right click or the Menu key opens it, does its work
     // without changing the view shown.
     let (fixture, discovered, folder) = runtime
@@ -584,6 +592,7 @@ pub(crate) fn desktop_smoke() {
             "Open home page",
             "Copy feed URL",
             "Copy home page URL",
+            "Refresh",
             "Mark all as read",
             "Edit…",
             "Remove…"
@@ -595,6 +604,15 @@ pub(crate) fn desktop_smoke() {
     let website = u.library.borrow().feed(fixture).unwrap().site_url.clone();
     assert!(!website.is_empty());
     assert_eq!(clipboard(), Some(website));
+    // Refreshing one feed downloads only it; its address does not resolve, so it fails.
+    run(Scope::Feed(fixture), sidebar::Command::Refresh);
+    pump_until(|| {
+        u.header
+            .refresh
+            .tooltip_text()
+            .is_some_and(|t| t.starts_with("Refreshed 1 feed at") && t.contains("1 unavailable"))
+    });
+    assert!(!u.busy.get());
     run(Scope::Feed(fixture), sidebar::Command::MarkRead);
     pump_until(|| {
         runtime
@@ -611,7 +629,14 @@ pub(crate) fn desktop_smoke() {
     });
     assert_eq!(
         open_menu(Scope::Folder(folder)),
-        ["Mark all as read", "Edit…", "Remove…"]
+        [
+            "Refresh",
+            "Mark all as read",
+            "Add feed here…",
+            "New folder inside…",
+            "Edit…",
+            "Remove…"
+        ]
     );
     assert_eq!(open_menu(Scope::Starred), ["Mark all as read"]);
     // Reading the library again closes the menu and drops its actions: the entry it was
@@ -626,13 +651,10 @@ pub(crate) fn desktop_smoke() {
     });
     assert!(!u.side.menu.is_visible());
     run(Scope::Feed(discovered), sidebar::Command::Edit);
-    pump_until(|| all_widgets().iter().any(|w| w.is::<gtk::Entry>()));
-    let fields = all_widgets()
-        .into_iter()
-        .filter_map(|w| w.downcast::<gtk::Entry>().ok())
-        .collect::<Vec<_>>();
-    assert_eq!(fields[0].text(), "Discovered feed");
-    fields[0].set_text("Renamed from the menu");
+    pump_until(|| entry_row("Name").is_some());
+    let name = entry_row("Name").unwrap();
+    assert_eq!(name.text(), "Discovered feed");
+    name.set_text("Renamed from the menu");
     form_button("Save").emit_clicked();
     pump_until(|| {
         runtime
@@ -643,7 +665,7 @@ pub(crate) fn desktop_smoke() {
             }))
             .unwrap()
     });
-    pump_until(|| !all_widgets().iter().any(|w| w.is::<gtk::Entry>()));
+    pump_until(|| !open_form());
     run(Scope::Feed(discovered), sidebar::Command::Remove);
     pump_until(|| {
         all_widgets()

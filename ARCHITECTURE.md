@@ -35,8 +35,8 @@ Run without a command, `omafeed` opens the reader window; with a command (`omafe
 | --- | --- |
 | `lib` | Argument parsing (`main`), which dispatches to `cli::run` or builds the GTK application. `main.rs` only calls it. With the `test-support` feature, `test_support` exposes the desktop smoke test to `tests/desktop_smoke.rs`. |
 | `cli` | Every command: argument definitions and text output. `cli/json.rs` has one `Serialize` type per `--json` shape, printed through `serde_json::Value` so the keys stay sorted, byte for byte as before. |
-| `ui` | The main window. `Ui` coordinates: it owns the panes (`Header`, `SidebarPane`, `ListPane`, `ReaderPane`), each holding its own widgets, and a `View` (`view.rs`) with what is shown: view and page, the articles on it, the open article, collapsed folders, and the read/star changes (`changes.rs`) and undo in flight. `View` has no GTK and decides what each late database result may change, and what a removed feed or folder takes with it; it is unit-tested on its own. `articles`, `sidebar`, `reader`, `keys` and `theme` add methods to `Ui`. `sidebar` also builds the sidebar's context menu: which commands an entry has and which apply now is a pure function, unit-tested; the menu is one `gtk::PopoverMenu` filled from a `gio::Menu` with a fresh `sidebar.` action group each time it opens, closed with its actions dropped whenever the library is read again (an entry's ID may since belong to another feed or folder), and its edit and remove go through the library manager's forms and confirmations (`dialogs::edit`, `dialogs::remove`); `widgets` has small constructors; `tests` holds the desktop smoke test (only with `test-support`). |
-| `dialogs` | Library manager, subscription and folder forms, OPML import/export, content filters, settings, shortcuts and about. |
+| `ui` | The main window. `Ui` coordinates: it owns the panes (`Header`, `SidebarPane`, `ListPane`, `ReaderPane`), each holding its own widgets, and a `View` (`view.rs`) with what is shown: view and page, the articles on it, the open article, collapsed folders, and the read/star changes (`changes.rs`) and undo in flight. `View` has no GTK and decides what each late database result may change, and what a removed feed or folder takes with it; it is unit-tested on its own. `articles`, `sidebar`, `reader`, `keys` and `theme` add methods to `Ui`. `sidebar` also builds the sidebar's context menu: which commands an entry has and which apply now is a pure function, unit-tested; the menu is one `gtk::PopoverMenu` filled from a `gio::Menu` with a fresh `sidebar.` action group each time it opens, closed with its actions dropped whenever the library is read again (an entry's ID may since belong to another feed or folder), and its commands open the feed and folder forms and confirmations (`dialogs::add_feed`, `dialogs::new_folder`, `dialogs::edit`, `dialogs::remove`). Feeds and folders move by drag and drop: each row is a drag source carrying its `Scope` as text, the list is the drop target, and where a drop lands is another pure function (`destination`), unit-tested; `widgets` has small constructors; `tests` holds the desktop smoke test (only with `test-support`). |
+| `dialogs` | Feed and folder forms (a reusable `Form`: an `adw::Dialog` of preference rows that stays open across attempts to show errors), OPML import/export, content filters, settings, shortcuts and about. |
 
 ## Data flow
 
@@ -44,10 +44,11 @@ All SQLite access goes through one worker thread per `Db`. `Db::call` sends a cl
 worker and awaits its result, so the GTK main loop never blocks on the database and the
 command line and the window share the same code paths.
 
-A refresh (`Refresher::refresh`) reads the library, picks due feeds (or all with `force`),
+A refresh (`Refresher::refresh`) reads the library, picks the feeds `Which` chooses (those due, all,
+or a given few),
 downloads up to 8 at once (2 per host), and stores each result through `Store::commit_download`
 or `Store::record_failure`. Progress events go to an async channel: the window shows them in
-its status bar, `omafeed refresh` prints them. Feeds finish in any order, so the command's
+its refresh button and a progress line, `omafeed refresh` prints them. Feeds finish in any order, so the command's
 lines come in completion order.
 
 The window shows read and star changes at once and writes them in the background
