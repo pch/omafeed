@@ -5,5 +5,5 @@ Third
 Local Feed · (Ann) · 2024-01-03 · unread
 http://localhost/3
 
-<h2>Notes</h2><p>See <a href="https://example.org/" rel="noopener noreferrer">this</a>.</p><ul><li>one</li><li>two</li></ul>
+<h2>Notes</h2><p>See <a href="https://example.org/" rel="noopener noreferrer">this</a>.</p><ul dir="auto"><li>one</li><li>two</li></ul>
 --- stderr

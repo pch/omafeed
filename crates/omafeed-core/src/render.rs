@@ -14,7 +14,7 @@ a { color: {accent} }
 a.source:hover { opacity: 1 }
 .source img { width: 20px; height: 20px; border-radius: 4px }
 img, video { max-width: 100%; height: auto }
-pre { overflow: auto; padding: 18px; background: color-mix(in srgb, currentColor 7%, transparent); border-radius: 8px; font-size: .85em }
+pre { direction: ltr; text-align: left; overflow: auto; padding: 18px; background: color-mix(in srgb, currentColor 7%, transparent); border-radius: 8px; font-size: .85em }
 code { font-family: monospace }
 blockquote { border-inline-start: 3px solid {accent}; margin-inline-start: 0; padding-inline-start: 20px; opacity: .85 }
 table { display: block; overflow: auto; border-collapse: collapse }
@@ -23,7 +23,7 @@ hr { border: 0; border-top: 1px solid #8885; margin: 28px 0 }
 figure { margin: 20px 0 }
 p, li, h1, h2, h3, h4, h5, h6, blockquote, figcaption, dt, dd, td, th { unicode-bidi: plaintext; text-align: start }
 /* WebKitGTK misplaces Arabic marks in fallback fonts, so RTL text gets an Arabic primary font */
-h1:dir(rtl), article:dir(rtl) { font-family: 'Noto Sans Arabic', system-ui, sans-serif }
+:is(h1, article, blockquote, ul, ol):dir(rtl) { font-family: 'Noto Sans Arabic', system-ui, sans-serif }
 ";
 
 /// Where an article comes from, shown above its title.
@@ -147,6 +147,9 @@ mod tests {
         assert!(html.contains("<article dir=\"auto\"><p>الكل منهمك</p><p>English</p></article>"));
         assert!(html.contains("unicode-bidi: plaintext; text-align: start"));
         assert!(html.contains("border-inline-start"));
-        assert!(html.contains("article:dir(rtl) { font-family: 'Noto Sans Arabic'"));
+        assert!(html.contains("pre { direction: ltr; text-align: left"));
+        assert!(html.contains(
+            ":is(h1, article, blockquote, ul, ol):dir(rtl) { font-family: 'Noto Sans Arabic'"
+        ));
     }
 }
