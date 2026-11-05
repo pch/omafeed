@@ -14,13 +14,16 @@ a { color: {accent} }
 a.source:hover { opacity: 1 }
 .source img { width: 20px; height: 20px; border-radius: 4px }
 img, video { max-width: 100%; height: auto }
-pre { overflow: auto; padding: 18px; background: color-mix(in srgb, currentColor 7%, transparent); border-radius: 8px; font-size: .85em }
+pre { direction: ltr; text-align: left; overflow: auto; padding: 18px; background: color-mix(in srgb, currentColor 7%, transparent); border-radius: 8px; font-size: .85em }
 code { font-family: monospace }
-blockquote { border-left: 3px solid {accent}; margin-left: 0; padding-left: 20px; opacity: .85 }
+blockquote { border-inline-start: 3px solid {accent}; margin-inline-start: 0; padding-inline-start: 20px; opacity: .85 }
 table { display: block; overflow: auto; border-collapse: collapse }
 td, th { padding: 6px; border: 1px solid #8885 }
 hr { border: 0; border-top: 1px solid #8885; margin: 28px 0 }
 figure { margin: 20px 0 }
+p, li, h1, h2, h3, h4, h5, h6, blockquote, figcaption, dt, dd, td, th { unicode-bidi: plaintext; text-align: start }
+/* WebKitGTK misplaces Arabic marks in fallback fonts, so RTL text gets an Arabic primary font */
+:is(h1, article, blockquote, ul, ol):dir(rtl) { font-family: 'Noto Sans Arabic', system-ui, sans-serif }
 ";
 
 /// Where an article comes from, shown above its title.
@@ -88,8 +91,8 @@ pub fn document(a: &Article, source: &Source, p: &Palette, font: u32, images: bo
             "<meta name=\"viewport\" content=\"width=device-width\">",
             "<meta http-equiv=\"Content-Security-Policy\" content=\"{csp}\">",
             "<style>{style}</style></head><body><main>",
-            "<header>{source}<h1>{title}</h1><div class=\"meta\">{byline}</div></header>",
-            "<hr>{body}</main></body></html>"
+            "<header>{source}<h1 dir=\"auto\">{title}</h1><div class=\"meta\">{byline}</div></header>",
+            "<hr><article dir=\"auto\">{body}</article></main></body></html>"
         ),
         csp = csp,
         style = style,
@@ -125,5 +128,28 @@ mod tests {
         };
         let html = document(&a, &unsafe_url, &p, 18, false);
         assert!(html.contains(r#"<span class="source">Tom &amp; Jerry</span>"#));
+    }
+
+    #[test]
+    fn document_lays_out_text_in_its_own_direction() {
+        let a = Article {
+            title: "في أول العام".into(),
+            html: "<p>الكل منهمك</p><p>English</p>".into(),
+            ..Default::default()
+        };
+        let p = Palette::load(crate::config::Theme::Dark);
+        let source = Source {
+            url: "",
+            icon: None,
+        };
+        let html = document(&a, &source, &p, 18, false);
+        assert!(html.contains("<h1 dir=\"auto\">في أول العام</h1>"));
+        assert!(html.contains("<article dir=\"auto\"><p>الكل منهمك</p><p>English</p></article>"));
+        assert!(html.contains("unicode-bidi: plaintext; text-align: start"));
+        assert!(html.contains("border-inline-start"));
+        assert!(html.contains("pre { direction: ltr; text-align: left"));
+        assert!(html.contains(
+            ":is(h1, article, blockquote, ul, ol):dir(rtl) { font-family: 'Noto Sans Arabic'"
+        ));
     }
 }
