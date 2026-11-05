@@ -39,6 +39,19 @@ pub fn retry_after(value: &str, now: SystemTime) -> i64 {
         .clamp(1, MAX_WAIT_SECONDS)
 }
 
+/// The seconds an `X-RateLimit-Reset` header asks for at `now` (a Unix time): seconds until the
+/// limit resets, or the Unix time it resets at as some APIs send, between one second and a day.
+pub fn rate_limit_reset(value: &str, now: i64) -> Option<i64> {
+    let reset = value.trim().parse::<f64>().ok().filter(|r| r.is_finite())? as i64;
+    // No wait is a billion seconds long, but every Unix time since 2001 is.
+    let wait = if reset > 1_000_000_000 {
+        reset - now
+    } else {
+        reset
+    };
+    Some(wait.clamp(1, MAX_WAIT_SECONDS))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -76,5 +89,18 @@ mod tests {
         let earlier = httpdate::fmt_http_date(now - Duration::from_secs(600));
         assert_eq!(retry_after(&earlier, now), 300);
         assert_eq!(retry_after("soon", now), 300);
+    }
+
+    #[test]
+    fn rate_limit_resets_read_seconds_and_unix_times_within_limits() {
+        let now = 1_700_000_000;
+        assert_eq!(rate_limit_reset("45", now), Some(45));
+        assert_eq!(rate_limit_reset(" 45.7 ", now), Some(45));
+        assert_eq!(rate_limit_reset("0", now), Some(1));
+        assert_eq!(rate_limit_reset("1700000600", now), Some(600));
+        assert_eq!(rate_limit_reset("1600000000", now), Some(1));
+        assert_eq!(rate_limit_reset("999999", now), Some(86_400));
+        assert_eq!(rate_limit_reset("soon", now), None);
+        assert_eq!(rate_limit_reset("NaN", now), None);
     }
 }

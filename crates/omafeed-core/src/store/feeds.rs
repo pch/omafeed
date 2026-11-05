@@ -16,7 +16,7 @@ fn library_feeds(visible: &str) -> String {
         "SELECT f.id, f.folder, f.title, f.url, f.site_url,
                 (SELECT count(*) FROM articles a JOIN article_state s ON s.article_id = a.id
                  WHERE a.feed_id = f.id AND s.read = 0{visible}),
-                f.error, f.etag, f.modified, f.next_fetch, f.failures, f.revision
+                f.error, f.etag, f.modified, f.next_fetch, f.failures, f.revision, f.last_attempt
          FROM feeds f
          ORDER BY f.title COLLATE NOCASE"
     )
@@ -84,6 +84,7 @@ impl Store {
                     next_fetch: r.get(9)?,
                     failures: r.get(10)?,
                     revision: r.get(11)?,
+                    last_attempt: r.get(12)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -262,6 +263,17 @@ impl Store {
             "UPDATE feeds SET error = ?1, failures = failures + 1, last_attempt = ?2, next_fetch = ?3
              WHERE id = ?4 AND revision = ?5",
             params![error, now, next_fetch, feed_id, revision],
+        )?;
+        Ok(())
+    }
+
+    /// Schedule the next refresh of the feed `feed_id` at `revision` for `next_fetch` without
+    /// trying it now, keeping its error and failure count. Nothing changes if the feed was
+    /// deleted or is no longer at that revision.
+    pub fn postpone(&self, feed_id: FeedId, revision: i64, next_fetch: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE feeds SET next_fetch = ?1 WHERE id = ?2 AND revision = ?3",
+            params![next_fetch, feed_id, revision],
         )?;
         Ok(())
     }

@@ -310,7 +310,14 @@ async fn conditional_refresh_and_failures_keep_cached_articles() {
         .await
         .unwrap();
     let refresh = Refresher::new().unwrap();
-    for _ in 0..4 {
+    for pass in 0..4 {
+        // The 503 asks for ten minutes without requests, which a refresher keeps to even when
+        // forced; the last pass stands for one after the wait, as a new refresher knows of none.
+        let refresh = if pass < 3 {
+            refresh.clone()
+        } else {
+            Refresher::new().unwrap()
+        };
         let (tx, _rx) = async_channel::unbounded();
         refresh
             .refresh(db.clone(), ingest::Which::All, 30, tx)
