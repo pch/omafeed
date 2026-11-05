@@ -690,6 +690,7 @@ mod tests {
             etag: None,
             modified: None,
             next_fetch: 0,
+            last_attempt: None,
             failures: 0,
             revision: 0,
         }

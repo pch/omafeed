@@ -77,6 +77,8 @@ pub struct Feed {
     pub modified: Option<String>,
     /// When it is due to be refreshed, in Unix seconds.
     pub next_fetch: i64,
+    /// When a refresh last tried it, in Unix seconds, or `None` if none has yet.
+    pub last_attempt: Option<i64>,
     /// Refreshes that failed in a row since the last success.
     pub failures: i64,
     /// Changes whenever the row stops being the subscription it was: when it is created and
@@ -422,6 +424,7 @@ mod tests {
             etag: None,
             modified: None,
             next_fetch: 0,
+            last_attempt: None,
             failures: 0,
             revision: 0,
         }

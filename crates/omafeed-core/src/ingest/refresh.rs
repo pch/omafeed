@@ -1,6 +1,7 @@
 //! Refresh passes: which feeds are due, how many download at once, and storing the results.
 use super::{
     download::{RetryDelay, download_from},
+    limits::{HostLimits, host},
     schedule,
 };
 use crate::{
@@ -22,6 +23,7 @@ use std::{
 use tokio::sync::Semaphore;
 
 const CONCURRENT_FEEDS: usize = 8;
+/// Downloads at once from one host, once its first answer has set no limit.
 const CONCURRENT_PER_HOST: usize = 2;
 
 /// Which feeds a refresh pass downloads.
@@ -83,6 +85,7 @@ pub struct Refresher {
     client: Client,
     busy: Arc<AtomicBool>,
     cache: Option<PathBuf>,
+    limits: HostLimits,
 }
 
 /// Shared state for one refresh pass.
@@ -93,16 +96,26 @@ struct Pass {
     force: bool,
     minutes: u32,
     now: i64,
-    hosts: HashMap<String, Arc<Semaphore>>,
+    limits: HostLimits,
+    hosts: HashMap<String, Gate>,
     /// Icon cache files already claimed by a feed in this pass.
     icons: Mutex<HashSet<PathBuf>>,
 }
 
-fn host(url: &str) -> String {
-    url::Url::parse(url)
-        .ok()
-        .and_then(|u| u.host_str().map(str::to_owned))
-        .unwrap_or_default()
+/// The downloads one host allows at a time: one until its first answer, which may set a rate
+/// limit (Reddit allows one feed a minute), then [`CONCURRENT_PER_HOST`] if it did not.
+struct Gate {
+    permits: Semaphore,
+    opened: AtomicBool,
+}
+
+impl Default for Gate {
+    fn default() -> Self {
+        Self {
+            permits: Semaphore::new(1),
+            opened: AtomicBool::new(false),
+        }
+    }
 }
 
 impl Refresher {
@@ -112,6 +125,7 @@ impl Refresher {
             client: http::client()?,
             busy: Arc::new(AtomicBool::new(false)),
             cache: None,
+            limits: HostLimits::default(),
         })
     }
 
@@ -121,11 +135,13 @@ impl Refresher {
         self
     }
 
-    /// [`discovery::discover`](super::discovery::discover), giving up after a minute.
+    /// The feeds at `input`: the feed itself if it is one, else those the page advertises (or,
+    /// failing that, the usual feed addresses on its site) that turn out to be readable feeds,
+    /// in the page's order. Fails if there are none, or after a minute.
     pub async fn discover(&self, input: &str) -> Result<Vec<super::discovery::Candidate>> {
         tokio::time::timeout(
             Duration::from_secs(60),
-            super::discovery::discover(&self.client, input),
+            super::discovery::discover(&self.client, &self.limits, input),
         )
         .await
         .context("Feed discovery timed out")?
@@ -150,17 +166,21 @@ impl Refresher {
         }
         let _reset = Reset(self.busy.clone());
         let now = chrono::Utc::now().timestamp();
-        let feeds = db
+        let mut feeds = db
             .call(|s| Ok(s.library()?.feeds))
             .await?
             .into_iter()
             .filter(|f| which.includes(f, now))
             .collect::<Vec<_>>();
+        // Least recently tried first: a host that answers one feed at a time (each host's gate
+        // takes them in turn) then gets round to all of its feeds, not the same one every pass.
+        // Postponing a feed does not count as trying it.
+        feeds.sort_by_key(|f| f.last_attempt);
         let total = feeds.len();
         let _ = events.send(Progress::Started(total)).await;
         let hosts = feeds
             .iter()
-            .map(|f| (host(&f.url), Arc::new(Semaphore::new(CONCURRENT_PER_HOST))))
+            .map(|f| (host(&f.url), Gate::default()))
             .collect();
         let pass = Pass {
             db,
@@ -169,6 +189,7 @@ impl Refresher {
             force: which.forced(),
             minutes,
             now,
+            limits: self.limits.clone(),
             hosts,
             icons: Mutex::default(),
         };
@@ -200,8 +221,20 @@ impl Pass {
     /// Download and store one feed, returning its title and any error message.
     async fn refresh_feed(&self, feed: Feed) -> (String, Option<String>) {
         let result = {
-            let _permit = self.hosts[&host(&feed.url)].acquire().await;
-            download_from(&self.client, &feed).await
+            let gate = &self.hosts[&host(&feed.url)];
+            let _permit = gate.permits.acquire().await;
+            let now = chrono::Utc::now().timestamp();
+            if let Some(until) = self.limits.until(&feed.url, now) {
+                return self.postpone(feed, until - now, until).await;
+            }
+            let result = download_from(&self.client, &self.limits, &feed).await;
+            let now = chrono::Utc::now().timestamp();
+            if self.limits.until(&feed.url, now).is_none()
+                && !gate.opened.swap(true, Ordering::SeqCst)
+            {
+                gate.permits.add_permits(CONCURRENT_PER_HOST - 1);
+            }
+            result
         };
         // The website's icon is fetched below. Where its address came from decides whether it
         // may be local: the feed as finally served (after redirects) when it named it now, the
@@ -251,7 +284,12 @@ impl Pass {
                 })
             }
         };
-        if let Some(cache) = &self.cache {
+        // Not while the site's host is holding requests back: its icon can wait for a later pass.
+        let held_back = self
+            .limits
+            .until(&site_url, chrono::Utc::now().timestamp())
+            .is_some();
+        if let Some(cache) = self.cache.as_ref().filter(|_| !held_back) {
             let target = super::icons::path(cache, &site_url);
             if self.icons.lock().unwrap().insert(target) {
                 super::icons::cache(
@@ -265,6 +303,22 @@ impl Pass {
             }
         }
         (feed.title, error)
+    }
+
+    /// Leave `feed` for `until`, without counting a failure: its host asked for `wait` more
+    /// seconds without requests.
+    async fn postpone(&self, feed: Feed, wait: i64, until: i64) -> (String, Option<String>) {
+        let (id, revision) = (feed.id, feed.revision);
+        let message = format!(
+            "Postponed: {} allows another request in {wait} seconds",
+            host(&feed.url)
+        );
+        let saved = self.db.call(move |s| s.postpone(id, revision, until)).await;
+        let error = match saved {
+            Ok(()) => message,
+            Err(e) => format!("{message}; saving error: {e}"),
+        };
+        (feed.title, Some(error))
     }
 }
 
@@ -284,6 +338,7 @@ mod tests {
             client: client(remote),
             busy: Arc::default(),
             cache: Some(dir.path().join("cache")),
+            limits: HostLimits::default(),
         };
         let (tx, _rx) = async_channel::unbounded();
         refresher.refresh(db, Which::All, 30, tx).await.unwrap();
@@ -338,6 +393,7 @@ mod tests {
             client: client(&[("remote.test", remote)]),
             busy: Arc::default(),
             cache: Some(dir.path().join("cache")),
+            limits: HostLimits::default(),
         };
         for _ in 0..2 {
             let (tx, _rx) = async_channel::unbounded();
@@ -369,6 +425,113 @@ mod tests {
         );
     }
 
+    /// A server answering as Reddit does: one request a minute, said only in X-RateLimit
+    /// headers, with `status` (a 200 with a feed, or a 304).
+    async fn rate_limited(
+        status: &'static str,
+    ) -> (std::net::SocketAddr, Arc<std::sync::Mutex<Vec<String>>>) {
+        server(move |_| {
+            let body = if status.starts_with("200") {
+                feed_naming("")
+            } else {
+                String::new()
+            };
+            format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/rss+xml\r\nx-ratelimit-remaining: 0.0\r\nx-ratelimit-reset: 60\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn a_host_out_of_requests_is_not_asked_again_until_it_resets() {
+        let (server, hits) = rate_limited("200 OK").await;
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(dir.path().join("test.db")).unwrap();
+        db.call(move |s| {
+            for name in ["a", "b", "c"] {
+                s.add_feed(name, &format!("http://{server}/{name}"), None)?;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+        let refresher = Refresher {
+            client: client(&[]),
+            busy: Arc::default(),
+            cache: Some(dir.path().join("cache")),
+            limits: HostLimits::default(),
+        };
+        let (tx, rx) = async_channel::unbounded();
+        refresher
+            .refresh(db.clone(), Which::All, 30, tx)
+            .await
+            .unwrap();
+        assert_eq!(hits.lock().unwrap().len(), 1, "{:?}", hits.lock().unwrap());
+        let errors: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok())
+            .filter_map(|p| match p {
+                Progress::Feed { error, .. } => Some(error),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(errors.iter().filter(|e| e.is_none()).count(), 1);
+        assert!(
+            errors
+                .iter()
+                .flatten()
+                .all(|e| e.starts_with("Postponed: 127.0.0.1 allows another request in")),
+            "{errors:?}"
+        );
+        let now = chrono::Utc::now().timestamp();
+        let feeds = db.call(|s| Ok(s.library()?.feeds)).await.unwrap();
+        for feed in feeds {
+            assert!(feed.next_fetch > now + 50, "{} is due too soon", feed.title);
+            assert_eq!((feed.failures, feed.error), (0, None), "{}", feed.title);
+        }
+        // Until it resets, the next pass asks for nothing, even forced.
+        let (tx, _rx) = async_channel::unbounded();
+        refresher
+            .refresh(db.clone(), Which::All, 30, tx)
+            .await
+            .unwrap();
+        assert_eq!(hits.lock().unwrap().len(), 1);
+        // After it, the feeds not yet tried go first, though postponing pushed them later.
+        let refresher = Refresher {
+            limits: HostLimits::default(),
+            ..refresher
+        };
+        let (tx, _rx) = async_channel::unbounded();
+        refresher.refresh(db, Which::All, 30, tx).await.unwrap();
+        let hits = hits.lock().unwrap();
+        assert_eq!(hits.len(), 2);
+        assert_ne!(hits[0], hits[1], "{hits:?}");
+    }
+
+    #[tokio::test]
+    async fn an_unchanged_feed_still_counts_against_its_hosts_requests() {
+        let (server, hits) = rate_limited("304 Not Modified").await;
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(dir.path().join("test.db")).unwrap();
+        db.call(move |s| {
+            for name in ["a", "b"] {
+                s.add_feed(name, &format!("http://{server}/{name}"), None)?;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+        let refresher = Refresher {
+            client: client(&[]),
+            busy: Arc::default(),
+            cache: None,
+            limits: HostLimits::default(),
+        };
+        let (tx, _rx) = async_channel::unbounded();
+        refresher.refresh(db, Which::All, 30, tx).await.unwrap();
+        assert_eq!(hits.lock().unwrap().len(), 1, "{:?}", hits.lock().unwrap());
+    }
+
     #[tokio::test]
     async fn a_refresh_of_chosen_feeds_downloads_only_those() {
         let (server, hits) = server(|_| ok("application/rss+xml", &feed_naming(""))).await;
@@ -387,6 +550,7 @@ mod tests {
             client: client(&[]),
             busy: Arc::default(),
             cache: None,
+            limits: HostLimits::default(),
         };
         let (tx, rx) = async_channel::unbounded();
         refresher

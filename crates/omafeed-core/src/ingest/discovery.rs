@@ -1,4 +1,5 @@
 //! Resolve website subscriptions before adding anything to the library.
+use super::limits::HostLimits;
 use crate::{
     http::{BODY_LIMIT, Body, read_limited},
     util::validate_url,
@@ -18,8 +19,22 @@ pub struct Candidate {
     pub url: String,
 }
 
-async fn get(client: &Client, url: &str) -> Result<(String, Vec<u8>)> {
-    let response = client.get(url).send().await?.error_for_status()?;
+/// Fetch `url`, unless its host is holding requests back, noting in `limits` any wait its
+/// server asks for, so that the refresh that follows a subscription does not run straight
+/// into a rate limit.
+async fn get(client: &Client, limits: &HostLimits, url: &str) -> Result<(String, Vec<u8>)> {
+    let now = chrono::Utc::now().timestamp();
+    if let Some(until) = limits.until(url, now) {
+        bail!(
+            "{} allows another request in {} seconds; try again then",
+            super::limits::host(url),
+            until - now
+        );
+    }
+    let response = client.get(url).send().await?;
+    let served_from = response.url().to_string();
+    limits.note(&[url, &served_from], response.status(), response.headers());
+    let response = response.error_for_status()?;
     let base = response.url().to_string();
     Ok((base, read_limited(response, BODY_LIMIT, Body::Whole).await?))
 }
@@ -94,10 +109,16 @@ pub fn links(html: &str, base: &str) -> Vec<String> {
 }
 /// The feeds at `input`: the feed itself if it is one, else those the page advertises (or,
 /// failing that, the usual feed addresses on its site) that turn out to be readable feeds,
-/// in the page's order. Fails if there are none.
-pub async fn discover(client: &Client, input: &str) -> Result<Vec<Candidate>> {
+/// in the page's order. Fails if there are none. Waits servers ask for are noted in `limits`.
+pub(crate) async fn discover(
+    client: &Client,
+    limits: &HostLimits,
+    input: &str,
+) -> Result<Vec<Candidate>> {
     let url = validate_url(input).context("Enter a website or feed URL starting with https://")?;
-    let (base, data) = get(client, &url).await.context("Could not open this URL")?;
+    let (base, data) = get(client, limits, &url)
+        .await
+        .context("Could not open this URL")?;
     let fallback_base = base.clone();
     let (direct, mut urls) = tokio::task::spawn_blocking(move || {
         (
@@ -127,7 +148,7 @@ pub async fn discover(client: &Client, input: &str) -> Result<Vec<Candidate>> {
     }
     let mut results = stream::iter(urls.into_iter().enumerate().map(|(index, url)| async move {
         let result = async {
-            let (base, data) = get(client, &url).await?;
+            let (base, data) = get(client, limits, &url).await?;
             tokio::task::spawn_blocking(move || candidate(&data, &base)).await?
         }
         .await;
@@ -168,7 +189,12 @@ mod tests {
         );
         let (site, _) = server(move |_| ok("text/html", &page)).await;
         let client = client(&[("remote.test", site)]);
-        let found = discover(&client, &format!("http://remote.test:{}/", site.port())).await;
+        let found = discover(
+            &client,
+            &HostLimits::default(),
+            &format!("http://remote.test:{}/", site.port()),
+        )
+        .await;
         assert!(found.is_err(), "{found:?}");
         assert!(
             hits.lock().unwrap().is_empty(),
@@ -183,10 +209,36 @@ mod tests {
             r#"<html><head><link rel="alternate" type="application/rss+xml" href="http://{local}/feed"></head></html>"#
         );
         let (site, _) = server(move |_| ok("text/html", &page)).await;
-        let found = discover(&client(&[]), &format!("http://{site}/"))
-            .await
-            .unwrap();
+        let found = discover(
+            &client(&[]),
+            &HostLimits::default(),
+            &format!("http://{site}/"),
+        )
+        .await
+        .unwrap();
         assert_eq!(found[0].url, format!("http://{local}/feed"));
         assert_eq!(found[0].title, "Found");
+    }
+
+    #[tokio::test]
+    async fn a_host_holding_requests_back_is_not_asked() {
+        let (site, hits) = server(|_| {
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/rss+xml\r\nx-ratelimit-remaining: 0\r\nx-ratelimit-reset: 60\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{RSS}",
+                RSS.len()
+            )
+        })
+        .await;
+        let limits = HostLimits::default();
+        let url = format!("http://{site}/feed");
+        assert!(discover(&client(&[]), &limits, &url).await.is_ok());
+        let error = discover(&client(&[]), &limits, &format!("http://{site}/other"))
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("127.0.0.1 allows another request in"),
+            "{error:#}"
+        );
+        assert_eq!(hits.lock().unwrap().len(), 1);
     }
 }

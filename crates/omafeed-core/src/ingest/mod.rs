@@ -2,6 +2,7 @@
 pub mod discovery;
 mod download;
 pub mod icons;
+mod limits;
 mod parse;
 mod refresh;
 pub mod schedule;
