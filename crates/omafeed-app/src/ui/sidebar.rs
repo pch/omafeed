@@ -313,6 +313,19 @@ impl Ui {
         self.rebuilding.set(false);
     }
 
+    /// Give keyboard focus to `scope`'s sidebar row, which scrolls it into view.
+    pub(super) fn focus_sidebar_row(&self, scope: &Scope) {
+        let row = self
+            .sidebar_rows
+            .borrow()
+            .iter()
+            .find(|r| r.scope == *scope)
+            .map(|r| r.row.clone());
+        if let Some(row) = row {
+            row.grab_focus();
+        }
+    }
+
     /// Refresh counts and warnings in place; rebuild only if the rows changed.
     pub(super) fn update_sidebar(self: &Rc<Self>) {
         let items = self.sidebar_items();

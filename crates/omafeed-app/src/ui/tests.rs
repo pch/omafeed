@@ -473,6 +473,35 @@ pub(crate) fn desktop_smoke() {
             .unwrap()
     });
     pump_until(|| !open_form());
+    // The new feed is shown and selected in the sidebar.
+    let added = runtime
+        .block_on(db.call(|s| {
+            Ok(s.library()?
+                .feeds
+                .iter()
+                .find(|f| f.title == "Discovered feed")
+                .unwrap()
+                .id)
+        }))
+        .unwrap();
+    assert_eq!(u.view.borrow().query.scope, Scope::Feed(added));
+    pump_until(|| {
+        let selected = u.side.list.selected_row().map(|r| r.index() as usize);
+        selected
+            .and_then(|i| u.sidebar_rows.borrow().get(i).map(|r| r.scope.clone()))
+            .is_some_and(|scope| scope == Scope::Feed(added))
+    });
+    // Back to every article for the checks below.
+    let all = u
+        .sidebar_rows
+        .borrow()
+        .iter()
+        .position(|r| r.scope == Scope::All)
+        .unwrap();
+    u.side
+        .list
+        .select_row(u.side.list.row_at_index(all as i32).as_ref());
+    pump_until(|| u.view.borrow().articles().iter().any(|a| a.id == id));
     // Subscribing to it again closes the form without adding anything.
     WidgetExt::activate_action(&u.window, "win.add-feed", None).unwrap();
     pump_until(|| entry_row("Address").is_some());
@@ -667,7 +696,14 @@ pub(crate) fn desktop_smoke() {
         }
         labels
     };
-    pump_until(|| u.view.borrow().articles().iter().any(|a| a.id == id));
+    // Once the list, too, shows the undo.
+    pump_until(|| {
+        u.view
+            .borrow()
+            .articles()
+            .iter()
+            .any(|a| a.id == id && !a.read)
+    });
     assert_eq!(
         article_menu(id),
         [
