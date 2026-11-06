@@ -249,9 +249,14 @@ async fn edit_feed(
             None => subscriptions::subscribe(&u.db, name, url.clone(), parent).await,
         };
         match result {
-            Ok(id) => {
-                u.reload();
-                u.start_refresh(Which::Only(vec![id]));
+            Ok(feed) => {
+                if id.is_none() {
+                    // Switch to the new feed, so its articles appear as they arrive.
+                    u.show_added(Scope::Feed(feed), parent);
+                } else {
+                    u.reload();
+                }
+                u.start_refresh(Which::Only(vec![feed]));
                 return;
             }
             Err(e) if matches!(e.downcast_ref::<Error>(), Some(Error::DuplicateFeed(_))) => {

@@ -20,7 +20,7 @@ struct Item {
 /// Widgets that change when counts or feed errors change.
 pub(super) struct Row {
     pub scope: Scope,
-    row: gtk::ListBoxRow,
+    pub(super) row: gtk::ListBoxRow,
     count: gtk::Label,
     warning: gtk::Image,
 }
@@ -289,6 +289,13 @@ impl Ui {
 
     pub(super) fn rebuild_sidebar(self: &Rc<Self>) {
         self.rebuilding.set(true);
+        // Rows are replaced, so keyboard focus on one moves to its replacement.
+        let focused = self
+            .sidebar_rows
+            .borrow()
+            .iter()
+            .find(|r| r.row.is_focus())
+            .map(|r| r.scope.clone());
         self.side.list.remove_all();
         let selected = self.view.borrow().query.scope.clone();
         let rows: Vec<Row> = self
@@ -310,7 +317,27 @@ impl Ui {
             }
         }
         *self.sidebar_rows.borrow_mut() = rows;
+        if let Some(scope) = focused {
+            self.focus_sidebar_row(&scope);
+        }
         self.rebuilding.set(false);
+    }
+
+    /// Give keyboard focus to `scope`'s sidebar row, which scrolls it into view. Not while
+    /// the layout hides the sidebar: GTK would move focus on from a row nobody can see.
+    pub(super) fn focus_sidebar_row(&self, scope: &Scope) {
+        if !self.side.root.is_visible() {
+            return;
+        }
+        let row = self
+            .sidebar_rows
+            .borrow()
+            .iter()
+            .find(|r| r.scope == *scope)
+            .map(|r| r.row.clone());
+        if let Some(row) = row {
+            row.grab_focus();
+        }
     }
 
     /// Refresh counts and warnings in place; rebuild only if the rows changed.

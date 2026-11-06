@@ -457,6 +457,9 @@ pub(crate) fn desktop_smoke() {
             let _ = socket.write_all(response.as_bytes()).await;
         }
     });
+    // Wide enough for the layout that shows the sidebar, which Xvfb's window is not.
+    u.window.set_size_request(1300, 850);
+    pump_until(|| u.side.root.is_visible());
     WidgetExt::activate_action(&u.window, "win.add-feed", None).unwrap();
     pump_until(|| entry_row("Address").is_some());
     assert!(entry_row("Name").unwrap().text().is_empty());
@@ -473,6 +476,61 @@ pub(crate) fn desktop_smoke() {
             .unwrap()
     });
     pump_until(|| !open_form());
+    // The new feed is shown and selected in the sidebar.
+    let added = runtime
+        .block_on(db.call(|s| {
+            Ok(s.library()?
+                .feeds
+                .iter()
+                .find(|f| f.title == "Discovered feed")
+                .unwrap()
+                .id)
+        }))
+        .unwrap();
+    assert_eq!(u.view.borrow().query.scope, Scope::Feed(added));
+    pump_until(|| {
+        let selected = u.side.list.selected_row().map(|r| r.index() as usize);
+        selected
+            .and_then(|i| u.sidebar_rows.borrow().get(i).map(|r| r.scope.clone()))
+            .is_some_and(|scope| scope == Scope::Feed(added))
+    });
+    // Its row takes keyboard focus, and keeps it once the refresh that follows rebuilds
+    // the sidebar.
+    let focused = || {
+        u.sidebar_rows
+            .borrow()
+            .iter()
+            .find(|r| r.scope == Scope::Feed(added))
+            .is_some_and(|r| r.row.is_focus())
+    };
+    pump_until(focused);
+    pump_until(|| {
+        !u.busy.get()
+            && runtime
+                .block_on(db.call(move |s| Ok(s.library()?.feed(added).unwrap().last_attempt)))
+                .unwrap()
+                .is_some()
+    });
+    // The reload after the refresh has landed.
+    runtime.block_on(db.call(|_| Ok(()))).unwrap();
+    std::thread::sleep(Duration::from_millis(50));
+    pump_until(|| true);
+    assert!(focused());
+    // Whichever finished first, a rebuild of the sidebar keeps it.
+    u.rebuild_sidebar();
+    assert!(focused());
+    u.window.set_size_request(-1, -1);
+    // Back to every article for the checks below.
+    let all = u
+        .sidebar_rows
+        .borrow()
+        .iter()
+        .position(|r| r.scope == Scope::All)
+        .unwrap();
+    u.side
+        .list
+        .select_row(u.side.list.row_at_index(all as i32).as_ref());
+    pump_until(|| u.view.borrow().articles().iter().any(|a| a.id == id));
     // Subscribing to it again closes the form without adding anything.
     WidgetExt::activate_action(&u.window, "win.add-feed", None).unwrap();
     pump_until(|| entry_row("Address").is_some());
@@ -667,7 +725,14 @@ pub(crate) fn desktop_smoke() {
         }
         labels
     };
-    pump_until(|| u.view.borrow().articles().iter().any(|a| a.id == id));
+    // Once the list, too, shows the undo.
+    pump_until(|| {
+        u.view
+            .borrow()
+            .articles()
+            .iter()
+            .any(|a| a.id == id && !a.read)
+    });
     assert_eq!(
         article_menu(id),
         [

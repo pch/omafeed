@@ -17,7 +17,7 @@ use omafeed_core::{
     Db, Paths, Settings,
     config::Palette,
     ingest::{Progress, Refresher, Which},
-    model::{Library, Query, Scope},
+    model::{FolderId, Library, Query, Scope},
 };
 use std::{
     cell::{Cell, RefCell},
@@ -743,6 +743,22 @@ impl Ui {
         self.reload();
     }
 
+    /// Show a feed or folder just added inside `folder`: open the folders above it, select
+    /// it in the sidebar, scrolled into view, and list its articles.
+    pub fn show_added(self: &Rc<Self>, scope: Scope, folder: Option<FolderId>) {
+        self.expand_to(folder);
+        self.view.borrow_mut().set_scope(scope.clone());
+        self.settings.borrow_mut().scope = scope.clone();
+        self.clear_article();
+        self.save();
+        let u = self.clone();
+        glib::spawn_future_local(async move {
+            if u.load_library().await {
+                u.focus_sidebar_row(&scope);
+            }
+        });
+    }
+
     /// Show the library without a feed or folder just removed from it: "All Articles" if it
     /// was the view shown, and no open article if that was in the removed feed.
     pub fn removed(self: &Rc<Self>, scope: &Scope) {
@@ -770,16 +786,25 @@ impl Ui {
     pub fn reload(self: &Rc<Self>) {
         let u = self.clone();
         glib::spawn_future_local(async move {
-            match u.db.call(|s| s.library()).await {
-                Ok(lib) => {
-                    u.close_sidebar_menu();
-                    *u.library.borrow_mut() = lib;
-                    u.rebuild_sidebar();
-                    u.reload_articles();
-                }
-                Err(e) => u.error(e),
-            }
+            u.load_library().await;
         });
+    }
+
+    /// Reload the library, sidebar, and article list. Returns whether the library loaded.
+    async fn load_library(self: &Rc<Self>) -> bool {
+        match self.db.call(|s| s.library()).await {
+            Ok(lib) => {
+                self.close_sidebar_menu();
+                *self.library.borrow_mut() = lib;
+                self.rebuild_sidebar();
+                self.reload_articles();
+                true
+            }
+            Err(e) => {
+                self.error(e);
+                false
+            }
+        }
     }
 
     /// Update unread counts without reloading the article list.
