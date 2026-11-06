@@ -1686,7 +1686,7 @@ dependencies = [
 
 [[package]]
 name = "omafeed"
-version = "0.2.7"
+version = "0.2.8"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -1705,7 +1705,7 @@ dependencies = [
 
 [[package]]
 name = "omafeed-core"
-version = "0.2.7"
+version = "0.2.8"
 dependencies = [
  "ammonia",
  "anyhow",
