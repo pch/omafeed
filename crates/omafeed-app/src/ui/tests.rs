@@ -491,6 +491,27 @@ pub(crate) fn desktop_smoke() {
             .and_then(|i| u.sidebar_rows.borrow().get(i).map(|r| r.scope.clone()))
             .is_some_and(|scope| scope == Scope::Feed(added))
     });
+    // Its row keeps keyboard focus once the refresh that follows rebuilds the sidebar.
+    let focused = || {
+        u.sidebar_rows
+            .borrow()
+            .iter()
+            .find(|r| r.scope == Scope::Feed(added))
+            .is_some_and(|r| r.row.is_focus())
+    };
+    pump_until(focused);
+    pump_until(|| {
+        !u.busy.get()
+            && runtime
+                .block_on(db.call(move |s| Ok(s.library()?.feed(added).unwrap().last_attempt)))
+                .unwrap()
+                .is_some()
+    });
+    // The reload after the refresh has landed.
+    runtime.block_on(db.call(|_| Ok(()))).unwrap();
+    std::thread::sleep(Duration::from_millis(50));
+    pump_until(|| true);
+    assert!(focused());
     // Back to every article for the checks below.
     let all = u
         .sidebar_rows

@@ -20,7 +20,7 @@ struct Item {
 /// Widgets that change when counts or feed errors change.
 pub(super) struct Row {
     pub scope: Scope,
-    row: gtk::ListBoxRow,
+    pub(super) row: gtk::ListBoxRow,
     count: gtk::Label,
     warning: gtk::Image,
 }
@@ -289,6 +289,13 @@ impl Ui {
 
     pub(super) fn rebuild_sidebar(self: &Rc<Self>) {
         self.rebuilding.set(true);
+        // Rows are replaced, so keyboard focus on one moves to its replacement.
+        let focused = self
+            .sidebar_rows
+            .borrow()
+            .iter()
+            .find(|r| r.row.is_focus())
+            .map(|r| r.scope.clone());
         self.side.list.remove_all();
         let selected = self.view.borrow().query.scope.clone();
         let rows: Vec<Row> = self
@@ -310,6 +317,9 @@ impl Ui {
             }
         }
         *self.sidebar_rows.borrow_mut() = rows;
+        if let Some(scope) = focused {
+            self.focus_sidebar_row(&scope);
+        }
         self.rebuilding.set(false);
     }
 
