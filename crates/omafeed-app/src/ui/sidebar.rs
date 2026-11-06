@@ -323,8 +323,12 @@ impl Ui {
         self.rebuilding.set(false);
     }
 
-    /// Give keyboard focus to `scope`'s sidebar row, which scrolls it into view.
+    /// Give keyboard focus to `scope`'s sidebar row, which scrolls it into view. Not while
+    /// the layout hides the sidebar: GTK would move focus on from a row nobody can see.
     pub(super) fn focus_sidebar_row(&self, scope: &Scope) {
+        if !self.side.root.is_visible() {
+            return;
+        }
         let row = self
             .sidebar_rows
             .borrow()

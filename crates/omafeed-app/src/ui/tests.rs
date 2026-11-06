@@ -491,7 +491,10 @@ pub(crate) fn desktop_smoke() {
             .and_then(|i| u.sidebar_rows.borrow().get(i).map(|r| r.scope.clone()))
             .is_some_and(|scope| scope == Scope::Feed(added))
     });
-    // Its row keeps keyboard focus once the refresh that follows rebuilds the sidebar.
+    // Where the layout shows the sidebar, its row takes keyboard focus and keeps it once the
+    // refresh that follows rebuilds the sidebar. (A window narrower than the wide layout, as
+    // under Xvfb, hides the sidebar, and focus stays where it was.)
+    let sidebar_shown = u.side.root.is_visible();
     let focused = || {
         u.sidebar_rows
             .borrow()
@@ -499,7 +502,9 @@ pub(crate) fn desktop_smoke() {
             .find(|r| r.scope == Scope::Feed(added))
             .is_some_and(|r| r.row.is_focus())
     };
-    pump_until(focused);
+    if sidebar_shown {
+        pump_until(focused);
+    }
     pump_until(|| {
         !u.busy.get()
             && runtime
@@ -511,7 +516,7 @@ pub(crate) fn desktop_smoke() {
     runtime.block_on(db.call(|_| Ok(()))).unwrap();
     std::thread::sleep(Duration::from_millis(50));
     pump_until(|| true);
-    assert!(focused());
+    assert_eq!(focused(), sidebar_shown);
     // Back to every article for the checks below.
     let all = u
         .sidebar_rows
