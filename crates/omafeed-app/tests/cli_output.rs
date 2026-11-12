@@ -164,6 +164,7 @@ impl Cli {
             .env("NO_PROXY", "*")
             .env("no_proxy", "*")
             .env_remove("RUST_BACKTRACE")
+            .env_remove("OMAFEED_MINIFLUX_TOKEN")
             .output()
             .unwrap();
         (
@@ -244,6 +245,7 @@ fn library() -> Cli {
 fn reading_commands_print_exactly_the_same_bytes() {
     let cli = library();
     cli.check("status", &["status"]);
+    cli.check("account-status", &["account", "status"]);
     cli.check("feeds", &["feeds"]);
     cli.check("feeds-json", &["feeds", "--json"]);
     cli.check("articles", &["articles"]);
@@ -414,6 +416,12 @@ fn errors_print_exactly_the_same_bytes_and_exit_codes() {
             "error-subscribe-scheme",
             &["subscribe", "ftp://example.org/feed"],
         ),
+        ("error-sync-unconnected", &["sync"]),
+        ("error-disconnect-unconnected", &["account", "disconnect"]),
+        (
+            "error-connect-no-key",
+            &["account", "connect", "https://example.org"],
+        ),
     ] {
         cli.check(name, args);
     }
@@ -447,9 +455,17 @@ fn help_and_version_print_exactly_the_same_bytes() {
         "unstar",
         "subscribe",
         "unsubscribe",
+        "sync",
+        "account",
         "help",
     ] {
         cli.check(&format!("help-{command}"), &[command, "--help"]);
+    }
+    for command in ["connect", "status", "disconnect"] {
+        cli.check(
+            &format!("help-account-{command}"),
+            &["account", command, "--help"],
+        );
     }
     cli.check("help-search-short", &["search", "-h"]);
     cli.check("help-help-articles", &["help", "articles"]);

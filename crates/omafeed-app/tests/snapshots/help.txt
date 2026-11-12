@@ -22,6 +22,8 @@ Commands:
   unstar       Remove the star from articles
   subscribe    Subscribe to a website or feed URL; run `refresh` afterwards to fetch articles
   unsubscribe  Delete a feed and all its articles, starred ones included (requires --yes)
+  sync         Sync with the connected Miniflux account now, as `refresh` does while one is connected
+  account      Connect a Miniflux account, show it, or disconnect it
   help         Print this message or the help of the given subcommand(s)
 
 Options:

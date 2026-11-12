@@ -109,7 +109,8 @@ impl Store {
 
     /// Subscribe to `url` as `title` (the URL if empty) in `folder`. Fails with
     /// [`Error::DuplicateFeed`] if the library already has the URL, and with
-    /// [`Error::Validation`] for a URL that is not HTTP(S) or a bad name.
+    /// [`Error::Validation`] for a URL that is not HTTP(S) or a bad name. Like every change to
+    /// the feeds, fails with [`Error::Managed`] while a Miniflux account decides them.
     pub fn add_feed(&self, title: &str, url: &str, folder: Option<FolderId>) -> Result<FeedId> {
         let url = validate_url(url)?;
         let title = if title.trim().is_empty() {
@@ -118,6 +119,7 @@ impl Store {
             Self::name(title)?
         };
         self.immediate(|s| {
+            s.require_local()?;
             s.conn
                 .execute(
                     "INSERT INTO feeds(title, url, folder, revision) VALUES(?1, ?2, ?3, ?4)",
@@ -141,6 +143,7 @@ impl Store {
         let url = validate_url(url)?;
         let title = Self::name(title)?;
         self.immediate(|s| {
+            s.require_local()?;
             let revision = Self::next_revision(&s.conn)?;
             s.conn
                 .execute(UPDATE_FEED, params![title, folder, url, id, revision])
@@ -153,6 +156,7 @@ impl Store {
     /// refresh in progress still saves what it downloads. Fails with
     /// [`Error::FeedNotFound`] if there is no such feed.
     pub fn move_feed(&self, id: FeedId, folder: Option<FolderId>) -> Result<()> {
+        self.require_local()?;
         let moved = self.conn.execute(
             "UPDATE feeds SET folder = ?1 WHERE id = ?2",
             params![folder, id],
@@ -176,6 +180,7 @@ impl Store {
 
     /// Remove a feed and all its articles, starred ones included.
     pub fn delete_feed(&self, id: FeedId) -> Result<()> {
+        self.require_local()?;
         self.conn.execute("DELETE FROM feeds WHERE id = ?1", [id])?;
         self.articles_changed();
         Ok(())
@@ -284,6 +289,7 @@ impl Store {
     pub fn import(&self, text: &str) -> Result<ImportReport> {
         let doc = opml::parse(text)?;
         self.immediate(|s| {
+            s.require_local()?;
             let mut report = ImportReport::default();
             Self::import_outlines(&s.conn, &doc.body.outlines, None, &mut report, 0)?;
             Ok(report)

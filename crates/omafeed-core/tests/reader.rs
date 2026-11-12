@@ -19,7 +19,12 @@ fn download(body: &str) -> Download {
     })
 }
 /// Turns a new library back into the version 2 schema, for tests that write older text.
-const UNDO_LATER_MIGRATIONS: &str = "ALTER TABLE feeds DROP COLUMN revision; DROP TABLE meta;";
+const UNDO_LATER_MIGRATIONS: &str = "
+    DROP TRIGGER outbox_read; DROP TRIGGER outbox_starred; DROP TABLE outbox; DROP TABLE account;
+    DROP INDEX feed_remote; DROP INDEX folder_remote; DROP INDEX article_remote;
+    ALTER TABLE feeds DROP COLUMN remote_id; ALTER TABLE folders DROP COLUMN remote_id;
+    ALTER TABLE articles DROP COLUMN remote_id;
+    ALTER TABLE feeds DROP COLUMN revision; DROP TABLE meta;";
 /// The feed's current revision, as a refresh would see it.
 fn revision(s: &Store, feed: FeedId) -> i64 {
     s.library()
@@ -1191,6 +1196,7 @@ fn callers_can_tell_the_errors_they_act_on_apart() {
         Some(Error::DuplicateFeed(_)) => "duplicate".into(),
         Some(Error::NewerDatabase) => "newer".into(),
         Some(Error::Validation(_)) => "validation".into(),
+        Some(Error::Managed) => "managed".into(),
         None => format!("other: {e}"),
     };
     let s = Store::open(":memory:").unwrap();

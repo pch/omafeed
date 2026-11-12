@@ -147,7 +147,9 @@ impl Refresher {
         .context("Feed discovery timed out")?
     }
 
-    /// Refresh the feeds `which` chooses. Overlapping calls return immediately.
+    /// Refresh the feeds `which` chooses. Overlapping calls return immediately. While a
+    /// Miniflux account is connected, Miniflux fetches the feeds and this refreshes none; see
+    /// [`crate::sync::sync`].
     pub async fn refresh(
         &self,
         db: Db,
@@ -167,7 +169,13 @@ impl Refresher {
         let _reset = Reset(self.busy.clone());
         let now = chrono::Utc::now().timestamp();
         let mut feeds = db
-            .call(|s| Ok(s.library()?.feeds))
+            .call(|s| {
+                s.snapshot(|s| {
+                    let connected = s.account()?.is_some();
+                    let feeds = s.library()?.feeds;
+                    Ok(if connected { Vec::new() } else { feeds })
+                })
+            })
             .await?
             .into_iter()
             .filter(|f| which.includes(f, now))

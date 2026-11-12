@@ -1,0 +1,13 @@
+$ omafeed account disconnect --help
+exit: 0
+--- stdout
+Stop mirroring the account; its feeds stay, as local ones
+
+Its feeds, folders and articles stay, with their read and star state, and omafeed fetches the feeds itself again. Changes not yet sent are sent first if the server can be reached.
+
+Usage: omafeed account disconnect
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+--- stderr

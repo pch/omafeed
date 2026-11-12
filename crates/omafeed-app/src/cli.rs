@@ -1,7 +1,7 @@
 //! Command-line operations that run without opening a window.
 mod json;
 
-use crate::DB_FILE;
+use crate::{DB_FILE, account};
 use anyhow::{Context, Result, bail};
 use omafeed_core::{
     Db, Error, Paths, Settings,
@@ -11,6 +11,7 @@ use omafeed_core::{
     reading,
     store::PAGE_SIZE,
     subscriptions::{self, Removal},
+    sync::{self, miniflux::Client},
 };
 use std::path::PathBuf;
 
@@ -137,6 +138,38 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Sync with the connected Miniflux account now, as `refresh` does while one is connected
+    Sync {
+        /// Print JSON instead of text
+        #[arg(long)]
+        json: bool,
+    },
+    /// Connect a Miniflux account, show it, or disconnect it
+    #[command(subcommand)]
+    Account(AccountCommand),
+}
+
+#[derive(clap::Subcommand)]
+pub enum AccountCommand {
+    /// Mirror a Miniflux account, reading its API key from standard input
+    ///
+    /// Miniflux then fetches the feeds and decides which feeds and folders there are, and
+    /// omafeed syncs read and star state with it. Your feeds Miniflux does not have are
+    /// subscribed there, and articles it has too keep their read and star state. The API key
+    /// (in Miniflux: Settings, API Keys) is read from standard input, or from
+    /// OMAFEED_MINIFLUX_TOKEN, and kept in the keyring.
+    Connect {
+        /// The server's address, e.g. https://miniflux.example.org
+        server: String,
+    },
+    /// Show the connected account and its last sync
+    Status,
+    /// Stop mirroring the account; its feeds stay, as local ones
+    ///
+    /// Its feeds, folders and articles stay, with their read and star state, and omafeed
+    /// fetches the feeds itself again. Changes not yet sent are sent first if the server can
+    /// be reached.
+    Disconnect,
 }
 
 pub fn run(command: Command) -> Result<()> {
@@ -177,6 +210,10 @@ pub fn run(command: Command) -> Result<()> {
                 json,
             } => subscribe(&db, &url, folder, title, json).await,
             Command::Unsubscribe { id, yes, json } => unsubscribe(&db, id, yes, json).await,
+            Command::Sync { json } => sync_now(&db, json).await,
+            Command::Account(AccountCommand::Connect { server }) => connect(&db, &server).await,
+            Command::Account(AccountCommand::Status) => account_status(&db).await,
+            Command::Account(AccountCommand::Disconnect) => disconnect(&db).await,
         }
     })
 }
@@ -204,6 +241,9 @@ async fn export(db: &Db, file: &PathBuf) -> Result<()> {
 }
 
 async fn refresh(db: &Db, paths: &Paths, minutes: u32, json: bool) -> Result<()> {
+    if let Some(client) = account::client(db).await? {
+        return sync_as_refresh(db, &client, json).await;
+    }
     let (tx, rx) = async_channel::unbounded();
     let logger = tokio::spawn(async move {
         let mut feeds = Vec::new();
@@ -248,6 +288,166 @@ async fn refresh(db: &Db, paths: &Paths, minutes: u32, json: bool) -> Result<()>
             failed,
             feeds,
         })?;
+    }
+    Ok(())
+}
+
+/// `refresh` while an account is connected: a sync, reported as `refresh` reports, with
+/// each feed's state as Miniflux last fetched it.
+async fn sync_as_refresh(db: &Db, client: &Client, json: bool) -> Result<()> {
+    let report = sync::sync(db, client).await?;
+    let lib = db.call(|s| s.library()).await?;
+    if !json {
+        print_report(&report);
+        for f in &lib.feeds {
+            if let Some(e) = &f.error {
+                println!("{}: {e}", f.title);
+            }
+        }
+        return Ok(());
+    }
+    let feeds: Vec<json::Refreshed> = lib
+        .feeds
+        .into_iter()
+        .map(|f| json::Refreshed {
+            title: f.title,
+            error: f.error,
+        })
+        .collect();
+    json::print(&json::Refresh {
+        total: feeds.len(),
+        failed: feeds.iter().filter(|f| f.error.is_some()).count(),
+        feeds,
+    })
+}
+
+fn print_report(report: &sync::Report) {
+    println!(
+        "Synced {} with Miniflux: {}, {} sent, {} read or starred on the server",
+        plural(report.feeds, "feed"),
+        plural(report.new_articles, "new article"),
+        plural(report.sent, "change"),
+        plural(report.state_changes, "article")
+    );
+    if report.subscribed > 0 {
+        println!(
+            "Subscribed Miniflux to {}",
+            plural(report.subscribed, "feed")
+        );
+    }
+    for (title, reason) in &report.refused {
+        eprintln!("{title}: {reason}");
+    }
+}
+
+async fn sync_now(db: &Db, json: bool) -> Result<()> {
+    let Some(client) = account::client(db).await? else {
+        bail!("No Miniflux account is connected; connect one with `omafeed account connect`");
+    };
+    let report = sync::sync(db, &client).await?;
+    if json {
+        return json::print(&json::Synced::from(&report));
+    }
+    print_report(&report);
+    Ok(())
+}
+
+/// The API key from the environment, or else a line of standard input, asking for it first if
+/// someone is typing.
+fn read_token() -> Result<String> {
+    use std::io::{IsTerminal, Write};
+    if let Ok(token) = std::env::var(account::TOKEN_VAR)
+        && !token.trim().is_empty()
+    {
+        return Ok(token);
+    }
+    let stdin = std::io::stdin();
+    if stdin.is_terminal() {
+        eprint!("Miniflux API key: ");
+        std::io::stderr().flush()?;
+    }
+    let mut line = String::new();
+    stdin.read_line(&mut line)?;
+    let token = line.trim().to_owned();
+    if token.is_empty() {
+        bail!(
+            "No API key given; pipe it in, or set {}",
+            account::TOKEN_VAR
+        );
+    }
+    Ok(token)
+}
+
+async fn connect(db: &Db, server: &str) -> Result<()> {
+    let token = read_token()?;
+    let client = Client::new(server, &token)?;
+    let user = client.me().await?;
+    account::save_token(client.server(), &token).await?;
+    let report = match sync::connect(db, &client).await {
+        Ok(report) => report,
+        Err(e) => {
+            // A first sync that failed leaves the account connected, and needs the key.
+            if db.call(|s| s.account()).await?.is_none() {
+                let _ = account::forget_token(client.server()).await;
+            }
+            return Err(e);
+        }
+    };
+    println!("Connected to {} as {}", client.server(), user.username);
+    print_report(&report);
+    Ok(())
+}
+
+async fn account_status(db: &Db) -> Result<()> {
+    let Some(account) = db.call(|s| s.account()).await? else {
+        println!("No Miniflux account is connected");
+        return Ok(());
+    };
+    println!("Connected to {} as {}", account.server, account.username);
+    let last = account.last_sync.map_or_else(
+        || "never".to_owned(),
+        |t| {
+            chrono::DateTime::from_timestamp(t, 0)
+                .map(|d| {
+                    d.with_timezone(&chrono::Local)
+                        .format("%Y-%m-%d %H:%M")
+                        .to_string()
+                })
+                .unwrap_or_default()
+        },
+    );
+    println!("Last sync: {last}");
+    if let Some(error) = account.error {
+        println!("Last sync failed: {error}");
+    }
+    if account.unsent > 0 {
+        println!(
+            "Not sent yet: {}",
+            plural(account.unsent as usize, "change")
+        );
+    }
+    Ok(())
+}
+
+async fn disconnect(db: &Db) -> Result<()> {
+    let Some(connected) = db.call(|s| s.account()).await? else {
+        bail!("No Miniflux account is connected");
+    };
+    // Without the key, or with the server gone, unsent changes are dropped.
+    let client = account::client(db).await.ok().flatten();
+    let dropped = sync::disconnect(db, client.as_ref()).await?;
+    if let Err(e) = account::forget_token(&connected.server).await {
+        eprintln!("omafeed: could not remove the API key from the keyring: {e:#}");
+    }
+    println!(
+        "Disconnected from {}; its feeds are local now, and omafeed fetches them itself",
+        connected.server
+    );
+    if dropped > 0 {
+        println!(
+            "Dropped {} not sent to Miniflux",
+            plural(dropped as usize, "change")
+        );
     }
     Ok(())
 }
@@ -524,6 +724,10 @@ async fn subscribe(
     title: Option<String>,
     json: bool,
 ) -> Result<()> {
+    // Say so before looking the feed up.
+    if db.call(|s| s.account()).await?.is_some() {
+        return Err(Error::Managed.into());
+    }
     let found = Refresher::new()?.discover(url).await?;
     let Some(pick) = found.first() else {
         bail!("No feed found at {url}");

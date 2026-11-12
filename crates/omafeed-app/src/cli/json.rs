@@ -36,6 +36,37 @@ pub struct Refreshed {
     pub error: Option<String>,
 }
 
+/// `sync --json`.
+#[derive(Serialize)]
+pub struct Synced {
+    sent: usize,
+    subscribed: usize,
+    refused: Vec<Refreshed>,
+    feeds: usize,
+    new_articles: usize,
+    state_changes: usize,
+}
+
+impl From<&omafeed_core::sync::Report> for Synced {
+    fn from(r: &omafeed_core::sync::Report) -> Self {
+        Self {
+            sent: r.sent,
+            subscribed: r.subscribed,
+            refused: r
+                .refused
+                .iter()
+                .map(|(title, error)| Refreshed {
+                    title: title.clone(),
+                    error: Some(error.clone()),
+                })
+                .collect(),
+            feeds: r.feeds,
+            new_articles: r.new_articles,
+            state_changes: r.state_changes,
+        }
+    }
+}
+
 /// A feed found by discovery: `discover --json` and `other_feeds_found`.
 #[derive(Serialize)]
 pub struct Found {

@@ -17,6 +17,9 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Rust(reextract_text),
     // Feed revisions, so a refresh that raced an edit or a deletion stores nothing.
     Migration::Sql(FEED_REVISIONS),
+    // A Miniflux account: what each feed, folder and article is on the server, and read and
+    // star changes waiting to be sent there.
+    Migration::Sql(ACCOUNT),
 ];
 
 const SCHEMA_V1: &str = r#"
@@ -88,6 +91,49 @@ CREATE TABLE meta(
     next_revision INTEGER NOT NULL
 );
 INSERT INTO meta(id, next_revision) VALUES(1, (SELECT COALESCE(max(id), 0) + 1 FROM feeds));
+";
+
+/// While an `account` row exists, Miniflux owns the library: `remote_id` is what a feed
+/// (Miniflux feed), folder (category) or article (entry) is on the server, or NULL for one it
+/// does not have. Changing the read or star state of an article with a `remote_id` queues the
+/// new value in `outbox`, in the same statement, whichever code made the change; the sync
+/// sends it and clears it. One row per article and field, so the newest value replaces an
+/// unsent older one.
+const ACCOUNT: &str = "
+ALTER TABLE feeds ADD COLUMN remote_id INTEGER;
+CREATE UNIQUE INDEX feed_remote ON feeds(remote_id) WHERE remote_id IS NOT NULL;
+ALTER TABLE folders ADD COLUMN remote_id INTEGER;
+CREATE UNIQUE INDEX folder_remote ON folders(remote_id) WHERE remote_id IS NOT NULL;
+ALTER TABLE articles ADD COLUMN remote_id INTEGER;
+CREATE UNIQUE INDEX article_remote ON articles(remote_id) WHERE remote_id IS NOT NULL;
+CREATE TABLE account(
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    server TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    username TEXT NOT NULL,
+    last_sync INTEGER,
+    error TEXT
+);
+CREATE TABLE outbox(
+    article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+    field TEXT NOT NULL CHECK (field IN ('read', 'starred')),
+    value INTEGER NOT NULL,
+    PRIMARY KEY(article_id, field)
+) WITHOUT ROWID;
+CREATE TRIGGER outbox_read AFTER UPDATE OF read ON article_state
+WHEN new.read IS NOT old.read
+ AND (SELECT remote_id FROM articles WHERE id = new.article_id) IS NOT NULL
+BEGIN
+    INSERT INTO outbox(article_id, field, value) VALUES(new.article_id, 'read', new.read)
+    ON CONFLICT(article_id, field) DO UPDATE SET value = excluded.value;
+END;
+CREATE TRIGGER outbox_starred AFTER UPDATE OF starred ON article_state
+WHEN new.starred IS NOT old.starred
+ AND (SELECT remote_id FROM articles WHERE id = new.article_id) IS NOT NULL
+BEGIN
+    INSERT INTO outbox(article_id, field, value) VALUES(new.article_id, 'starred', new.starred)
+    ON CONFLICT(article_id, field) DO UPDATE SET value = excluded.value;
+END;
 ";
 
 /// Recompute search/preview text from stored HTML (the FTS index follows via trigger).

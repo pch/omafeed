@@ -232,6 +232,24 @@ pub struct ImportReport {
     pub invalid: Vec<String>,
 }
 
+/// The Miniflux account the library mirrors, if one is connected. While it is, Miniflux
+/// fetches the feeds and decides which feeds and folders there are; omafeed syncs with it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Account {
+    /// The server's address, ending in `/`.
+    pub server: String,
+    /// The user's ID on the server.
+    pub user_id: i64,
+    /// The name the user signs in with.
+    pub username: String,
+    /// When the last sync finished, in Unix seconds, or `None` before the first.
+    pub last_sync: Option<i64>,
+    /// Why the last sync failed, or `None` if it succeeded.
+    pub error: Option<String>,
+    /// Read and star changes not yet sent to the server.
+    pub unsent: i64,
+}
+
 /// All folders and feeds, with totals, read from one snapshot.
 #[derive(Debug, Default)]
 pub struct Library {
