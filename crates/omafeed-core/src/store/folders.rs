@@ -35,6 +35,12 @@ impl Store {
         if !unchanged {
             self.require_local_folder(id)?;
         }
+        self.rename_folder_now(id, name)
+    }
+
+    /// [`Store::rename_folder`], whoever decides the folder: for mirroring a category renamed
+    /// on the Miniflux server.
+    pub(crate) fn rename_folder_now(&self, id: FolderId, name: &str) -> Result<()> {
         self.conn
             .execute(
                 "UPDATE folders SET name = ?1 WHERE id = ?2",
@@ -82,7 +88,7 @@ impl Store {
         })
     }
 
-    pub(super) fn delete_folder_now(&self, id: FolderId) -> Result<()> {
+    pub(crate) fn delete_folder_now(&self, id: FolderId) -> Result<()> {
         let tx = &self.conn;
         let parent: Option<FolderId> =
             tx.query_row("SELECT parent FROM folders WHERE id = ?1", [id], |r| {

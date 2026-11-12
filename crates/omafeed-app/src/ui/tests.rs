@@ -865,15 +865,17 @@ pub(crate) fn desktop_smoke() {
             .any(|s| s.visible_child_name().as_deref() == Some("empty"))
     );
     // Connecting a Miniflux account from the window turns the library into a mirror of it:
-    // feeds are added there, so the window stops offering to add, edit or move them here.
+    // feeds are changed on the server first, and there is no importing OPML.
     let miniflux = runtime
         .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
         .unwrap();
     let server = format!("http://{}/", miniflux.local_addr().unwrap());
+    let removed = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let log = removed.clone();
     let mock = runtime.spawn(async move {
         loop {
             let (socket, _) = miniflux.accept().await.unwrap();
-            tokio::spawn(answer_as_miniflux(socket));
+            tokio::spawn(answer_as_miniflux(socket, log.clone()));
         }
     });
     let enabled = |name: &str| u.window.lookup_action(name).unwrap().is_enabled();
@@ -888,7 +890,7 @@ pub(crate) fn desktop_smoke() {
         .set_text("smoke-test-key");
     form_button("Connect").emit_clicked();
     pump_until(|| !open_form() && u.library.borrow().account.is_some());
-    assert!(!enabled("add-feed") && !enabled("import"));
+    assert!(enabled("add-feed") && !enabled("import"));
     let remote = u
         .library
         .borrow()
@@ -909,10 +911,31 @@ pub(crate) fn desktop_smoke() {
             "Open home page",
             "Copy feed URL",
             "Copy home page URL",
-            "Mark all as read"
+            "Mark all as read",
+            "Edit…",
+            "Remove…"
         ]
     );
+    // Removing a feed unsubscribes the server first.
+    run(Scope::Feed(remote), sidebar::Command::Remove);
+    pump_until(|| {
+        all_widgets()
+            .into_iter()
+            .filter_map(|w| w.downcast::<gtk::Button>().ok())
+            .any(|b| b.label().as_deref() == Some("Remove"))
+    });
+    form_button("Remove").emit_clicked();
+    pump_until(|| u.library.borrow().feed(remote).is_none());
+    assert!(
+        removed
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r == "DELETE /v1/feeds/7"),
+        "the server was not told"
+    );
     // Disconnecting, after confirming, makes the feeds local again.
+    let feeds = u.library.borrow().feeds.len();
     u.side.menu.popdown();
     WidgetExt::activate_action(&u.window, "win.account", None).unwrap();
     pump_until(open_form);
@@ -926,19 +949,18 @@ pub(crate) fn desktop_smoke() {
     form_button("Disconnect").emit_clicked();
     pump_until(|| u.library.borrow().account.is_none() && !open_form());
     assert!(enabled("add-feed") && enabled("import"));
-    assert!(
-        runtime
-            .block_on(db.call(move |s| Ok(s.library()?.feed(remote).is_some())))
-            .unwrap()
-    );
+    assert_eq!(u.library.borrow().feeds.len(), feeds);
     mock.abort();
     u.window.close();
     pump_until(|| !u.window.is_visible());
 }
 
 /// Answer one request as a Miniflux server with one feed and one unread entry would, taking
-/// any feed or category it is sent.
-async fn answer_as_miniflux(mut socket: tokio::net::TcpStream) {
+/// any feed or category it is sent, and note any deletion in `deleted`.
+async fn answer_as_miniflux(
+    mut socket: tokio::net::TcpStream,
+    deleted: Arc<std::sync::Mutex<Vec<String>>>,
+) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     // Read the whole request, body included, so closing the connection cannot cut it off.
     let mut request = Vec::new();
@@ -968,6 +990,10 @@ async fn answer_as_miniflux(mut socket: tokio::net::TcpStream) {
     }
     let request = String::from_utf8_lossy(&request);
     let line = request.lines().next().unwrap_or_default();
+    if line.starts_with("DELETE ") {
+        let target = line.split(' ').take(2).collect::<Vec<_>>().join(" ");
+        deleted.lock().unwrap().push(target);
+    }
     let category = r#"{"id":1,"title":"All"}"#;
     let entry = r#"{"id":5,"feed_id":7,"status":"unread","starred":false,"title":"Remote entry","url":"https://remote.invalid/post","author":"","content":"<p>From Miniflux.</p>","published_at":"2026-01-01T00:00:00Z","enclosures":null}"#;
     let body = if line.starts_with("GET /v1/me ") {
@@ -989,7 +1015,7 @@ async fn answer_as_miniflux(mut socket: tokio::net::TcpStream) {
     } else {
         String::new()
     };
-    let status = if line.starts_with("PUT ") {
+    let status = if line.starts_with("PUT ") || line.starts_with("DELETE ") {
         "204 No Content"
     } else {
         "200 OK"

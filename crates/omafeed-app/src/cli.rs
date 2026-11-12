@@ -703,23 +703,29 @@ async fn subscribe(
     title: Option<String>,
     json: bool,
 ) -> Result<()> {
-    // Say so before looking the feed up.
-    if db.call(|s| s.account()).await?.is_some() {
-        return Err(Error::Managed.into());
-    }
+    // While connected, Miniflux subscribes too; get its key before looking the feed up.
+    let client = account::client(db).await?;
     let found = Refresher::new()?.discover(url).await?;
     let Some(pick) = found.first() else {
         bail!("No feed found at {url}");
     };
     let name = title.unwrap_or_else(|| pick.title.clone());
     let feed_url = pick.url.clone();
-    let id =
-        subscriptions::subscribe(db, name.clone(), feed_url.clone(), folder.map(FolderId)).await?;
+    let folder = folder.map(FolderId);
+    let id = subscriptions::subscribe(db, client.as_ref(), name.clone(), feed_url.clone(), folder)
+        .await?;
     if !json {
-        println!(
-            "Subscribed to \"{}\" (feed {id}). Run omafeed refresh to fetch its articles.",
-            one_line(&name)
-        );
+        if client.is_some() {
+            println!(
+                "Subscribed to \"{}\" (feed {id}) in Miniflux, and synced its articles.",
+                one_line(&name)
+            );
+        } else {
+            println!(
+                "Subscribed to \"{}\" (feed {id}). Run omafeed refresh to fetch its articles.",
+                one_line(&name)
+            );
+        }
         for other in &found[1..] {
             println!("Also found: {}\t{}", one_line(&other.title), other.url);
         }
@@ -734,7 +740,13 @@ async fn subscribe(
 }
 
 async fn unsubscribe(db: &Db, id: i64, yes: bool, json: bool) -> Result<()> {
-    let removal = subscriptions::unsubscribe(db, FeedId(id), yes).await?;
+    // While connected, Miniflux unsubscribes too.
+    let client = if yes {
+        account::client(db).await?
+    } else {
+        None
+    };
+    let removal = subscriptions::unsubscribe(db, client.as_ref(), FeedId(id), yes).await?;
     let Removal {
         title,
         articles: total,

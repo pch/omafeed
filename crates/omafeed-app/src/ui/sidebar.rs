@@ -5,6 +5,7 @@ use gtk::{gdk, gio, glib, prelude::*};
 use omafeed_core::{
     ingest::Which,
     model::{Feed, FeedId, FolderId, Library, Query, Scope, TreeItem},
+    subscriptions,
 };
 use std::rc::Rc;
 
@@ -161,8 +162,8 @@ fn feeds_of(lib: &Library, scope: &Scope) -> Vec<FeedId> {
 /// The context menu of the sidebar entry for `scope`: sections of commands, each with
 /// whether it can be used now. Empty for a feed or folder no longer in the library.
 /// `refreshing` tells whether a refresh is under way, which leaves no room for another.
-/// While a Miniflux account is connected, it fetches the feeds and decides which feeds and
-/// categories there are, so their menus offer only what can still be done here.
+/// While a Miniflux account is connected, it fetches the feeds, so there is no refreshing one
+/// alone, and feeds are added only to its categories.
 fn menu(scope: &Scope, lib: &Library, refreshing: bool) -> Vec<Vec<(Command, bool)>> {
     // Smart views other than All Unread show no count, so they may always have unread ones.
     let unread = match scope {
@@ -195,12 +196,12 @@ fn menu(scope: &Scope, lib: &Library, refreshing: bool) -> Vec<Vec<(Command, boo
                     (Command::CopyHomePageUrl, home),
                 ],
             ];
-            if local {
-                sections.push(vec![refresh, mark]);
-                sections.push(vec![(Command::Edit, true), (Command::Remove, true)]);
+            sections.push(if local {
+                vec![refresh, mark]
             } else {
-                sections.push(vec![mark]);
-            }
+                vec![mark]
+            });
+            sections.push(vec![(Command::Edit, true), (Command::Remove, true)]);
             sections
         }
         Scope::Folder(_) if local => vec![
@@ -209,13 +210,16 @@ fn menu(scope: &Scope, lib: &Library, refreshing: bool) -> Vec<Vec<(Command, boo
             vec![(Command::Edit, true), (Command::Remove, true)],
         ],
         Scope::Folder(id) => {
-            // A category is named and removed in Miniflux; it can still be moved.
-            let remote = lib.folder(*id).is_some_and(|f| f.remote);
-            let mut manage = vec![(Command::Edit, true)];
-            if !remote {
-                manage.push((Command::Remove, true));
+            let category = lib.folder(*id).is_some_and(|f| f.remote);
+            let mut add = vec![(Command::NewFolder, true)];
+            if category {
+                add.insert(0, (Command::AddFeed, true));
             }
-            vec![vec![mark], vec![(Command::NewFolder, true)], manage]
+            vec![
+                vec![mark],
+                add,
+                vec![(Command::Edit, true), (Command::Remove, true)],
+            ]
         }
         _ => vec![vec![mark]],
     }
@@ -224,7 +228,7 @@ fn menu(scope: &Scope, lib: &Library, refreshing: bool) -> Vec<Vec<(Command, boo
 /// Where dropping `dragged` on the sidebar entry `onto` moves it: into the folder dropped on,
 /// into the folder of the feed dropped on, or to the top level when dropped on a smart view
 /// or below the last entry. `None` if it would stay where it is, if a folder would go
-/// inside itself, or for a feed while a Miniflux account decides where feeds are.
+/// inside itself, or if a feed would leave the categories of a connected Miniflux account.
 fn destination(lib: &Library, dragged: &Scope, onto: Option<&Scope>) -> Option<Option<FolderId>> {
     let target = match onto {
         Some(Scope::Folder(id)) => Some(*id),
@@ -232,7 +236,12 @@ fn destination(lib: &Library, dragged: &Scope, onto: Option<&Scope>) -> Option<O
         _ => None,
     };
     let current = match dragged {
-        Scope::Feed(_) if lib.account.is_some() => return None,
+        Scope::Feed(_)
+            if lib.account.is_some()
+                && !target.is_some_and(|f| lib.folder(f).is_some_and(|f| f.remote)) =>
+        {
+            return None;
+        }
         Scope::Feed(id) => lib.feed(*id)?.folder,
         Scope::Folder(id) => {
             let inside = lib.folder_path(target).iter().any(|f| f.id == *id);
@@ -467,13 +476,7 @@ impl Ui {
         if let Some(feed) = &item.feed {
             row.set_tooltip_text(Some(&tooltip(feed)));
         }
-        // While a Miniflux account is connected, it decides which folder a feed is in.
-        let movable = match item.scope {
-            Scope::Folder(_) => true,
-            Scope::Feed(_) => self.library.borrow().account.is_none(),
-            _ => false,
-        };
-        if movable {
+        if matches!(item.scope, Scope::Feed(_) | Scope::Folder(_)) {
             row.add_controller(self.drag_source(&item.scope, &content));
         }
         Row {
@@ -702,14 +705,33 @@ impl Ui {
         // Open the folders it lands in, so it does not seem to vanish.
         self.expand_to(folder);
         let u = self.clone();
+        // While connected, a feed moves to another category on the server.
+        let remote = match &scope {
+            Scope::Feed(id) => self
+                .library
+                .borrow()
+                .feed(*id)
+                .filter(|_| self.library.borrow().account.is_some())
+                .map(|f| (f.title.clone(), f.url.clone())),
+            _ => None,
+        };
         glib::spawn_future_local(async move {
-            let result =
-                u.db.call(move |s| match scope {
-                    Scope::Feed(id) => s.move_feed(id, folder),
-                    Scope::Folder(id) => s.move_folder(id, folder),
-                    _ => Ok(()),
-                })
-                .await;
+            let result = match (scope, remote) {
+                (Scope::Feed(id), Some((title, url))) => {
+                    u.change_library(move |db, client| async move {
+                        subscriptions::update(&db, client.as_ref(), id, title, url, folder).await
+                    })
+                    .await
+                }
+                (scope, _) => {
+                    u.db.call(move |s| match scope {
+                        Scope::Feed(id) => s.move_feed(id, folder),
+                        Scope::Folder(id) => s.move_folder(id, folder),
+                        _ => Ok(()),
+                    })
+                    .await
+                }
+            };
             if let Err(e) = result {
                 u.error(e);
             }
@@ -918,7 +940,7 @@ mod tests {
     }
 
     #[test]
-    fn a_connected_account_leaves_only_what_can_be_done_here() {
+    fn a_connected_account_keeps_feeds_in_its_categories() {
         use Command::*;
         let folder = |id, name: &str, remote| Folder {
             id: FolderId(id),
@@ -944,25 +966,33 @@ mod tests {
             [
                 vec![OpenHomePage],
                 vec![CopyFeedUrl, CopyHomePageUrl],
-                vec![MarkRead]
+                vec![MarkRead],
+                vec![Edit, Remove]
             ]
         );
         assert_eq!(
             commands(&menu(&Scope::Folder(FolderId(1)), &lib, false)),
-            [vec![MarkRead], vec![NewFolder], vec![Edit]]
+            [vec![MarkRead], vec![AddFeed, NewFolder], vec![Edit, Remove]]
         );
         assert_eq!(
             commands(&menu(&Scope::Folder(FolderId(2)), &lib, false)),
             [vec![MarkRead], vec![NewFolder], vec![Edit, Remove]]
         );
         let mine = Scope::Folder(FolderId(2));
-        assert_eq!(
-            destination(&lib, &Scope::Feed(FeedId(1)), Some(&mine)),
-            None
-        );
+        let feed = Scope::Feed(FeedId(1));
+        assert_eq!(destination(&lib, &feed, Some(&mine)), None);
+        assert_eq!(destination(&lib, &feed, None), None);
         assert_eq!(
             destination(&lib, &Scope::Folder(FolderId(1)), Some(&mine)),
             Some(Some(FolderId(2)))
+        );
+        let other = Library {
+            folders: vec![folder(1, "Category", true), folder(3, "Other", true)],
+            ..lib
+        };
+        assert_eq!(
+            destination(&other, &feed, Some(&Scope::Folder(FolderId(3)))),
+            Some(Some(FolderId(3)))
         );
     }
 }

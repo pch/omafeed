@@ -3,7 +3,7 @@
 use omafeed_core::{
     Db, Error,
     model::{ArticleId, Download, FeedId, Query, Scope, StatePatch, Update},
-    reading,
+    reading, subscriptions,
     sync::{self, miniflux::Client},
 };
 use serde_json::{Value, json};
@@ -169,6 +169,39 @@ impl Server {
                     self.entry(id, &link, false, false, published);
                 }
                 (201, json!({ "feed_id": id }))
+            }
+            ("PUT", p) if p.starts_with("/v1/feeds/") => {
+                let id: i64 = p["/v1/feeds/".len()..].parse().unwrap();
+                let feed = self.feeds.iter_mut().find(|f| f.0 == id).unwrap();
+                if let Some(title) = body["title"].as_str() {
+                    feed.2 = title.into();
+                }
+                if let Some(url) = body["feed_url"].as_str() {
+                    feed.3 = url.into();
+                }
+                if let Some(category) = body["category_id"].as_i64() {
+                    feed.1 = category;
+                }
+                (201, json!({}))
+            }
+            ("DELETE", p) if p.starts_with("/v1/feeds/") => {
+                let id: i64 = p["/v1/feeds/".len()..].parse().unwrap();
+                self.feeds.retain(|f| f.0 != id);
+                self.entries.retain(|e| e.feed != id);
+                (204, Value::Null)
+            }
+            ("PUT", p) if p.starts_with("/v1/categories/") => {
+                let id: i64 = p["/v1/categories/".len()..].parse().unwrap();
+                let category = self.categories.iter_mut().find(|c| c.0 == id).unwrap();
+                category.1 = body["title"].as_str().unwrap().into();
+                (201, self.category(id))
+            }
+            ("DELETE", p) if p.starts_with("/v1/categories/") => {
+                // As Miniflux does, the category's feeds go with it.
+                let id: i64 = p["/v1/categories/".len()..].parse().unwrap();
+                self.categories.retain(|c| c.0 != id);
+                self.feeds.retain(|f| f.1 != id);
+                (204, Value::Null)
             }
             _ => (404, json!({ "error_message": "not found" })),
         }
@@ -725,4 +758,213 @@ async fn a_failed_sync_is_recorded_on_the_account() {
         error.to_string(),
         format!("The library is connected to {base}, not https://elsewhere.example/")
     );
+}
+
+#[tokio::test]
+async fn feeds_and_categories_are_changed_on_the_server_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(dir.path().join("test.db")).unwrap();
+    let (shared, _, _, _) = local_library(&db).await;
+    let mut setup = server();
+    setup.fetchable.insert(
+        "https://new.example/feed".into(),
+        vec![(
+            "https://new.example/1".into(),
+            chrono::Utc::now().timestamp(),
+        )],
+    );
+    let (base, state) = serve(setup).await;
+    let client = Client::new(&base, "key").unwrap();
+    sync::connect(&db, &client).await.unwrap();
+    let lib = db.call(|s| s.library()).await.unwrap();
+    let tech = lib.folders.iter().find(|f| f.name == "Tech").unwrap().id;
+    let shelf = db.call(|s| s.add_folder("Shelf", None)).await.unwrap();
+    let kind = |e: anyhow::Error| match e.downcast_ref::<Error>() {
+        Some(Error::DuplicateFeed(_)) => "duplicate".to_owned(),
+        Some(Error::Validation(_)) => "validation".to_owned(),
+        _ => format!("other: {e:#}"),
+    };
+
+    // Subscribing goes to the server, named as asked, and brings the feed's entries.
+    let server = &client;
+    let client = Some(server);
+    let new = subscriptions::subscribe(
+        &db,
+        client,
+        "Custom".into(),
+        "https://new.example/feed".into(),
+        Some(tech),
+    )
+    .await
+    .unwrap();
+    let lib = db.call(|s| s.library()).await.unwrap();
+    let feed = lib.feed(new).unwrap();
+    assert_eq!((feed.title.as_str(), feed.folder), ("Custom", Some(tech)));
+    assert!(
+        articles(&db)
+            .await
+            .values()
+            .any(|a| a.url == "https://new.example/1")
+    );
+    let again = subscriptions::subscribe(
+        &db,
+        client,
+        String::new(),
+        "https://new.example/feed".into(),
+        None,
+    );
+    assert_eq!(kind(again.await.unwrap_err()), "duplicate");
+    let own_folder = subscriptions::subscribe(
+        &db,
+        client,
+        String::new(),
+        "https://other.example/feed".into(),
+        Some(shelf),
+    );
+    assert_eq!(kind(own_folder.await.unwrap_err()), "validation");
+
+    // Editing renames and moves it on the server; the top level is the "All" category.
+    subscriptions::update(
+        &db,
+        client,
+        shared,
+        "Renamed".into(),
+        "https://shared.example/feed".into(),
+        None,
+    )
+    .await
+    .unwrap();
+    {
+        let server = state.lock().unwrap();
+        let feed = server
+            .feeds
+            .iter()
+            .find(|f| f.3 == "https://shared.example/feed")
+            .unwrap();
+        let all = server.categories.iter().find(|c| c.1 == "All").unwrap().0;
+        assert_eq!((feed.1, feed.2.as_str()), (all, "Renamed"));
+    }
+    let lib = db.call(|s| s.library()).await.unwrap();
+    let feed = lib.feed(shared).unwrap();
+    assert_eq!(feed.title, "Renamed");
+    assert_eq!(lib.folder(feed.folder.unwrap()).unwrap().name, "All");
+
+    // Unsubscribing removes it from both.
+    subscriptions::unsubscribe(&db, client, new, true)
+        .await
+        .unwrap();
+    assert!(
+        db.call(move |s| s.library())
+            .await
+            .unwrap()
+            .feed(new)
+            .is_none()
+    );
+    assert!(
+        state
+            .lock()
+            .unwrap()
+            .feeds
+            .iter()
+            .all(|f| f.3 != "https://new.example/feed")
+    );
+
+    // Categories are renamed there too, and removed only once empty, since Miniflux would
+    // take their feeds with them.
+    let client = server;
+    sync::rename_category(&db, client, tech, "Technology".into())
+        .await
+        .unwrap();
+    assert_eq!(
+        db.call(|s| s.library())
+            .await
+            .unwrap()
+            .folder(tech)
+            .unwrap()
+            .name,
+        "Technology"
+    );
+    assert!(
+        state
+            .lock()
+            .unwrap()
+            .categories
+            .iter()
+            .any(|c| c.1 == "Technology")
+    );
+    let all = db
+        .call(|s| s.library())
+        .await
+        .unwrap()
+        .folders
+        .iter()
+        .find(|f| f.name == "All")
+        .unwrap()
+        .id;
+    let busy = sync::remove_category(&db, client, all).await.unwrap_err();
+    assert_eq!(kind(busy), "validation");
+    sync::remove_category(&db, client, tech).await.unwrap();
+    assert!(
+        db.call(|s| s.library())
+            .await
+            .unwrap()
+            .folder(tech)
+            .is_none()
+    );
+    assert!(
+        state
+            .lock()
+            .unwrap()
+            .categories
+            .iter()
+            .all(|c| c.1 != "Technology")
+    );
+    let own = sync::rename_category(&db, client, shelf, "Mine".into()).await;
+    assert_eq!(kind(own.unwrap_err()), "validation");
+}
+
+#[tokio::test]
+async fn feeds_the_server_refused_are_fixed_or_removed_here() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(dir.path().join("test.db")).unwrap();
+    let (_, mine, _, _) = local_library(&db).await;
+    let mut setup = server();
+    setup.unreachable.push("https://mine.example/feed".into());
+    let (base, state) = serve(setup).await;
+    let client = Client::new(&base, "key").unwrap();
+    sync::connect(&db, &client).await.unwrap();
+    // A new address is the library's to change; the next sync offers it to the server.
+    subscriptions::update(
+        &db,
+        Some(&client),
+        mine,
+        "Mine".into(),
+        "https://mine.example/fixed".into(),
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(
+        state
+            .lock()
+            .unwrap()
+            .feeds
+            .iter()
+            .all(|f| !f.3.starts_with("https://mine"))
+    );
+    sync::sync(&db, &client).await.unwrap();
+    assert!(
+        state
+            .lock()
+            .unwrap()
+            .feeds
+            .iter()
+            .any(|f| f.3 == "https://mine.example/fixed")
+    );
+    // Without the client, a connected library refuses.
+    let refused = subscriptions::unsubscribe(&db, None, mine, true).await;
+    assert!(matches!(
+        refused.unwrap_err().downcast_ref::<Error>(),
+        Some(Error::Managed)
+    ));
 }

@@ -7,19 +7,25 @@ use omafeed_core::{
     Error,
     ingest::{Which, discovery::Candidate},
     model::{FeedId, FolderId, Library, Scope, TreeItem},
-    subscriptions,
+    subscriptions, sync,
 };
 use std::rc::Rc;
 
-/// Folder choices as (id, "Parent / Child" path), starting with the top level.
-fn folder_paths(lib: &Library) -> Vec<(Option<FolderId>, String)> {
+/// Folder choices as (id, "Parent / Child" path), starting with the top level. While a
+/// Miniflux account is connected, feeds go only into its categories (`categories_only`).
+fn folder_paths(lib: &Library, categories_only: bool) -> Vec<(Option<FolderId>, String)> {
     let mut out = vec![(None, "Top level".into())];
+    if categories_only {
+        out.clear();
+    }
     let mut names: Vec<&str> = Vec::new();
     for item in lib.tree() {
         match item {
             TreeItem::Folder { folder, .. } => {
                 names.push(&folder.name);
-                out.push((Some(folder.id), names.join(" / ")));
+                if folder.remote || !categories_only {
+                    out.push((Some(folder.id), names.join(" / ")));
+                }
             }
             TreeItem::FolderEnd(_) => {
                 names.pop();
@@ -37,14 +43,17 @@ struct FolderPicker {
 
 impl FolderPicker {
     /// A folder choice in `group`, leaving out `except` and the folders inside it, where a
-    /// folder cannot go.
+    /// folder cannot go. A feed's choice (`for_feed`) holds only categories while a Miniflux
+    /// account is connected.
     fn new(
         form: &Form,
         lib: &Library,
         selected: Option<FolderId>,
         except: Option<FolderId>,
+        for_feed: bool,
     ) -> Self {
-        let (ids, names): (Vec<_>, Vec<_>) = folder_paths(lib)
+        let categories_only = for_feed && lib.account.is_some();
+        let (ids, names): (Vec<_>, Vec<_>) = folder_paths(lib, categories_only)
             .into_iter()
             .filter(|(id, _)| match (id, except) {
                 (Some(id), Some(except)) => {
@@ -108,22 +117,47 @@ pub fn remove(u: Rc<Ui>, scope: Scope) {
 
 /// Ask, then remove a feed or folder. Returns whether it is gone.
 async fn remove_confirmed(u: &Rc<Ui>, window: &adw::ApplicationWindow, scope: Scope) -> bool {
-    let (heading, body) = match scope {
-        Scope::Folder(_) => (
+    let remote = {
+        let lib = u.library.borrow();
+        match scope {
+            Scope::Folder(id) => lib.folder(id).is_some_and(|f| f.remote),
+            _ => lib.account.is_some(),
+        }
+    };
+    let (heading, body) = match (&scope, remote) {
+        (Scope::Folder(_), false) => (
             "Remove folder?",
             "Feeds and child folders will move to its parent. Your articles and read state are kept.",
         ),
-        _ => (
+        (Scope::Folder(_), true) => (
+            "Remove category?",
+            "This removes the category from Miniflux too, once it holds no feeds. Folders inside it move to its parent.",
+        ),
+        (_, false) => (
             "Remove subscription?",
             "This removes the feed and its downloaded articles, stars, and read state from omafeed.",
+        ),
+        (_, true) => (
+            "Remove subscription?",
+            "This unsubscribes Miniflux from the feed, deleting its entries there, and removes its articles, stars, and read state from omafeed.",
         ),
     };
     if !confirm(window, heading, body).await {
         return false;
     }
     let result = match scope {
+        Scope::Folder(id) if remote => {
+            u.change_library(move |db, client| async move {
+                let client = client.ok_or(Error::Managed)?;
+                sync::remove_category(&db, &client, id).await
+            })
+            .await
+        }
         Scope::Folder(id) => u.db.call(move |s| s.delete_folder(id)).await,
-        Scope::Feed(id) => subscriptions::unsubscribe(&u.db, id, true)
+        Scope::Feed(id) => u
+            .change_library(move |db, client| async move {
+                subscriptions::unsubscribe(&db, client.as_ref(), id, true).await
+            })
             .await
             .map(drop)
             // Removed by another program meanwhile: it is gone either way.
@@ -161,25 +195,34 @@ async fn edit_folder(
         None => Form::new(window, "New folder", "Create"),
     };
     if remote {
-        form.note("This folder is a category in Miniflux, which names it. You can still move it.");
+        form.note(
+            "This folder is a category in Miniflux, renamed there too. Where it sits among your \
+             folders is yours alone.",
+        );
     }
     let name_entry = form.entry("Name", &name);
-    name_entry.set_sensitive(!remote);
-    let picker = FolderPicker::new(&form, &u.library.borrow(), parent, id);
-    if remote {
-        form.focus(&picker.dropdown);
-    } else {
-        form.focus(&name_entry);
-    }
+    let picker = FolderPicker::new(&form, &u.library.borrow(), parent, id, false);
+    form.focus(&name_entry);
     while form.run().await {
-        let name = name_entry.text().to_string();
+        let new_name = name_entry.text().to_string();
         let parent = picker.selected();
-        let result =
-            u.db.call(move |s| match id {
-                Some(id) => s.edit_folder(id, &name, parent),
-                None => s.add_folder(&name, parent).map(drop),
-            })
-            .await;
+        let result = match id {
+            Some(id) if remote && new_name.trim() != name => {
+                u.change_library(move |db, client| async move {
+                    let client = client.ok_or(Error::Managed)?;
+                    sync::rename_category(&db, &client, id, new_name).await?;
+                    db.call(move |s| s.move_folder(id, parent)).await
+                })
+                .await
+            }
+            _ => {
+                u.db.call(move |s| match id {
+                    Some(id) => s.edit_folder(id, &new_name, parent),
+                    None => s.add_folder(&new_name, parent).map(drop),
+                })
+                .await
+            }
+        };
         match result {
             Ok(()) => {
                 u.reload();
@@ -226,7 +269,7 @@ async fn edit_feed(
             (url, name)
         }
     };
-    let picker = FolderPicker::new(&form, &u.library.borrow(), parent, None);
+    let picker = FolderPicker::new(&form, &u.library.borrow(), parent, None, true);
     if id.is_none() {
         form.focus(&url_entry);
     } else {
@@ -250,21 +293,36 @@ async fn edit_feed(
                 name = feed.title;
             }
         }
-        let result = match id {
-            Some(id) => subscriptions::update(&u.db, id, name, url.clone(), parent)
-                .await
-                .map(|()| id),
-            None => subscriptions::subscribe(&u.db, name, url.clone(), parent).await,
-        };
+        let address = url.clone();
+        let result = u
+            .change_library(move |db, client| async move {
+                let client = client.as_ref();
+                match id {
+                    Some(id) => subscriptions::update(&db, client, id, name, address, parent)
+                        .await
+                        .map(|()| id),
+                    None => subscriptions::subscribe(&db, client, name, address, parent).await,
+                }
+            })
+            .await;
         match result {
             Ok(feed) => {
+                // While connected, the change synced the feed already.
+                let local = u.library.borrow().account.is_none();
+                // Show where it ended up: Miniflux puts top-level feeds in a category.
+                let folder =
+                    u.db.call(move |s| Ok(s.library()?.feed(feed).and_then(|f| f.folder)))
+                        .await
+                        .unwrap_or(parent);
                 if id.is_none() {
                     // Switch to the new feed, so its articles appear as they arrive.
-                    u.show_added(Scope::Feed(feed), parent);
+                    u.show_added(Scope::Feed(feed), folder);
                 } else {
                     u.reload();
                 }
-                u.start_refresh(Which::Only(vec![feed]));
+                if local {
+                    u.start_refresh(Which::Only(vec![feed]));
+                }
                 return;
             }
             Err(e) if matches!(e.downcast_ref::<Error>(), Some(Error::DuplicateFeed(_))) => {
