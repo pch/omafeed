@@ -22,6 +22,7 @@ Run without a command, `omafeed` opens the reader window; with a command (`omafe
 | `filters` | `ContentFilters`: the words and `/regexes/` that hide articles, matched against title and preview, and `validate` for a new pattern. |
 | `reading` | Marking articles read, unread, starred or not: a batch that fails as a whole (command line), one article that may be gone (window), and a whole view with its undo. |
 | `ingest` | Getting feeds in. `refresh` has `Refresher` (one pass over due feeds, with per-host and global concurrency limits) and its `Progress` events; `download` the conditional GET; `schedule` when a feed is due next (the refresh interval, backoff after failures, and `Retry-After`) as pure functions of the time, so the store only records the timestamps they give; `parse` feed-rs to `Entry`; `discovery` turns a website or feed URL into feed candidates; `icons` finds, downloads, normalizes (to 64×64 PNG), caches and prunes website icons. |
+| `sync` | Syncing with a feed service. `miniflux` is a client for Miniflux's REST API: the account, categories, feeds, entries (paged by ID), marking entries read or unread, toggling stars, and creating categories and feeds. It authenticates with an API key and follows no redirects, so the key never goes to an address the user did not enter. Not used by the rest of omafeed yet. |
 | `content` | Article HTML: `sanitize`, plain text for previews and search (`plain`), and Markdown-like reading text for the command line (`readable`). |
 | `render` | The reader's HTML document (`document`). |
 | `opml` | OPML parsing and export. |
@@ -145,7 +146,8 @@ These are properties of the current design, not promises. Change them deliberate
   against in-memory databases and local HTTP servers.
 - `crates/omafeed-core/tests/stale_refresh.rs`: refresh results that arrive after their feed
   was edited, removed or replaced.
-- Unit tests next to the code, notably `ingest/schedule.rs` (when feeds are due), `http.rs`
+- Unit tests next to the code, notably `ingest/schedule.rs` (when feeds are due),
+  `sync/miniflux.rs` (the Miniflux client against a local mock server), `http.rs`
   and `util.rs` (the network policy), and the app's `ui/view.rs` and `ui/changes.rs` (what late
   database results may change on screen) and `ui/sidebar.rs` and `ui/articles.rs` (the context menus' commands).
 - `crates/omafeed-core/tests/files.rs`: frozen database fixtures from every schema version and
