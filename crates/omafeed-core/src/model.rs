@@ -250,6 +250,15 @@ pub struct Account {
     pub unsent: i64,
 }
 
+impl Account {
+    /// Whether a sync is due at `now` (Unix seconds) when the library syncs every `minutes`:
+    /// before the first, and once that long has passed since the last, failed or not.
+    pub fn sync_due(&self, minutes: u32, now: i64) -> bool {
+        self.last_sync
+            .is_none_or(|last| now - last >= i64::from(minutes) * 60)
+    }
+}
+
 /// All folders and feeds, with totals, read from one snapshot.
 #[derive(Debug, Default)]
 pub struct Library {
@@ -421,6 +430,22 @@ pub struct Update {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn account_sync_is_due_once_the_interval_passes() {
+        let mut account = Account {
+            server: "https://miniflux.example/".into(),
+            user_id: 1,
+            username: "reader".into(),
+            last_sync: None,
+            error: None,
+            unsent: 0,
+        };
+        assert!(account.sync_due(30, 1_000));
+        account.last_sync = Some(1_000);
+        assert!(!account.sync_due(30, 1_000 + 29 * 60));
+        assert!(account.sync_due(30, 1_000 + 30 * 60));
+    }
 
     fn folder(id: i64, parent: Option<i64>, name: &str) -> Folder {
         Folder {

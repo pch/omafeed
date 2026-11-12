@@ -64,7 +64,9 @@ asked for.
 
 While a Miniflux account is connected, `Refresher` refreshes nothing: the window's refresh and
 `omafeed refresh` run `sync::sync` instead, which the window shows as a refresh that started
-with one feed and finished with all of them.
+with one feed and finished with all of them. The window's scheduled checks sync once the
+refresh interval has passed since the last sync (`Account::sync_due`); the refresh button
+syncs at once.
 
 The window notices changes made by other programs (such as `omafeed star 3` in a terminal)
 by polling SQLite's `PRAGMA data_version` every two seconds and reloading when it moves.
