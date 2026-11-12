@@ -1,4 +1,6 @@
-//! Modal dialogs: feed and folder forms, OPML import/export, content filters, settings, and help.
+//! Modal dialogs: feed and folder forms, OPML import/export, content filters, the Miniflux
+//! account, settings, and help.
+mod account;
 mod filters;
 mod library;
 
@@ -11,6 +13,7 @@ use std::{
     rc::Rc,
 };
 
+pub use account::account;
 pub use filters::filters;
 pub use library::{add_feed, edit, new_folder, remove};
 
@@ -225,14 +228,24 @@ fn wait_closed(dialog: &impl IsA<adw::Dialog>) -> impl std::future::Future<Outpu
 }
 
 async fn confirm(parent: &impl IsA<gtk::Widget>, heading: &str, body: &str) -> bool {
+    confirm_as(parent, heading, body, "Remove").await
+}
+
+/// Ask whether to do something that cannot be undone, named `action` on its button.
+async fn confirm_as(
+    parent: &impl IsA<gtk::Widget>,
+    heading: &str,
+    body: &str,
+    action: &str,
+) -> bool {
     let d = adw::AlertDialog::builder()
         .heading(heading)
         .body(body)
         .build();
-    d.add_responses(&[("cancel", "Cancel"), ("remove", "Remove")]);
-    d.set_response_appearance("remove", adw::ResponseAppearance::Destructive);
+    d.add_responses(&[("cancel", "Cancel"), ("confirm", action)]);
+    d.set_response_appearance("confirm", adw::ResponseAppearance::Destructive);
     d.set_close_response("cancel");
-    d.choose_future(Some(parent)).await == "remove"
+    d.choose_future(Some(parent)).await == "confirm"
 }
 
 pub fn import(u: Rc<Ui>) {
@@ -332,11 +345,12 @@ pub fn settings(u: Rc<Ui>) {
         let refresh =
             gtk::SpinButton::with_range((*minutes.start()).into(), (*minutes.end()).into(), 5.0);
         refresh.set_value(current.refresh_minutes.into());
-        form.setting(
-            "Refresh every",
-            Some("Minutes, while omafeed is open"),
-            &refresh,
-        );
+        let note = if u.library.borrow().account.is_some() {
+            "Minutes between syncs with Miniflux, while omafeed is open"
+        } else {
+            "Minutes, while omafeed is open"
+        };
+        form.setting("Refresh every", Some(note), &refresh);
         if !form.run().await {
             return;
         }

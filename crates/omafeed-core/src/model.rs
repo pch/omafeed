@@ -51,6 +51,9 @@ pub struct Folder {
     pub parent: Option<FolderId>,
     /// Unique among its siblings, trimmed, 1–300 bytes.
     pub name: String,
+    /// Whether it is a category of the connected Miniflux account, which names and removes
+    /// it; folders of one's own, to arrange categories in, are not.
+    pub remote: bool,
 }
 
 /// A subscription, as the library listing reads it.
@@ -270,6 +273,8 @@ pub struct Library {
     pub unread: i64,
     /// Starred articles in the whole library.
     pub starred: i64,
+    /// The Miniflux account the library mirrors, if one is connected.
+    pub account: Option<Account>,
 }
 
 /// A change to an article's read and star state; `None` leaves that part as it is.
@@ -452,6 +457,7 @@ mod tests {
             id: FolderId(id),
             parent: parent.map(FolderId),
             name: name.into(),
+            remote: false,
         }
     }
 

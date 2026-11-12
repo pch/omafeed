@@ -1,8 +1,15 @@
 //! The Miniflux API key, kept in the desktop's keyring (the Secret Service, such as GNOME
-//! Keyring or KWallet) under the server's address, and the client the window and the command
-//! line sync with. Must run on the tokio runtime.
-use anyhow::{Context, Result, anyhow};
-use omafeed_core::{Db, sync::miniflux::Client};
+//! Keyring or KWallet) under the server's address, the client the window and the command
+//! line sync with, and connecting and disconnecting the account with its key. Must run on
+//! the tokio runtime.
+use anyhow::{Context, Result, anyhow, bail};
+use omafeed_core::{
+    Db,
+    sync::{
+        self, Report,
+        miniflux::{Client, User},
+    },
+};
 use std::{collections::HashMap, time::Duration};
 
 /// Used instead of the keyring when set, by every command and the window; nothing is saved to
@@ -102,4 +109,63 @@ pub async fn client(db: &Db) -> Result<Option<Client>> {
     };
     let token = token(&account.server).await?;
     Ok(Some(Client::new(&account.server, &token)?))
+}
+
+/// What [`connect`] did.
+pub struct Connected {
+    /// The server's address, as the library keeps it.
+    pub server: String,
+    /// Who the key signs in as.
+    pub user: User,
+    /// What the first sync did.
+    pub report: Report,
+}
+
+/// Connect the library to the account `token` signs in to on `server`, keep the key, and run
+/// the first sync. If the server refuses the key, nothing is kept; if only the first sync
+/// fails, the account stays connected with its key, to sync again.
+pub async fn connect(db: &Db, server: &str, token: &str) -> Result<Connected> {
+    let client = Client::new(server, token)?;
+    let user = client.me().await?;
+    save_token(client.server(), token).await?;
+    match sync::connect(db, &client).await {
+        Ok(report) => Ok(Connected {
+            server: client.server().to_owned(),
+            user,
+            report,
+        }),
+        Err(e) => {
+            // A first sync that failed leaves the account connected, and needs the key.
+            if db.call(|s| s.account()).await?.is_none() {
+                let _ = forget_token(client.server()).await;
+            }
+            Err(e)
+        }
+    }
+}
+
+/// What [`disconnect`] did.
+pub struct Disconnected {
+    /// The server the library mirrored.
+    pub server: String,
+    /// Read and star changes that could not be sent first, and were dropped.
+    pub dropped: i64,
+    /// Why the API key could not be removed from the keyring, if it could not.
+    pub keyring_error: Option<anyhow::Error>,
+}
+
+/// Stop mirroring the account, sending unsent changes first if its key and server allow, and
+/// remove its key.
+pub async fn disconnect(db: &Db) -> Result<Disconnected> {
+    let Some(connected) = db.call(|s| s.account()).await? else {
+        bail!("No Miniflux account is connected");
+    };
+    // Without the key, or with the server gone, unsent changes are dropped.
+    let client = client(db).await.ok().flatten();
+    let dropped = sync::disconnect(db, client.as_ref()).await?;
+    Ok(Disconnected {
+        keyring_error: forget_token(&connected.server).await.err(),
+        server: connected.server,
+        dropped,
+    })
 }

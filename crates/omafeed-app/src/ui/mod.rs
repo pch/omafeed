@@ -1,4 +1,5 @@
 //! Main window: a library sidebar, an article list, and a WebKit reader.
+mod account;
 mod articles;
 mod changes;
 mod context_menu;
@@ -71,7 +72,7 @@ impl Header {
             bar.pack_start(b);
         }
         let add_menu = gio::Menu::new();
-        add_menu.append(Some("Add feed…"), Some("win.add-feed"));
+        add_menu.append_item(&hidden_when_disabled("Add feed…", "win.add-feed"));
         add_menu.append(Some("New folder…"), Some("win.new-folder"));
         bar.pack_start(
             &gtk::MenuButton::builder()
@@ -81,10 +82,11 @@ impl Header {
                 .build(),
         );
         let menu = gio::Menu::new();
+        menu.append_item(&hidden_when_disabled("Import OPML…", "win.import"));
         for (title, action) in [
-            ("Import OPML…", "win.import"),
             ("Export OPML…", "win.export"),
             ("Content filters…", "win.filters"),
+            ("Miniflux account…", "win.account"),
             ("Settings…", "win.settings"),
             ("Keyboard shortcuts", "win.shortcuts"),
             ("About omafeed", "win.about"),
@@ -110,6 +112,14 @@ impl Header {
             search,
         }
     }
+}
+
+/// A menu item that disappears while its action is disabled, as adding feeds is while a
+/// Miniflux account decides them.
+fn hidden_when_disabled(title: &str, action: &str) -> gio::MenuItem {
+    let item = gio::MenuItem::new(Some(title), Some(action));
+    item.set_attribute_value("hidden-when", Some(&"action-disabled".to_variant()));
+    item
 }
 
 struct SidebarPane {
@@ -517,18 +527,27 @@ impl Ui {
             Progress::Feed { done, total, .. } => self.show_refreshing(done, total),
             Progress::Finished { total, failed } => {
                 self.refresh_stopped();
-                let refresh = &self.header.refresh;
                 if total > 0 {
-                    let feeds = if total == 1 { "feed" } else { "feeds" };
                     let time = chrono::Local::now().format("%H:%M");
-                    let mut tip = format!("Refreshed {total} {feeds} at {time}");
-                    if failed > 0 {
-                        tip.push_str(&format!(" · {failed} unavailable"));
-                    }
-                    refresh.set_tooltip_text(Some(&format!("{tip}\n{REFRESH_TIP}")));
                     // Pick up newly downloaded favicons.
                     self.favicons.borrow_mut().clear();
-                    self.reload();
+                    let u = self.clone();
+                    glib::spawn_future_local(async move {
+                        // Read the library first: a sync may have connected or ended it.
+                        u.load_library().await;
+                        let feeds = if total == 1 { "feed" } else { "feeds" };
+                        let mut tip = if u.library.borrow().account.is_some() {
+                            format!("Synced {total} {feeds} with Miniflux at {time}")
+                        } else {
+                            format!("Refreshed {total} {feeds} at {time}")
+                        };
+                        if failed > 0 {
+                            tip.push_str(&format!(" · {failed} unavailable"));
+                        }
+                        u.header
+                            .refresh
+                            .set_tooltip_text(Some(&format!("{tip}\n{REFRESH_TIP}")));
+                    });
                 }
             }
         }
@@ -548,7 +567,12 @@ impl Ui {
         if !refresh.child().is_some_and(|c| c.is::<adw::Spinner>()) {
             refresh.set_child(Some(&adw::Spinner::new()));
         }
-        refresh.set_tooltip_text(Some(&format!("Refreshing feeds · {done} of {total}")));
+        let tip = if self.library.borrow().account.is_some() {
+            "Syncing with Miniflux…".to_owned()
+        } else {
+            format!("Refreshing feeds · {done} of {total}")
+        };
+        refresh.set_tooltip_text(Some(&tip));
         #[expect(clippy::cast_precision_loss, reason = "feed counts")]
         self.refresh_line
             .set_fraction(done as f64 / total.max(1) as f64);
@@ -612,8 +636,7 @@ impl Ui {
                 .await;
             match result {
                 Ok((lib, article)) => {
-                    u.close_sidebar_menu();
-                    *u.library.borrow_mut() = lib;
+                    u.set_library(lib);
                     // A result for the old selection must not replace a newly opened article.
                     let reloaded = u
                         .view
@@ -794,8 +817,7 @@ impl Ui {
     async fn load_library(self: &Rc<Self>) -> bool {
         match self.db.call(|s| s.library()).await {
             Ok(lib) => {
-                self.close_sidebar_menu();
-                *self.library.borrow_mut() = lib;
+                self.set_library(lib);
                 self.rebuild_sidebar();
                 self.reload_articles();
                 true
@@ -807,14 +829,30 @@ impl Ui {
         }
     }
 
+    /// Keep the library just read, and offer what can be done with it: while a Miniflux
+    /// account is connected, feeds are added in Miniflux, not here.
+    fn set_library(&self, lib: Library) {
+        self.close_sidebar_menu();
+        let local = lib.account.is_none();
+        *self.library.borrow_mut() = lib;
+        for name in ["add-feed", "import"] {
+            if let Some(action) = self
+                .window
+                .lookup_action(name)
+                .and_downcast::<gio::SimpleAction>()
+            {
+                action.set_enabled(local);
+            }
+        }
+    }
+
     /// Update unread counts without reloading the article list.
     fn refresh_counts(self: &Rc<Self>) {
         let u = self.clone();
         glib::spawn_future_local(async move {
             match u.db.call(|s| s.library()).await {
                 Ok(lib) => {
-                    u.close_sidebar_menu();
-                    *u.library.borrow_mut() = lib;
+                    u.set_library(lib);
                     u.update_sidebar();
                 }
                 Err(e) => u.error(e),

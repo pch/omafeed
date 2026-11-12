@@ -64,7 +64,8 @@ UPDATE feeds SET
 WHERE id = ?4";
 
 impl Store {
-    /// Folders, feeds and totals, all read from one snapshot so they agree with each other.
+    /// Folders, feeds, totals and the account, all read from one snapshot so they agree with
+    /// each other.
     pub fn library(&self) -> Result<Library> {
         self.snapshot(Self::read_library)
     }
@@ -72,12 +73,16 @@ impl Store {
     fn read_library(&self) -> Result<Library> {
         let folders = self
             .conn
-            .prepare("SELECT id, parent, name FROM folders ORDER BY name COLLATE NOCASE")?
+            .prepare(
+                "SELECT id, parent, name, remote_id IS NOT NULL FROM folders
+                 ORDER BY name COLLATE NOCASE",
+            )?
             .query_map([], |r| {
                 Ok(Folder {
                     id: r.get(0)?,
                     parent: r.get(1)?,
                     name: r.get(2)?,
+                    remote: r.get(3)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -118,6 +123,7 @@ impl Store {
             feeds,
             unread,
             starred,
+            account: self.account()?,
         })
     }
 

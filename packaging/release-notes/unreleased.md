@@ -2,7 +2,7 @@
 
 ## New
 
-- **Mirror a Miniflux account.** `omafeed account connect https://your-miniflux` (with an API key from Miniflux's Settings → API Keys) makes the library follow your Miniflux server: Miniflux fetches the feeds, and omafeed syncs feeds, folders, articles and read and star state with it whenever it would refresh, from the window or `omafeed refresh`, or now with `omafeed sync`. Your feeds Miniflux lacks are subscribed there, and articles you already have keep their read and star state. `omafeed account status` shows the last sync, and `omafeed account disconnect` turns everything back into local feeds. The API key is kept in your keyring, or read from `OMAFEED_MINIFLUX_TOKEN`. While connected, feeds are added, edited and removed in Miniflux.
+- **Mirror a Miniflux account.** **Miniflux account…** in the menu, or `omafeed account connect https://your-miniflux` (with an API key from Miniflux's Settings → API Keys), makes the library follow your Miniflux server: Miniflux fetches the feeds, and omafeed syncs feeds, folders, articles and read and star state with it whenever it would refresh, from the window or `omafeed refresh`, or now with `omafeed sync`. Your feeds Miniflux lacks are subscribed there, and articles you already have keep their read and star state. The same dialog or `omafeed account status` shows the last sync, and disconnecting there or with `omafeed account disconnect` turns everything back into local feeds. The API key is kept in your keyring, or read from `OMAFEED_MINIFLUX_TOKEN`. While connected, feeds are added, edited and removed in Miniflux, and the window hides those commands.
 
 ## Upgrade notes
 
