@@ -23,6 +23,8 @@ const MIGRATIONS: &[Migration] = &[
     // Incremental syncs: where the next one reads the server's changes from, and when the
     // last one was tried, so a failing sync waits for its interval too.
     Migration::Sql(SYNC_CURSOR),
+    // The full article, fetched from its web page on request, beside the feed's version.
+    Migration::Sql("ALTER TABLE articles ADD COLUMN full_html TEXT;"),
 ];
 
 const SCHEMA_V1: &str = r#"

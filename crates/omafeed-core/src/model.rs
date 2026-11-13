@@ -118,8 +118,11 @@ pub struct Article {
     pub author: String,
     /// When it was published (or first seen, if the feed did not say), in Unix seconds.
     pub published: i64,
-    /// Sanitized HTML; empty in list pages, which do not need it.
+    /// Sanitized HTML; empty in list pages, which do not need it. The full article fetched
+    /// from its web page, if it has been ([`Article::full`]), else the feed's version.
     pub html: String,
+    /// Whether [`Article::html`] is the full article, fetched by [`crate::full_article`].
+    pub full: bool,
     /// The start of its plain text, for lists.
     pub preview: String,
     /// Whether it has been read.

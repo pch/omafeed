@@ -13,8 +13,12 @@ JOIN article_state s ON s.article_id = a.id";
 impl Store {
     fn article_columns(html: bool) -> String {
         format!(
-            "a.id, a.feed_id, f.title, a.title, a.url, a.author, a.published, {}, substr(a.text, 1, 220), s.read, s.starred",
-            if html { "a.html" } else { "''" }
+            "a.id, a.feed_id, f.title, a.title, a.url, a.author, a.published, {}, substr(a.text, 1, 220), s.read, s.starred, a.full_html IS NOT NULL",
+            if html {
+                "COALESCE(a.full_html, a.html)"
+            } else {
+                "''"
+            }
         )
     }
 
@@ -47,7 +51,36 @@ impl Store {
             preview: r.get(8)?,
             read: r.get(9)?,
             starred: r.get(10)?,
+            full: r.get(11)?,
         })
+    }
+
+    /// Where to fetch the article `id` in full from: its web page, its feed's address (which
+    /// decides whether the page may be on the local network), and its entry on the Miniflux
+    /// server, if it is one.
+    pub(crate) fn full_article_source(
+        &self,
+        id: ArticleId,
+    ) -> Result<(String, String, Option<i64>)> {
+        self.conn
+            .query_row(
+                "SELECT a.url, f.url, a.remote_id FROM articles a JOIN feeds f ON f.id = a.feed_id
+                 WHERE a.id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?
+            .ok_or_else(|| crate::Error::ArticleNotFound(id).into())
+    }
+
+    /// Keep `html` (sanitized) as the full article `id`, or with `None` go back to the feed's
+    /// version. An article deleted meanwhile is left alone.
+    pub(crate) fn set_full_article(&self, id: ArticleId, html: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE articles SET full_html = ?1 WHERE id = ?2",
+            params![html, id],
+        )?;
+        Ok(())
     }
 
     /// One article with its HTML; an error if it does not exist.

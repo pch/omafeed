@@ -6,6 +6,7 @@ use anyhow::{Context, Result, bail};
 use omafeed_core::{
     Db, Error, Paths, Settings,
     content::{one_line, readable},
+    full_article,
     ingest::{Progress, Refresher},
     model::{ArticleId, FeedId, FolderId, Library, ParseScopeError, Query, Scope, StatePatch},
     reading,
@@ -103,6 +104,10 @@ pub enum Command {
         id: i64,
         #[arg(long)]
         html: bool,
+        /// Fetch the whole article from its web page first, for feeds that give only a
+        /// summary; it is kept, so later calls print it without fetching
+        #[arg(long)]
+        full: bool,
         /// Print JSON instead of text
         #[arg(long)]
         json: bool,
@@ -194,7 +199,12 @@ pub fn run(command: Command) -> Result<()> {
             Command::Search { query, scope, list } => {
                 articles(&db, scope, query.join(" "), list).await
             }
-            Command::Article { id, html, json } => article(&db, id, html, json).await,
+            Command::Article {
+                id,
+                html,
+                full,
+                json,
+            } => article(&db, id, html, full, json).await,
             Command::Read(i) => set_state(&db, i, "Marked {} read", StatePatch::read(true)).await,
             Command::Unread(i) => {
                 set_state(&db, i, "Marked {} unread", StatePatch::read(false)).await
@@ -657,12 +667,18 @@ async fn articles(db: &Db, scope: Scope, search: String, list: List) -> Result<(
     })
 }
 
-async fn article(db: &Db, id: i64, html: bool, json: bool) -> Result<()> {
+async fn article(db: &Db, id: i64, html: bool, full: bool, json: bool) -> Result<()> {
     let id = ArticleId(id);
-    let a = db
+    let mut a = db
         .call(move |s| s.article_if_exists(id))
         .await?
         .ok_or(Error::ArticleNotFound(id))?;
+    if full && !a.full {
+        // While connected, the server fetches its entries if it can.
+        let client = account::client(db).await?;
+        full_article::fetch(db, client.as_deref(), id).await?;
+        a = db.call(move |s| s.article(id)).await?;
+    }
     if json {
         let item = if html {
             json::ArticleItem::with_html(&a)

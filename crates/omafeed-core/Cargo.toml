@@ -31,6 +31,7 @@ sha2 = "0.11"
 thiserror = "2"
 toml = "1.1"
 url = "2"
+dom_smoothie = "0.19"
 
 [dev-dependencies]
 tempfile.workspace = true

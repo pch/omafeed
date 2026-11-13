@@ -10,6 +10,7 @@ Arguments:
 
 Options:
       --html  
+      --full  Fetch the whole article from its web page first, for feeds that give only a summary; it is kept, so later calls print it without fetching
       --json  Print JSON instead of text
   -h, --help  Print help
 --- stderr

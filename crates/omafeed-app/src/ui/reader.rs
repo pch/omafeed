@@ -3,17 +3,21 @@ use super::{Ui, widgets::icon, widgets::margins};
 use adw::prelude::*;
 use gtk::{gio, glib};
 use omafeed_core::{
+    full_article,
     model::Article,
     render::{Source, document},
 };
 use std::rc::Rc;
 use webkit6::prelude::*;
 
+const FETCH_FULL: &str = "Fetch the full article from its web page (D)";
+
 pub(super) struct ReaderPane {
     pub root: gtk::Box,
     pub back: gtk::Button,
     read: gtk::Button,
     star: gtk::Button,
+    full: gtk::Button,
     open: gtk::Button,
     copy: gtk::Button,
     pub web: webkit6::WebView,
@@ -32,9 +36,10 @@ impl ReaderPane {
         toolbar.append(&spacer);
         let read = icon("mail-unread-symbolic", "Mark unread (M)");
         let star = icon("non-starred-symbolic", "Star (S)");
+        let full = icon("folder-download-symbolic", FETCH_FULL);
         let copy = icon("edit-copy-symbolic", "Copy article link");
         let open = icon("adw-external-link-symbolic", "Open original (O)");
-        for b in [&read, &star, &copy, &open] {
+        for b in [&read, &star, &full, &copy, &open] {
             toolbar.append(b);
         }
         root.append(&toolbar);
@@ -56,6 +61,7 @@ impl ReaderPane {
             back,
             read,
             star,
+            full,
             open,
             copy,
             web,
@@ -145,6 +151,11 @@ impl Ui {
             self,
             move |_| u.toggle_read()
         ));
+        r.full.connect_clicked(clone!(
+            #[weak(rename_to = u)]
+            self,
+            move |_| u.toggle_full()
+        ));
         r.open.connect_clicked(clone!(
             #[weak(rename_to = u)]
             self,
@@ -203,6 +214,7 @@ impl Ui {
         );
         drop(s);
         self.reader.open.set_sensitive(!a.url.is_empty());
+        self.reader.full.set_sensitive(!a.url.is_empty() || a.full);
         self.reader.copy.set_sensitive(!a.url.is_empty());
         self.update_buttons(a);
         // Loading signals may change the view, so nothing of it stays borrowed here.
@@ -227,6 +239,61 @@ impl Ui {
         };
         r.read.set_icon_name(read_icon);
         r.read.set_tooltip_text(Some(read_tip));
+        let (full_icon, full_tip) = if a.full {
+            ("document-revert-symbolic", "Show the feed's version (D)")
+        } else {
+            ("folder-download-symbolic", FETCH_FULL)
+        };
+        r.full.set_icon_name(full_icon);
+        r.full.set_tooltip_text(Some(full_tip));
+    }
+
+    /// Fetch the open article in full from its web page, or go back to the feed's version if
+    /// it is the full article already. The button waits while it is fetched.
+    pub(super) fn toggle_full(self: &Rc<Self>) {
+        let Some((id, full, url)) = self
+            .view
+            .borrow()
+            .open()
+            .map(|a| (a.id, a.full, a.url.clone()))
+        else {
+            return;
+        };
+        let button = &self.reader.full;
+        if !button.is_sensitive() || (!full && url.is_empty()) {
+            return;
+        }
+        button.set_sensitive(false);
+        if !full {
+            button.set_tooltip_text(Some("Fetching the full article…"));
+        }
+        let u = self.clone();
+        glib::spawn_future_local(async move {
+            let result = u
+                .change_library(move |db, client| async move {
+                    if full {
+                        full_article::forget(&db, id).await?;
+                    } else {
+                        full_article::fetch(&db, client.as_deref(), id).await?;
+                    }
+                    db.call(move |s| s.article(id)).await
+                })
+                .await;
+            let shown = match result {
+                Ok(a) => u.view.borrow_mut().reload_content(a),
+                Err(e) => {
+                    u.error(format!("Could not fetch the full article: {e:#}"));
+                    false
+                }
+            };
+            if shown {
+                u.render();
+            } else if let Some(a) = u.view.borrow().open() {
+                // Failed, or another article is open now: show its buttons as they were.
+                u.reader.full.set_sensitive(!a.url.is_empty() || a.full);
+                u.update_buttons(a);
+            }
+        });
     }
 
     /// Mark the article read once its content has loaded (not on re-renders).

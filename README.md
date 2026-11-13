@@ -131,9 +131,9 @@ OPML contains subscriptions, not historical articles or read/star state. The fir
 
 Click **+** in the header to **Add feed** (Ctrl+N) or create a **New folder** (Ctrl+Shift+N); either goes into the folder you are viewing. Subscribe with a website or feed URL: omafeed finds the site's RSS, Atom, or JSON feed, lets you choose when there are several, and uses the feed's title if you leave the name blank. Drag feeds and folders in the sidebar to move them: drop on a folder to put it inside, or on a smart view to move it to the top level. Right-click a feed or folder and choose **Edit…** to rename it, move it, or correct its URL without losing saved articles, or **Remove…** to remove it. **Refresh** in the same menu downloads just that feed, or every feed in the folder. Removing a feed deletes its articles after confirmation; removing a folder keeps them.
 
-Search looks through the current view, including nested folders. It forgives typos (`agentc` finds `agentic`), treats regular plural and singular forms alike (`box` and `boxes`, `story` and `stories`), and matches the start of the last word you type, so results appear as you go. Words shorter than five letters are not typo-corrected; the last word can match prefixes from three letters onward. Numbers are matched exactly, and a word that appears in your articles is never swapped for a similar one. Summary-only feeds show the summary; open the original for the rest. Podcast episodes appear as download links.
+Search looks through the current view, including nested folders. It forgives typos (`agentc` finds `agentic`), treats regular plural and singular forms alike (`box` and `boxes`, `story` and `stories`), and matches the start of the last word you type, so results appear as you go. Words shorter than five letters are not typo-corrected; the last word can match prefixes from three letters onward. Numbers are matched exactly, and a word that appears in your articles is never swapped for a similar one. Summary-only feeds show the summary. For the rest, press D or the download button above the article: omafeed fetches the article's web page and shows its main text in place of the summary, and keeps it for reading offline; press D again for the feed's version. While a Miniflux account is connected, Miniflux fetches it, with the scraper rules and cookies you set for the feed there. Search and previews keep using the feed's text. Podcast episodes appear as download links.
 
-Not yet supported: full-article extraction, podcast playback, and notifications.
+Not yet supported: podcast playback and notifications.
 
 ## Miniflux
 
@@ -247,6 +247,7 @@ A daily digest, for example, is four commands:
 omafeed refresh --json                                    # which feeds updated, which failed
 omafeed articles --since 24h --unread --limit 200 --json  # titles, previews, IDs
 omafeed article 42 --json                                 # full text of the ones worth reading
+omafeed article 42 --full                                 # fetch it from the web page if the feed gave a summary
 omafeed read 42 43 44                                     # mark what was covered
 ```
 
@@ -265,6 +266,7 @@ The [Omarchy bar plugin](https://github.com/pch/omafeed-bar) is built on this ou
 | M | Toggle read |
 | S | Toggle star |
 | O | Open original in browser |
+| D | Fetch the full article from its web page, or show the feed's version again |
 | Ctrl+R | Refresh |
 | Ctrl+F | Search |
 | Ctrl+N | Add feed |

@@ -406,6 +406,7 @@ const SHORTCUTS: [&[Section]; 2] = [
             ("Toggle read", &["M"]),
             ("Toggle star", &["S"]),
             ("Open original", &["O"]),
+            ("Full article, or the feed's version", &["D"]),
         ],
     )],
     &[
