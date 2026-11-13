@@ -161,6 +161,8 @@ fn feeds_of(lib: &Library, scope: &Scope) -> Vec<FeedId> {
 /// The context menu of the sidebar entry for `scope`: sections of commands, each with
 /// whether it can be used now. Empty for a feed or folder no longer in the library.
 /// `refreshing` tells whether a refresh is under way, which leaves no room for another.
+/// While a Miniflux account is connected, it fetches the feeds and decides which feeds and
+/// categories there are, so their menus offer only what can still be done here.
 fn menu(scope: &Scope, lib: &Library, refreshing: bool) -> Vec<Vec<(Command, bool)>> {
     // Smart views other than All Unread show no count, so they may always have unread ones.
     let unread = match scope {
@@ -178,7 +180,7 @@ fn menu(scope: &Scope, lib: &Library, refreshing: bool) -> Vec<Vec<(Command, boo
         Command::Refresh,
         !refreshing && !feeds_of(lib, scope).is_empty(),
     );
-    let manage = vec![(Command::Edit, true), (Command::Remove, true)];
+    let local = lib.account.is_none();
     match scope {
         Scope::Feed(id) => {
             let Some(feed) = lib.feed(*id) else {
@@ -186,29 +188,43 @@ fn menu(scope: &Scope, lib: &Library, refreshing: bool) -> Vec<Vec<(Command, boo
             };
             // A feed's website is unknown until it is refreshed or imported with one.
             let home = !feed.site_url.is_empty();
-            vec![
+            let mut sections = vec![
                 vec![(Command::OpenHomePage, reader::opens(&feed.site_url))],
                 vec![
                     (Command::CopyFeedUrl, true),
                     (Command::CopyHomePageUrl, home),
                 ],
-                vec![refresh, mark],
-                manage,
-            ]
+            ];
+            if local {
+                sections.push(vec![refresh, mark]);
+                sections.push(vec![(Command::Edit, true), (Command::Remove, true)]);
+            } else {
+                sections.push(vec![mark]);
+            }
+            sections
         }
-        Scope::Folder(_) => vec![
+        Scope::Folder(_) if local => vec![
             vec![refresh, mark],
             vec![(Command::AddFeed, true), (Command::NewFolder, true)],
-            manage,
+            vec![(Command::Edit, true), (Command::Remove, true)],
         ],
+        Scope::Folder(id) => {
+            // A category is named and removed in Miniflux; it can still be moved.
+            let remote = lib.folder(*id).is_some_and(|f| f.remote);
+            let mut manage = vec![(Command::Edit, true)];
+            if !remote {
+                manage.push((Command::Remove, true));
+            }
+            vec![vec![mark], vec![(Command::NewFolder, true)], manage]
+        }
         _ => vec![vec![mark]],
     }
 }
 
 /// Where dropping `dragged` on the sidebar entry `onto` moves it: into the folder dropped on,
 /// into the folder of the feed dropped on, or to the top level when dropped on a smart view
-/// or below the last entry. `None` if it would stay where it is, or if a folder would go
-/// inside itself.
+/// or below the last entry. `None` if it would stay where it is, if a folder would go
+/// inside itself, or for a feed while a Miniflux account decides where feeds are.
 fn destination(lib: &Library, dragged: &Scope, onto: Option<&Scope>) -> Option<Option<FolderId>> {
     let target = match onto {
         Some(Scope::Folder(id)) => Some(*id),
@@ -216,6 +232,7 @@ fn destination(lib: &Library, dragged: &Scope, onto: Option<&Scope>) -> Option<O
         _ => None,
     };
     let current = match dragged {
+        Scope::Feed(_) if lib.account.is_some() => return None,
         Scope::Feed(id) => lib.feed(*id)?.folder,
         Scope::Folder(id) => {
             let inside = lib.folder_path(target).iter().any(|f| f.id == *id);
@@ -450,7 +467,13 @@ impl Ui {
         if let Some(feed) = &item.feed {
             row.set_tooltip_text(Some(&tooltip(feed)));
         }
-        if matches!(item.scope, Scope::Feed(_) | Scope::Folder(_)) {
+        // While a Miniflux account is connected, it decides which folder a feed is in.
+        let movable = match item.scope {
+            Scope::Folder(_) => true,
+            Scope::Feed(_) => self.library.borrow().account.is_none(),
+            _ => false,
+        };
+        if movable {
             row.add_controller(self.drag_source(&item.scope, &content));
         }
         Row {
@@ -703,7 +726,7 @@ impl Ui {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use omafeed_core::model::{FeedId, Folder};
+    use omafeed_core::model::{Account, FeedId, Folder};
 
     fn feed(id: i64, folder: Option<i64>, site_url: &str, unread: i64) -> Feed {
         Feed {
@@ -746,11 +769,13 @@ mod tests {
                     id: FolderId(1),
                     parent: None,
                     name: "Read".into(),
+                    remote: false,
                 },
                 Folder {
                     id: FolderId(2),
                     parent: Some(FolderId(1)),
                     name: "Nested".into(),
+                    remote: false,
                 },
             ],
             feeds: vec![
@@ -760,6 +785,7 @@ mod tests {
             ],
             unread: 3,
             starred: 0,
+            account: None,
         };
         let new = menu(&Scope::Feed(FeedId(1)), &lib, false);
         assert_eq!(
@@ -838,16 +864,19 @@ mod tests {
                     id: FolderId(1),
                     parent: None,
                     name: "Read".into(),
+                    remote: false,
                 },
                 Folder {
                     id: FolderId(2),
                     parent: Some(FolderId(1)),
                     name: "Nested".into(),
+                    remote: false,
                 },
                 Folder {
                     id: FolderId(3),
                     parent: None,
                     name: "Other".into(),
+                    remote: false,
                 },
             ],
             feeds: vec![
@@ -886,5 +915,54 @@ mod tests {
         assert_eq!(into(&Scope::Folder(FolderId(2)), Scope::All), Some(None));
         assert_eq!(into(&Scope::Starred, Scope::Folder(FolderId(3))), None);
         assert_eq!(into(&Scope::Feed(FeedId(9)), Scope::All), None);
+    }
+
+    #[test]
+    fn a_connected_account_leaves_only_what_can_be_done_here() {
+        use Command::*;
+        let folder = |id, name: &str, remote| Folder {
+            id: FolderId(id),
+            parent: None,
+            name: name.into(),
+            remote,
+        };
+        let lib = Library {
+            folders: vec![folder(1, "Category", true), folder(2, "Mine", false)],
+            feeds: vec![feed(1, Some(1), "https://example.org/", 2)],
+            account: Some(Account {
+                server: "https://miniflux.example/".into(),
+                user_id: 1,
+                username: "reader".into(),
+                last_sync: None,
+                error: None,
+                unsent: 0,
+            }),
+            ..Library::default()
+        };
+        assert_eq!(
+            commands(&menu(&Scope::Feed(FeedId(1)), &lib, false)),
+            [
+                vec![OpenHomePage],
+                vec![CopyFeedUrl, CopyHomePageUrl],
+                vec![MarkRead]
+            ]
+        );
+        assert_eq!(
+            commands(&menu(&Scope::Folder(FolderId(1)), &lib, false)),
+            [vec![MarkRead], vec![NewFolder], vec![Edit]]
+        );
+        assert_eq!(
+            commands(&menu(&Scope::Folder(FolderId(2)), &lib, false)),
+            [vec![MarkRead], vec![NewFolder], vec![Edit, Remove]]
+        );
+        let mine = Scope::Folder(FolderId(2));
+        assert_eq!(
+            destination(&lib, &Scope::Feed(FeedId(1)), Some(&mine)),
+            None
+        );
+        assert_eq!(
+            destination(&lib, &Scope::Folder(FolderId(1)), Some(&mine)),
+            Some(Some(FolderId(2)))
+        );
     }
 }

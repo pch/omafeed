@@ -1,7 +1,7 @@
 //! Command-line operations that run without opening a window.
 mod json;
 
-use crate::{DB_FILE, account};
+use crate::{DB_FILE, account, plural};
 use anyhow::{Context, Result, bail};
 use omafeed_core::{
     Db, Error, Paths, Settings,
@@ -380,21 +380,9 @@ fn read_token() -> Result<String> {
 
 async fn connect(db: &Db, server: &str) -> Result<()> {
     let token = read_token()?;
-    let client = Client::new(server, &token)?;
-    let user = client.me().await?;
-    account::save_token(client.server(), &token).await?;
-    let report = match sync::connect(db, &client).await {
-        Ok(report) => report,
-        Err(e) => {
-            // A first sync that failed leaves the account connected, and needs the key.
-            if db.call(|s| s.account()).await?.is_none() {
-                let _ = account::forget_token(client.server()).await;
-            }
-            return Err(e);
-        }
-    };
-    println!("Connected to {} as {}", client.server(), user.username);
-    print_report(&report);
+    let done = account::connect(db, server, &token).await?;
+    println!("Connected to {} as {}", done.server, done.user.username);
+    print_report(&done.report);
     Ok(())
 }
 
@@ -430,23 +418,18 @@ async fn account_status(db: &Db) -> Result<()> {
 }
 
 async fn disconnect(db: &Db) -> Result<()> {
-    let Some(connected) = db.call(|s| s.account()).await? else {
-        bail!("No Miniflux account is connected");
-    };
-    // Without the key, or with the server gone, unsent changes are dropped.
-    let client = account::client(db).await.ok().flatten();
-    let dropped = sync::disconnect(db, client.as_ref()).await?;
-    if let Err(e) = account::forget_token(&connected.server).await {
+    let done = account::disconnect(db).await?;
+    if let Some(e) = done.keyring_error {
         eprintln!("omafeed: could not remove the API key from the keyring: {e:#}");
     }
     println!(
         "Disconnected from {}; its feeds are local now, and omafeed fetches them itself",
-        connected.server
+        done.server
     );
-    if dropped > 0 {
+    if done.dropped > 0 {
         println!(
             "Dropped {} not sent to Miniflux",
-            plural(dropped as usize, "change")
+            plural(done.dropped as usize, "change")
         );
     }
     Ok(())
@@ -548,10 +531,6 @@ fn totals(lib: &Library) -> String {
         lib.unread,
         lib.starred
     )
-}
-
-fn plural(count: usize, noun: &str) -> String {
-    format!("{count} {noun}{}", if count == 1 { "" } else { "s" })
 }
 
 async fn feeds(db: &Db, json: bool) -> Result<()> {
@@ -868,6 +847,7 @@ mod tests {
             id: FolderId(id),
             parent: parent.map(FolderId),
             name: name.into(),
+            remote: false,
         }
     }
 

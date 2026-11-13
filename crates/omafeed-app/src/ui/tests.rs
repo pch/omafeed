@@ -65,6 +65,13 @@ fn now() -> i64 {
     chrono::Utc::now().timestamp()
 }
 pub(crate) fn desktop_smoke() {
+    // The Miniflux account below keeps its API key here: CI has no keyring.
+    // SAFETY: the first thing the only test in its binary does, before GTK, WebKit or tokio
+    // start threads that could read the environment.
+    #[allow(unsafe_code)]
+    unsafe {
+        std::env::set_var(crate::account::TOKEN_VAR, "smoke-test-key");
+    }
     adw::init().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let paths = Paths {
@@ -857,6 +864,140 @@ pub(crate) fn desktop_smoke() {
             .filter_map(|w| w.downcast::<gtk::Stack>().ok())
             .any(|s| s.visible_child_name().as_deref() == Some("empty"))
     );
+    // Connecting a Miniflux account from the window turns the library into a mirror of it:
+    // feeds are added there, so the window stops offering to add, edit or move them here.
+    let miniflux = runtime
+        .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
+        .unwrap();
+    let server = format!("http://{}/", miniflux.local_addr().unwrap());
+    let mock = runtime.spawn(async move {
+        loop {
+            let (socket, _) = miniflux.accept().await.unwrap();
+            tokio::spawn(answer_as_miniflux(socket));
+        }
+    });
+    let enabled = |name: &str| u.window.lookup_action(name).unwrap().is_enabled();
+    assert!(enabled("add-feed") && enabled("import"));
+    WidgetExt::activate_action(&u.window, "win.account", None).unwrap();
+    pump_until(|| entry_row("Server address").is_some());
+    entry_row("Server address").unwrap().set_text(&server);
+    all_widgets()
+        .into_iter()
+        .find_map(|w| w.downcast::<gtk::PasswordEntry>().ok())
+        .unwrap()
+        .set_text("smoke-test-key");
+    form_button("Connect").emit_clicked();
+    pump_until(|| !open_form() && u.library.borrow().account.is_some());
+    assert!(!enabled("add-feed") && !enabled("import"));
+    let remote = u
+        .library
+        .borrow()
+        .feeds
+        .iter()
+        .find(|f| f.title == "Remote feed")
+        .unwrap()
+        .id;
+    pump_until(|| {
+        u.sidebar_rows
+            .borrow()
+            .iter()
+            .any(|r| r.scope == Scope::Feed(remote))
+    });
+    assert_eq!(
+        open_menu(Scope::Feed(remote)),
+        [
+            "Open home page",
+            "Copy feed URL",
+            "Copy home page URL",
+            "Mark all as read"
+        ]
+    );
+    // Disconnecting, after confirming, makes the feeds local again.
+    u.side.menu.popdown();
+    WidgetExt::activate_action(&u.window, "win.account", None).unwrap();
+    pump_until(open_form);
+    form_button("Disconnect…").emit_clicked();
+    pump_until(|| {
+        all_widgets()
+            .into_iter()
+            .filter_map(|w| w.downcast::<gtk::Button>().ok())
+            .any(|b| b.label().as_deref() == Some("Disconnect"))
+    });
+    form_button("Disconnect").emit_clicked();
+    pump_until(|| u.library.borrow().account.is_none() && !open_form());
+    assert!(enabled("add-feed") && enabled("import"));
+    assert!(
+        runtime
+            .block_on(db.call(move |s| Ok(s.library()?.feed(remote).is_some())))
+            .unwrap()
+    );
+    mock.abort();
     u.window.close();
     pump_until(|| !u.window.is_visible());
+}
+
+/// Answer one request as a Miniflux server with one feed and one unread entry would, taking
+/// any feed or category it is sent.
+async fn answer_as_miniflux(mut socket: tokio::net::TcpStream) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    // Read the whole request, body included, so closing the connection cannot cut it off.
+    let mut request = Vec::new();
+    let mut buffer = [0; 4096];
+    loop {
+        let Ok(n) = socket.read(&mut buffer).await else {
+            return;
+        };
+        if n == 0 {
+            return;
+        }
+        request.extend_from_slice(&buffer[..n]);
+        let text = String::from_utf8_lossy(&request);
+        if let Some(end) = text.find("\r\n\r\n") {
+            let length = text[..end]
+                .lines()
+                .find_map(|l| {
+                    let (name, value) = l.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())?
+                })
+                .unwrap_or(0);
+            if request.len() >= end + 4 + length {
+                break;
+            }
+        }
+    }
+    let request = String::from_utf8_lossy(&request);
+    let line = request.lines().next().unwrap_or_default();
+    let category = r#"{"id":1,"title":"All"}"#;
+    let entry = r#"{"id":5,"feed_id":7,"status":"unread","starred":false,"title":"Remote entry","url":"https://remote.invalid/post","author":"","content":"<p>From Miniflux.</p>","published_at":"2026-01-01T00:00:00Z","enclosures":null}"#;
+    let body = if line.starts_with("GET /v1/me ") {
+        r#"{"id":1,"username":"smoke"}"#.to_owned()
+    } else if line.starts_with("GET /v1/categories ") {
+        format!("[{category}]")
+    } else if line.starts_with("POST /v1/categories ") {
+        r#"{"id":2,"title":"Made"}"#.to_owned()
+    } else if line.starts_with("GET /v1/feeds ") {
+        format!(
+            r#"[{{"id":7,"title":"Remote feed","site_url":"https://remote.invalid/","feed_url":"https://remote.invalid/feed","category":{category}}}]"#
+        )
+    } else if line.starts_with("POST /v1/feeds ") {
+        r#"{"feed_id":99}"#.to_owned()
+    } else if line.starts_with("GET /v1/entries") && !line.contains("starred=true") {
+        format!(r#"{{"total":1,"entries":[{entry}]}}"#)
+    } else if line.starts_with("GET /v1/entries") {
+        r#"{"total":0,"entries":[]}"#.to_owned()
+    } else {
+        String::new()
+    };
+    let status = if line.starts_with("PUT ") {
+        "204 No Content"
+    } else {
+        "200 OK"
+    };
+    let response = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+         Connection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let _ = socket.write_all(response.as_bytes()).await;
 }

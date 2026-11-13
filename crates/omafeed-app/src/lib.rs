@@ -15,6 +15,11 @@ pub const APP_ID: &str = "io.github.pch.Omafeed";
 /// The library database's file name in the data directory.
 pub const DB_FILE: &str = "omafeed.db";
 
+/// `count` and `noun`, plural unless there is one: "1 feed", "2 feeds".
+fn plural(count: usize, noun: &str) -> String {
+    format!("{count} {noun}{}", if count == 1 { "" } else { "s" })
+}
+
 #[derive(Parser)]
 #[command(
     name = "omafeed",

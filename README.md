@@ -137,13 +137,13 @@ Not yet supported: full-article extraction, podcast playback, and notifications.
 
 ## Miniflux
 
-omafeed can mirror a [Miniflux](https://miniflux.app) account, so your subscriptions and read and star state are the same everywhere you read. While connected, Miniflux fetches the feeds and decides which feeds and folders there are; omafeed syncs with it whenever it would refresh, and you read offline as before. For now, connect from the command line, with an API key made in Miniflux under **Settings → API Keys**:
+omafeed can mirror a [Miniflux](https://miniflux.app) account, so your subscriptions and read and star state are the same everywhere you read. While connected, Miniflux fetches the feeds and decides which feeds and folders there are; omafeed syncs with it whenever it would refresh, and you read offline as before. Connect from **Miniflux account…** in the window's menu, or from the command line, with an API key made in Miniflux under **Settings → API Keys**:
 
 ```sh
 omafeed account connect https://miniflux.example.org   # asks for the API key
 ```
 
-Connecting subscribes Miniflux to your feeds it does not have yet, and articles you already have keep their read and star state, which goes up to the server. Miniflux's categories become folders, and you can still arrange them inside folders of your own. Adding, editing and removing feeds happens in Miniflux while connected; `omafeed account disconnect` turns the feeds back into local ones, with their folders, articles and state, which omafeed fetches itself again.
+Connecting subscribes Miniflux to your feeds it does not have yet, and articles you already have keep their read and star state, which goes up to the server. Miniflux's categories become folders, and you can still arrange them inside folders of your own. Adding, editing and removing feeds happens in Miniflux while connected, so the window stops offering it; disconnecting, from the same dialog or `omafeed account disconnect`, turns the feeds back into local ones, with their folders, articles and state, which omafeed fetches itself again.
 
 The API key is kept in your keyring (the Secret Service, such as GNOME Keyring or KWallet). Without one, set `OMAFEED_MINIFLUX_TOKEN` to the key instead. A sync reads every unread and starred entry and those from the last 30 days, and keeps articles Miniflux later deletes. It needs Miniflux 2.0.21 or newer, the first version with API keys.
 

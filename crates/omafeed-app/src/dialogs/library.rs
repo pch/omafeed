@@ -149,20 +149,28 @@ async fn edit_folder(
     id: Option<FolderId>,
     parent: Option<FolderId>,
 ) {
-    let (name, parent) = {
+    let (name, parent, remote) = {
         let lib = u.library.borrow();
         match id.and_then(|id| lib.folder(id)) {
-            Some(f) => (f.name.clone(), f.parent),
-            None => (String::new(), parent),
+            Some(f) => (f.name.clone(), f.parent, f.remote),
+            None => (String::new(), parent, false),
         }
     };
     let form = match id {
         Some(_) => Form::new(window, "Edit folder", "Save"),
         None => Form::new(window, "New folder", "Create"),
     };
+    if remote {
+        form.note("This folder is a category in Miniflux, which names it. You can still move it.");
+    }
     let name_entry = form.entry("Name", &name);
+    name_entry.set_sensitive(!remote);
     let picker = FolderPicker::new(&form, &u.library.borrow(), parent, id);
-    form.focus(&name_entry);
+    if remote {
+        form.focus(&picker.dropdown);
+    } else {
+        form.focus(&name_entry);
+    }
     while form.run().await {
         let name = name_entry.text().to_string();
         let parent = picker.selected();
