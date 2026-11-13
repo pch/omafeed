@@ -56,30 +56,49 @@ impl Store {
     }
 
     /// Where to fetch the article `id` in full from: its web page, its feed's address (which
-    /// decides whether the page may be on the local network), and its entry on the Miniflux
-    /// server, if it is one.
-    pub(crate) fn full_article_source(
-        &self,
-        id: ArticleId,
-    ) -> Result<(String, String, Option<i64>)> {
+    /// decides whether the page may be on the local network), its entry on the Miniflux
+    /// server, if it is one, and its identity in its feed, for [`Store::keep_full_article`].
+    pub(crate) fn full_article_source(&self, id: ArticleId) -> Result<FullArticleSource> {
         self.conn
             .query_row(
-                "SELECT a.url, f.url, a.remote_id FROM articles a JOIN feeds f ON f.id = a.feed_id
-                 WHERE a.id = ?1",
+                "SELECT a.url, f.url, a.remote_id, a.feed_id, a.identity
+                 FROM articles a JOIN feeds f ON f.id = a.feed_id WHERE a.id = ?1",
                 [id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                |r| {
+                    Ok(FullArticleSource {
+                        url: r.get(0)?,
+                        feed_url: r.get(1)?,
+                        entry: r.get(2)?,
+                        feed: r.get(3)?,
+                        identity: r.get(4)?,
+                    })
+                },
             )
             .optional()?
             .ok_or_else(|| crate::Error::ArticleNotFound(id).into())
     }
 
-    /// Keep `html` (sanitized) as the full article `id`, or with `None` go back to the feed's
-    /// version. An article deleted meanwhile is left alone.
-    pub(crate) fn set_full_article(&self, id: ArticleId, html: Option<&str>) -> Result<()> {
+    /// Keep `html` (sanitized) as the full article `id`, if it is still the article `source`
+    /// was read from: one deleted meanwhile is left alone, and so is a new article that was
+    /// given its ID since.
+    pub(crate) fn keep_full_article(
+        &self,
+        id: ArticleId,
+        source: &FullArticleSource,
+        html: &str,
+    ) -> Result<()> {
         self.conn.execute(
-            "UPDATE articles SET full_html = ?1 WHERE id = ?2",
-            params![html, id],
+            "UPDATE articles SET full_html = ?1
+             WHERE id = ?2 AND feed_id = ?3 AND identity = ?4 AND url = ?5",
+            params![html, id, source.feed, source.identity, source.url],
         )?;
+        Ok(())
+    }
+
+    /// Go back to the feed's version of the article `id`.
+    pub(crate) fn forget_full_article(&self, id: ArticleId) -> Result<()> {
+        self.conn
+            .execute("UPDATE articles SET full_html = NULL WHERE id = ?1", [id])?;
         Ok(())
     }
 
@@ -194,4 +213,13 @@ impl Store {
         )?;
         Ok(())
     }
+}
+
+/// Where an article's full text comes from; see [`Store::full_article_source`].
+pub(crate) struct FullArticleSource {
+    pub url: String,
+    pub feed_url: String,
+    pub entry: Option<i64>,
+    feed: i64,
+    identity: String,
 }

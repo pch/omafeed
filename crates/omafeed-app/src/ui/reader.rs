@@ -4,10 +4,10 @@ use adw::prelude::*;
 use gtk::{gio, glib};
 use omafeed_core::{
     full_article,
-    model::Article,
+    model::{Article, ArticleId},
     render::{Source, document},
 };
-use std::rc::Rc;
+use std::{cell::RefCell, collections::HashSet, rc::Rc};
 use webkit6::prelude::*;
 
 const FETCH_FULL: &str = "Fetch the full article from its web page (D)";
@@ -18,6 +18,8 @@ pub(super) struct ReaderPane {
     read: gtk::Button,
     star: gtk::Button,
     full: gtk::Button,
+    /// The articles being fetched in full, whose button waits until they are.
+    fetching: RefCell<HashSet<ArticleId>>,
     open: gtk::Button,
     copy: gtk::Button,
     pub web: webkit6::WebView,
@@ -62,6 +64,7 @@ impl ReaderPane {
             read,
             star,
             full,
+            fetching: RefCell::default(),
             open,
             copy,
             web,
@@ -214,7 +217,6 @@ impl Ui {
         );
         drop(s);
         self.reader.open.set_sensitive(!a.url.is_empty());
-        self.reader.full.set_sensitive(!a.url.is_empty() || a.full);
         self.reader.copy.set_sensitive(!a.url.is_empty());
         self.update_buttons(a);
         // Loading signals may change the view, so nothing of it stays borrowed here.
@@ -239,17 +241,23 @@ impl Ui {
         };
         r.read.set_icon_name(read_icon);
         r.read.set_tooltip_text(Some(read_tip));
+        let fetching = r.fetching.borrow().contains(&a.id);
         let (full_icon, full_tip) = if a.full {
             ("document-revert-symbolic", "Show the feed's version (D)")
+        } else if fetching {
+            ("folder-download-symbolic", "Fetching the full article…")
         } else {
             ("folder-download-symbolic", FETCH_FULL)
         };
         r.full.set_icon_name(full_icon);
         r.full.set_tooltip_text(Some(full_tip));
+        r.full
+            .set_sensitive(!fetching && (!a.url.is_empty() || a.full));
     }
 
     /// Fetch the open article in full from its web page, or go back to the feed's version if
-    /// it is the full article already. The button waits while it is fetched.
+    /// it is the full article already. The button waits while the article is fetched, even
+    /// if another one is opened and this one again meanwhile.
     pub(super) fn toggle_full(self: &Rc<Self>) {
         let Some((id, full, url)) = self
             .view
@@ -259,13 +267,11 @@ impl Ui {
         else {
             return;
         };
-        let button = &self.reader.full;
-        if !button.is_sensitive() || (!full && url.is_empty()) {
+        if (!full && url.is_empty()) || !self.reader.fetching.borrow_mut().insert(id) {
             return;
         }
-        button.set_sensitive(false);
-        if !full {
-            button.set_tooltip_text(Some("Fetching the full article…"));
+        if let Some(a) = self.view.borrow().open() {
+            self.update_buttons(a);
         }
         let u = self.clone();
         glib::spawn_future_local(async move {
@@ -278,12 +284,14 @@ impl Ui {
                 })
                 .await
             } else {
-                u.change_library(move |db, client| async move {
-                    full_article::fetch(&db, client.as_deref(), id).await?;
+                let db = u.db.clone();
+                u.background(async move {
+                    crate::account::fetch_full_article(&db, id).await?;
                     db.call(move |s| s.article(id)).await
                 })
                 .await
             };
+            u.reader.fetching.borrow_mut().remove(&id);
             let shown = match result {
                 Ok(a) => u.view.borrow_mut().reload_content(a),
                 Err(e) => {
@@ -298,8 +306,7 @@ impl Ui {
             if shown {
                 u.render();
             } else if let Some(a) = u.view.borrow().open() {
-                // Failed, or another article is open now: show its buttons as they were.
-                u.reader.full.set_sensitive(!a.url.is_empty() || a.full);
+                // Failed, or another article is open now: show its buttons as they are.
                 u.update_buttons(a);
             }
         });

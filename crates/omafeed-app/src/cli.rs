@@ -6,7 +6,6 @@ use anyhow::{Context, Result, bail};
 use omafeed_core::{
     Db, Error, Paths, Settings,
     content::{one_line, readable},
-    full_article,
     ingest::{Progress, Refresher},
     model::{ArticleId, FeedId, FolderId, Library, ParseScopeError, Query, Scope, StatePatch},
     reading,
@@ -675,8 +674,7 @@ async fn article(db: &Db, id: i64, html: bool, full: bool, json: bool) -> Result
         .ok_or(Error::ArticleNotFound(id))?;
     if full && !a.full {
         // While connected, the server fetches its entries if it can.
-        let client = account::client(db).await?;
-        full_article::fetch(db, client.as_deref(), id).await?;
+        account::fetch_full_article(db, id).await?;
         a = db.call(move |s| s.article(id)).await?;
     }
     if json {

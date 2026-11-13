@@ -19,17 +19,20 @@ use url::Url;
 /// by omafeed if the server fails. Fails, keeping the feed's version, if the article has no
 /// web page or no article text is found on it.
 pub async fn fetch(db: &Db, backend: Option<&dyn Backend>, id: ArticleId) -> Result<()> {
-    let (url, feed_url, entry) = db.call(move |s| s.full_article_source(id)).await?;
+    let source = db.call(move |s| s.full_article_source(id)).await?;
+    let url = source.url.clone();
     if url.is_empty() {
         return Err(Error::Validation("This article has no web page to fetch".into()).into());
     }
     let mut server_error = None;
-    if let (Some(backend), Some(entry)) = (backend, entry) {
+    if let (Some(backend), Some(entry)) = (backend, source.entry) {
         match backend.fetch_content(entry).await {
             Ok(Some(html)) => {
                 let html = content::sanitize(&html, &url);
                 if has_text(&html) {
-                    return db.call(move |s| s.set_full_article(id, Some(&html))).await;
+                    return db
+                        .call(move |s| s.keep_full_article(id, &source, &html))
+                        .await;
                 }
             }
             Ok(None) => {}
@@ -37,7 +40,7 @@ pub async fn fetch(db: &Db, backend: Option<&dyn Backend>, id: ArticleId) -> Res
             Err(e) => server_error = Some(e),
         }
     }
-    let html = match download(&url, &feed_url).await {
+    let html = match download(&url, &source.feed_url).await {
         Ok((html, base)) => content::sanitize(&html, &base),
         Err(e) => match server_error {
             Some(server) => bail!("{server:#}; fetching the page directly failed too: {e:#}"),
@@ -47,12 +50,13 @@ pub async fn fetch(db: &Db, backend: Option<&dyn Backend>, id: ArticleId) -> Res
     if !has_text(&html) {
         bail!("No article text found at {url}");
     }
-    db.call(move |s| s.set_full_article(id, Some(&html))).await
+    db.call(move |s| s.keep_full_article(id, &source, &html))
+        .await
 }
 
 /// Go back to the feed's version of the article `id`.
 pub async fn forget(db: &Db, id: ArticleId) -> Result<()> {
-    db.call(move |s| s.set_full_article(id, None)).await
+    db.call(move |s| s.forget_full_article(id)).await
 }
 
 fn has_text(html: &str) -> bool {
@@ -98,6 +102,7 @@ async fn download(url: &str, feed_url: &str) -> Result<(String, String)> {
 /// The text of a web page, in the character set its `Content-Type` header or its own
 /// `<meta>` declares (a byte order mark taking precedence), or else UTF-8.
 fn decode(body: &[u8], content_type: Option<&str>) -> String {
+    // Browsers look for the <meta> in the first 1024 bytes, as here.
     let label = content_type
         .and_then(charset)
         .or_else(|| charset(&String::from_utf8_lossy(&body[..body.len().min(1024)])));
@@ -107,17 +112,21 @@ fn decode(body: &[u8], content_type: Option<&str>) -> String {
     encoding.decode(body).0.into_owned()
 }
 
-/// The value of the first `charset=` in `text`, as in a `Content-Type` header, or a `<meta>`
-/// tag's `charset` or `content` attribute.
+/// The character set `text` declares: the first `charset=` (spaces allowed around the `=`) in
+/// a `Content-Type` header, or in a `<meta>` tag's `charset` or `content` attribute.
 fn charset(text: &str) -> Option<String> {
     let lower = text.to_ascii_lowercase();
-    let start = lower.find("charset=")? + "charset=".len();
-    let value: String = lower[start..]
-        .trim_start_matches(['"', '\'', ' '])
-        .chars()
-        .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':' | '.'))
-        .collect();
-    (!value.is_empty()).then_some(value)
+    lower.match_indices("charset").find_map(|(at, name)| {
+        let rest = lower[at + name.len()..].trim_start();
+        let value: String = rest
+            .strip_prefix('=')?
+            .trim_start()
+            .trim_start_matches(['"', '\''])
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':' | '.'))
+            .collect();
+        (!value.is_empty()).then_some(value)
+    })
 }
 
 /// The main text of the web page `page`, found at `url`, as HTML.
@@ -236,6 +245,10 @@ mod tests {
             charset(&String::from_utf8_lossy(http_equiv)).as_deref(),
             Some("windows-1250")
         );
+        assert_eq!(
+            charset(r#"<p>charset</p><meta charset = 'ISO-8859-2'>"#).as_deref(),
+            Some("iso-8859-2")
+        );
         assert_eq!(decode("<p>Zażółć</p>".as_bytes(), None), "<p>Zażółć</p>");
     }
 
@@ -278,6 +291,25 @@ mod tests {
         assert!(log.lock().unwrap()[0].contains("/v1/entries/42/fetch-content"));
         let a = db.call(move |s| s.article(id)).await.unwrap();
         assert!(a.full && a.html.contains("The second paragraph goes on"));
+    }
+
+    #[tokio::test]
+    async fn a_fetch_that_ends_after_its_article_is_gone_reaches_no_other() {
+        let (_dir, db, id) = library_with_article("https://blog.example/post").await;
+        let full = db
+            .call(move |s| {
+                let source = s.full_article_source(id)?;
+                // Removed while it was fetched; the next article may be given the same ID.
+                s.delete_feed(s.library()?.feeds[0].id)?;
+                s.add_feed("Other", "http://127.0.0.1/other", None)?;
+                download_item(s, "https://other.example/post", "Other summary")?;
+                let other = s.articles(&crate::model::Query::default())?[0].id;
+                s.keep_full_article(id, &source, "<p>All of it</p>")?;
+                Ok((other, s.article(other)?.full))
+            })
+            .await
+            .unwrap();
+        assert_eq!(full, (id, false));
     }
 
     #[tokio::test]
