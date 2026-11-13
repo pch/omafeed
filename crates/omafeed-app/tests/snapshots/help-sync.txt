@@ -1,7 +1,7 @@
 $ omafeed sync --help
 exit: 0
 --- stdout
-Sync with the connected Miniflux account now, as `refresh` does while one is connected
+Sync with the connected Miniflux account now, and offer it again the feeds it refused
 
 Usage: omafeed sync [OPTIONS]
 

@@ -149,14 +149,14 @@ async fn remove_confirmed(u: &Rc<Ui>, window: &adw::ApplicationWindow, scope: Sc
         Scope::Folder(id) if remote => {
             u.change_library(move |db, client| async move {
                 let client = client.ok_or(Error::Managed)?;
-                sync::remove_category(&db, &client, id).await
+                sync::remove_category(&db, client.as_ref(), id).await
             })
             .await
         }
         Scope::Folder(id) => u.db.call(move |s| s.delete_folder(id)).await,
         Scope::Feed(id) => u
             .change_library(move |db, client| async move {
-                subscriptions::unsubscribe(&db, client.as_ref(), id, true).await
+                subscriptions::unsubscribe(&db, client.as_deref(), id, true).await
             })
             .await
             .map(drop)
@@ -210,7 +210,7 @@ async fn edit_folder(
             Some(id) if remote && new_name.trim() != name => {
                 u.change_library(move |db, client| async move {
                     let client = client.ok_or(Error::Managed)?;
-                    sync::rename_category(&db, &client, id, new_name).await?;
+                    sync::rename_category(&db, client.as_ref(), id, new_name).await?;
                     db.call(move |s| s.move_folder(id, parent)).await
                 })
                 .await
@@ -296,7 +296,7 @@ async fn edit_feed(
         let address = url.clone();
         let result = u
             .change_library(move |db, client| async move {
-                let client = client.as_ref();
+                let client = client.as_deref();
                 match id {
                     Some(id) => subscriptions::update(&db, client, id, name, address, parent)
                         .await

@@ -20,6 +20,9 @@ const MIGRATIONS: &[Migration] = &[
     // A Miniflux account: what each feed, folder and article is on the server, and read and
     // star changes waiting to be sent there.
     Migration::Sql(ACCOUNT),
+    // Incremental syncs: where the next one reads the server's changes from, and when the
+    // last one was tried, so a failing sync waits for its interval too.
+    Migration::Sql(SYNC_CURSOR),
 ];
 
 const SCHEMA_V1: &str = r#"
@@ -134,6 +137,14 @@ BEGIN
     INSERT INTO outbox(article_id, field, value) VALUES(new.article_id, 'starred', new.starred)
     ON CONFLICT(article_id, field) DO UPDATE SET value = excluded.value;
 END;
+";
+
+/// `cursor` is the server's clock when the last sync started reading its changes; `NULL`
+/// makes the next sync read everything, as the first one does.
+const SYNC_CURSOR: &str = "
+ALTER TABLE account ADD COLUMN cursor INTEGER;
+ALTER TABLE account ADD COLUMN last_attempt INTEGER;
+UPDATE account SET last_attempt = last_sync;
 ";
 
 /// Recompute search/preview text from stored HTML (the FTS index follows via trigger).

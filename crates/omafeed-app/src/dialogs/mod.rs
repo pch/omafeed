@@ -269,7 +269,7 @@ pub fn import(u: Rc<Ui>) {
         };
         let result = u
             .change_library(move |db, client| async move {
-                omafeed_core::subscriptions::import(&db, client.as_ref(), text).await
+                omafeed_core::subscriptions::import(&db, client.as_deref(), text).await
             })
             .await;
         let done = match result {

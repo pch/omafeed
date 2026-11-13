@@ -4,7 +4,7 @@ use omafeed_core::{
     Db, Error,
     model::{ArticleId, Download, FeedId, Query, Scope, StatePatch, Update},
     reading, subscriptions,
-    sync::{self, miniflux::Client},
+    sync::{self, Backend, Trigger, miniflux::Client},
 };
 use serde_json::{Value, json};
 use std::{
@@ -23,10 +23,14 @@ struct Entry {
     read: bool,
     starred: bool,
     published: i64,
+    /// When it was added or last read, unread, starred or unstarred, on the server's clock.
+    changed: i64,
 }
 
 #[derive(Default)]
 struct Server {
+    /// The server's clock, which moves on by [`TICK`] with every request.
+    clock: i64,
     categories: Vec<(i64, String)>,
     /// ID, category, title, URL.
     feeds: Vec<(i64, i64, String, String)>,
@@ -38,9 +42,15 @@ struct Server {
     next_id: i64,
     /// Answer every request for feeds with a server error.
     broken: bool,
+    /// Leave the `Date` header out of replies.
+    undated: bool,
     /// Every request, as "METHOD path".
     log: Vec<String>,
 }
+
+/// How far the mock server's clock moves on per request: more than a sync's overlap, so that
+/// a sync reads again only what changed since the one before.
+const TICK: i64 = 100;
 
 impl Server {
     fn id(&mut self) -> i64 {
@@ -57,8 +67,17 @@ impl Server {
             read,
             starred,
             published,
+            changed: self.clock,
         });
         id
+    }
+
+    /// Change the entry at `url` as Miniflux would, so that its change time moves.
+    fn change(&mut self, url: &str, change: impl FnOnce(&mut Entry)) {
+        let clock = self.clock;
+        let e = self.entries.iter_mut().find(|e| e.url == url).unwrap();
+        change(e);
+        e.changed = clock;
     }
 
     fn entry_json(e: &Entry) -> Value {
@@ -84,12 +103,15 @@ impl Server {
             .split('&')
             .filter_map(|pair| pair.split_once('='))
             .collect();
-        self.log.push(format!("{method} {path}"));
+        self.log.push(format!("{method} {target}"));
+        self.clock += TICK;
+        let clock = self.clock;
         let body: Value = serde_json::from_str(body).unwrap_or(Value::Null);
         if self.broken && path == "/v1/feeds" {
             return (500, json!({ "error_message": "database unavailable" }));
         }
         match (method, path) {
+            ("GET", "/v1/version") => (200, json!({ "version": "2.3.5" })),
             ("GET", "/v1/me") => (200, json!({ "id": 1, "username": "ann" })),
             ("GET", "/v1/categories") => (
                 200,
@@ -111,12 +133,25 @@ impl Server {
                         .collect(),
                 ),
             ),
-            ("GET", "/v1/entries") => {
+            ("GET", "/v1/feeds/counters") => {
+                let mut unreads = serde_json::Map::new();
+                for e in self.entries.iter().filter(|e| !e.read) {
+                    let count = unreads.entry(e.feed.to_string()).or_insert(json!(0));
+                    *count = json!(count.as_i64().unwrap() + 1);
+                }
+                (200, json!({ "reads": {}, "unreads": unreads }))
+            }
+            ("GET", p) if p == "/v1/entries" || p.ends_with("/entries") => {
+                let feed: Option<i64> = p
+                    .strip_prefix("/v1/feeds/")
+                    .map(|rest| rest.trim_end_matches("/entries").parse().unwrap());
                 let num = |key: &str| params.get(key).map(|v| v.parse::<i64>().unwrap());
                 let limit = num("limit").unwrap_or(100) as usize;
                 let mut matching: Vec<&Entry> = self
                     .entries
                     .iter()
+                    .filter(|e| feed.is_none_or(|f| e.feed == f))
+                    .filter(|e| num("changed_after").is_none_or(|t| e.changed > t))
                     .filter(|e| match params.get("status") {
                         Some(&"read") => e.read,
                         Some(&"unread") => !e.read,
@@ -136,18 +171,18 @@ impl Server {
                 (200, json!({ "total": total, "entries": page }))
             }
             ("PUT", "/v1/entries") => {
-                let read = body["status"] == "read";
+                // As Miniflux does, entries it does not have are skipped.
                 for id in body["entry_ids"].as_array().unwrap() {
                     if let Some(e) = self.entries.iter_mut().find(|e| Some(e.id) == id.as_i64()) {
-                        e.read = read;
+                        if let Some(status) = body["status"].as_str() {
+                            e.read = status == "read";
+                        }
+                        if let Some(starred) = body["starred"].as_bool() {
+                            e.starred = starred;
+                        }
+                        e.changed = clock;
                     }
                 }
-                (204, Value::Null)
-            }
-            ("PUT", p) if p.ends_with("/bookmark") => {
-                let id: i64 = p.split('/').nth(3).unwrap().parse().unwrap();
-                let e = self.entries.iter_mut().find(|e| e.id == id).unwrap();
-                e.starred = !e.starred;
                 (204, Value::Null)
             }
             ("POST", "/v1/categories") => {
@@ -249,14 +284,25 @@ async fn serve(server: Server) -> (String, Shared) {
                 let mut line = head.lines().next().unwrap().split(' ');
                 let (method, target) = (line.next().unwrap(), line.next().unwrap());
                 let body = String::from_utf8_lossy(&data[head_end..]).into_owned();
-                let (status, reply) = state.lock().unwrap().handle(method, target, &body);
+                let (status, reply, clock, undated) = {
+                    let mut server = state.lock().unwrap();
+                    let (status, reply) = server.handle(method, target, &body);
+                    (status, reply, server.clock, server.undated)
+                };
+                let date = chrono::DateTime::from_timestamp(clock, 0)
+                    .unwrap()
+                    .to_rfc2822();
+                let date = match undated {
+                    true => String::new(),
+                    false => format!("Date: {}\r\n", date.replace("+0000", "GMT")),
+                };
                 let reply = if reply.is_null() {
                     String::new()
                 } else {
                     reply.to_string()
                 };
                 let response = format!(
-                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                    "HTTP/1.1 {status} X\r\n{date}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
                     reply.len()
                 );
                 let _ = socket.write_all(response.as_bytes()).await;
@@ -312,7 +358,10 @@ fn all() -> Query {
 /// The server: categories "All" and "Tech", "Shared" in Tech with the entry the library has
 /// (unread and unstarred there) and one it does not (read and starred), plus an old read entry.
 fn server() -> Server {
-    let mut server = Server::default();
+    let mut server = Server {
+        clock: NOW,
+        ..Server::default()
+    };
     let all = server.id();
     server.categories.push((all, "All".into()));
     let tech = server.id();
@@ -507,14 +556,9 @@ async fn syncs_send_local_changes_and_follow_the_servers() {
         let mut server = state.lock().unwrap();
         let feed = server.feeds[0].0;
         server.entry(feed, "https://shared.example/new", false, false, NOW);
-        server
-            .entries
-            .iter_mut()
-            .find(|e| e.url == "https://shared.example/c")
-            .unwrap()
-            .read = false;
+        server.change("https://shared.example/c", |e| e.read = false);
     }
-    let report = sync::sync(&db, &client).await.unwrap();
+    let report = sync::sync(&db, &client, Trigger::Scheduled).await.unwrap();
     assert_eq!(report.sent, 3, "{report:?}");
     assert_eq!(report.new_articles, 1);
     {
@@ -535,10 +579,10 @@ async fn syncs_send_local_changes_and_follow_the_servers() {
         .await
         .unwrap();
     assert!(!marked.is_empty());
-    sync::sync(&db, &client).await.unwrap();
+    sync::sync(&db, &client, Trigger::Scheduled).await.unwrap();
     assert!(state.lock().unwrap().entries.iter().all(|e| e.read));
     reading::undo_read(&db, marked.clone()).await.unwrap();
-    sync::sync(&db, &client).await.unwrap();
+    sync::sync(&db, &client, Trigger::Scheduled).await.unwrap();
     let unread_on_server = state
         .lock()
         .unwrap()
@@ -549,7 +593,7 @@ async fn syncs_send_local_changes_and_follow_the_servers() {
     assert_eq!(unread_on_server, marked.len());
 
     // A sync with nothing new changes nothing.
-    let quiet = sync::sync(&db, &client).await.unwrap();
+    let quiet = sync::sync(&db, &client, Trigger::Scheduled).await.unwrap();
     assert_eq!(
         (quiet.sent, quiet.new_articles, quiet.state_changes),
         (0, 0, 0)
@@ -592,7 +636,7 @@ async fn the_servers_feeds_and_categories_decide_the_librarys() {
         ));
         server.entry(feed, "https://news.example/1", false, false, NOW);
     }
-    sync::sync(&db, &client).await.unwrap();
+    sync::sync(&db, &client, Trigger::Scheduled).await.unwrap();
     let lib = db.call(|s| s.library()).await.unwrap();
     let renamed = lib.folder(tech).unwrap();
     assert_eq!(renamed.name, "Technology");
@@ -606,7 +650,7 @@ async fn the_servers_feeds_and_categories_decide_the_librarys() {
         server.feeds.retain(|f| f.2 != "Daily");
         server.categories.retain(|c| c.1 != "News");
     }
-    sync::sync(&db, &client).await.unwrap();
+    sync::sync(&db, &client, Trigger::Scheduled).await.unwrap();
     let lib = db.call(|s| s.library()).await.unwrap();
     assert!(lib.feeds.iter().all(|f| f.title != "Daily"));
     assert!(lib.folders.iter().all(|f| f.name != "News"));
@@ -652,7 +696,12 @@ async fn disconnecting_keeps_the_library_as_local_feeds() {
     reading::change_one(&db, starred, StatePatch::read(false))
         .await
         .unwrap();
-    assert_eq!(sync::disconnect(&db, Some(&client)).await.unwrap(), 0);
+    assert_eq!(
+        sync::disconnect(&db, Some(&client as &dyn Backend))
+            .await
+            .unwrap(),
+        0
+    );
     assert!(!server_entry(&state.lock().unwrap(), &before[&starred].url).read);
 
     assert!(db.call(|s| s.account()).await.unwrap().is_none());
@@ -703,10 +752,12 @@ async fn disconnecting_keeps_the_library_as_local_feeds() {
     let refreshed = articles(&db).await;
     assert_eq!(refreshed.len(), after.len());
     assert!(refreshed[&starred].starred && refreshed[&starred].read);
-    let error = sync::sync(&db, &client).await.unwrap_err();
-    assert_eq!(error.to_string(), "No Miniflux account is connected");
+    let error = sync::sync(&db, &client, Trigger::Scheduled)
+        .await
+        .unwrap_err();
+    assert_eq!(error.to_string(), "No account is connected");
     let error = sync::disconnect(&db, None).await.unwrap_err();
-    assert_eq!(error.to_string(), "No Miniflux account is connected");
+    assert_eq!(error.to_string(), "No account is connected");
 
     // Reconnecting finds the same feeds and articles again instead of adding copies.
     sync::connect(&db, &client).await.unwrap();
@@ -725,7 +776,9 @@ async fn a_failed_sync_is_recorded_on_the_account() {
     assert!(synced.is_some());
 
     state.lock().unwrap().broken = true;
-    let error = sync::sync(&db, &client).await.unwrap_err();
+    let error = sync::sync(&db, &client, Trigger::Scheduled)
+        .await
+        .unwrap_err();
     assert_eq!(
         error.to_string(),
         "Miniflux: database unavailable (HTTP 500)"
@@ -735,13 +788,21 @@ async fn a_failed_sync_is_recorded_on_the_account() {
         account.last_sync, synced,
         "a failure keeps the last good sync's time"
     );
+    // But it counts as an attempt, so the schedule waits before trying again.
+    let now = chrono::Utc::now().timestamp();
+    assert!(
+        account
+            .last_attempt
+            .is_some_and(|t| t >= synced.unwrap() && t <= now)
+    );
+    assert!(!account.sync_due(30, now));
     assert_eq!(
         account.error.as_deref(),
         Some("Miniflux: database unavailable (HTTP 500)")
     );
 
     state.lock().unwrap().broken = false;
-    sync::sync(&db, &client).await.unwrap();
+    sync::sync(&db, &client, Trigger::Scheduled).await.unwrap();
     assert!(
         db.call(|s| s.account())
             .await
@@ -753,7 +814,9 @@ async fn a_failed_sync_is_recorded_on_the_account() {
 
     // A sync with another server's client is refused before anything is sent.
     let other = Client::new("https://elsewhere.example/", "key").unwrap();
-    let error = sync::sync(&db, &other).await.unwrap_err();
+    let error = sync::sync(&db, &other, Trigger::Scheduled)
+        .await
+        .unwrap_err();
     assert_eq!(
         error.to_string(),
         format!("The library is connected to {base}, not https://elsewhere.example/")
@@ -787,7 +850,7 @@ async fn feeds_and_categories_are_changed_on_the_server_first() {
 
     // Subscribing goes to the server, named as asked, and brings the feed's entries.
     let server = &client;
-    let client = Some(server);
+    let client: Option<&dyn Backend> = Some(server);
     let new = subscriptions::subscribe(
         &db,
         client,
@@ -936,7 +999,7 @@ async fn feeds_the_server_refused_are_fixed_or_removed_here() {
     // A new address is the library's to change; the next sync offers it to the server.
     subscriptions::update(
         &db,
-        Some(&client),
+        Some(&client as &dyn Backend),
         mine,
         "Mine".into(),
         "https://mine.example/fixed".into(),
@@ -952,7 +1015,7 @@ async fn feeds_the_server_refused_are_fixed_or_removed_here() {
             .iter()
             .all(|f| !f.3.starts_with("https://mine"))
     );
-    sync::sync(&db, &client).await.unwrap();
+    sync::sync(&db, &client, Trigger::Scheduled).await.unwrap();
     assert!(
         state
             .lock()
@@ -1005,7 +1068,7 @@ async fn importing_while_connected_subscribes_the_server_in_each_folders_categor
         ));
     }
 
-    let done = subscriptions::import(&db, Some(&client), opml.into())
+    let done = subscriptions::import(&db, Some(&client as &dyn Backend), opml.into())
         .await
         .unwrap();
     assert_eq!((done.report.added, done.report.skipped), (4, 1));
@@ -1048,4 +1111,211 @@ async fn importing_while_connected_subscribes_the_server_in_each_folders_categor
         .find(|f| f.url == "https://refused.example/feed")
         .unwrap();
     assert!(refused.error.as_deref().unwrap().contains("Miniflux"));
+}
+
+/// Requests a sync made, without the paging parameters.
+fn requests_since(state: &Shared, from: usize) -> Vec<String> {
+    state.lock().unwrap().log[from..]
+        .iter()
+        .map(|l| l.replace("order=id&direction=asc&limit=100&", ""))
+        .collect()
+}
+
+#[tokio::test]
+async fn syncs_after_the_first_read_only_what_changed() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(dir.path().join("test.db")).unwrap();
+    let (base, state) = serve(server()).await;
+    let client = Client::new(&base, "key").unwrap();
+    sync::connect(&db, &client).await.unwrap();
+
+    // Nothing changed: a handful of small requests, and no entry is read again.
+    let from = state.lock().unwrap().log.len();
+    let quiet = sync::sync(&db, &client, Trigger::Scheduled).await.unwrap();
+    assert_eq!((quiet.new_articles, quiet.state_changes), (0, 0));
+    let requests = requests_since(&state, from);
+    assert_eq!(requests.len(), 5, "{requests:?}");
+    assert_eq!(requests[0], "GET /v1/categories");
+    assert_eq!(requests[1], "GET /v1/feeds");
+    assert!(requests[2].starts_with("GET /v1/entries?changed_after="));
+    assert_eq!(requests[3], "GET /v1/feeds/counters");
+    assert_eq!(requests[4], "GET /v1/entries?limit=1&starred=true");
+
+    // Changes on the server since come down, and only they.
+    {
+        let mut server = state.lock().unwrap();
+        server.change("https://shared.example/a", |e| e.read = true);
+        let feed = server.feeds[0].0;
+        server.entry(feed, "https://shared.example/later", false, false, NOW);
+    }
+    let from = state.lock().unwrap().log.len();
+    let report = sync::sync(&db, &client, Trigger::Scheduled).await.unwrap();
+    assert_eq!(
+        (report.new_articles, report.state_changes),
+        (1, 1),
+        "{report:?}"
+    );
+    assert_eq!(requests_since(&state, from).len(), 5);
+    let found = articles(&db).await;
+    let a = found
+        .values()
+        .find(|x| x.url == "https://shared.example/a")
+        .unwrap();
+    assert!(a.read);
+}
+
+#[tokio::test]
+async fn counts_that_disagree_make_a_sync_read_that_feeds_whole_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(dir.path().join("test.db")).unwrap();
+    let (base, state) = serve(server()).await;
+    let client = Client::new(&base, "key").unwrap();
+    sync::connect(&db, &client).await.unwrap();
+    // The server deletes an unread entry, and loses a star, without either counting as a
+    // change: neither shows among the changed entries.
+    let feed = {
+        let mut server = state.lock().unwrap();
+        server
+            .entries
+            .retain(|e| e.url != "https://shared.example/a");
+        server
+            .entries
+            .iter_mut()
+            .find(|e| e.url == "https://shared.example/c")
+            .unwrap()
+            .starred = false;
+        server.feeds[0].0
+    };
+    let from = state.lock().unwrap().log.len();
+    let report = sync::sync(&db, &client, Trigger::Scheduled).await.unwrap();
+    assert_eq!(report.state_changes, 2, "{report:?}");
+    let requests = requests_since(&state, from);
+    assert!(
+        requests.contains(&format!("GET /v1/feeds/{feed}/entries?status=unread")),
+        "{requests:?}"
+    );
+    assert!(requests.contains(&"GET /v1/entries?starred=true".to_owned()));
+    let found = articles(&db).await;
+    let a = found
+        .values()
+        .find(|x| x.url == "https://shared.example/a")
+        .unwrap();
+    assert!(a.read, "the library keeps a deleted entry, read");
+    let c = found
+        .values()
+        .find(|x| x.url == "https://shared.example/c")
+        .unwrap();
+    assert!(!c.starred);
+    // Once they agree again, a sync reads only what changed.
+    let from = state.lock().unwrap().log.len();
+    sync::sync(&db, &client, Trigger::Scheduled).await.unwrap();
+    assert_eq!(requests_since(&state, from).len(), 5);
+}
+
+#[tokio::test]
+async fn a_change_to_an_entry_the_server_deleted_does_not_hold_up_syncs() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(dir.path().join("test.db")).unwrap();
+    let (base, state) = serve(server()).await;
+    let client = Client::new(&base, "key").unwrap();
+    sync::connect(&db, &client).await.unwrap();
+    let found = articles(&db).await;
+    let a = *found
+        .iter()
+        .find(|(_, x)| x.url == "https://shared.example/a")
+        .unwrap()
+        .0;
+    reading::change_one(&db, a, StatePatch::starred(true))
+        .await
+        .unwrap();
+    // Another device unsubscribes from the feed before this change is sent.
+    {
+        let mut server = state.lock().unwrap();
+        let feed = server.feeds[0].0;
+        server.feeds.retain(|f| f.0 != feed);
+        server.entries.retain(|e| e.feed != feed);
+    }
+    sync::sync(&db, &client, Trigger::Scheduled).await.unwrap();
+    let account = db.call(|s| s.account()).await.unwrap().unwrap();
+    assert_eq!((account.unsent, account.error), (0, None));
+    let lib = db.call(|s| s.library()).await.unwrap();
+    assert!(
+        lib.feeds
+            .iter()
+            .all(|f| f.url != "https://shared.example/feed")
+    );
+}
+
+#[tokio::test]
+async fn feeds_the_server_refused_are_offered_again_only_when_asked() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(dir.path().join("test.db")).unwrap();
+    let (_, mine, _, _) = local_library(&db).await;
+    let mut setup = server();
+    setup.unreachable.push("https://mine.example/feed".into());
+    let (base, state) = serve(setup).await;
+    let client = Client::new(&base, "key").unwrap();
+    let report = sync::connect(&db, &client).await.unwrap();
+    assert_eq!(report.refused.len(), 1);
+    let offers = || {
+        state
+            .lock()
+            .unwrap()
+            .log
+            .iter()
+            .filter(|l| *l == "POST /v1/feeds")
+            .count()
+    };
+    let before = offers();
+
+    // The schedule leaves it be: the server would fetch it again before answering.
+    let scheduled = sync::sync(&db, &client, Trigger::Scheduled).await.unwrap();
+    assert!(scheduled.refused.is_empty());
+    assert_eq!(offers(), before);
+
+    // Importing it again offers it again, as something asked for.
+    let opml = r#"<opml version="2.0"><body>
+        <outline text="Mine" xmlUrl="https://mine.example/feed"/></body></opml>"#;
+    let imported = subscriptions::import(&db, Some(&client as &dyn Backend), opml.into())
+        .await
+        .unwrap();
+    assert_eq!(imported.report.skipped, 1);
+    assert_eq!(imported.synced.unwrap().unwrap().refused.len(), 1);
+    assert_eq!(offers(), before + 1);
+    let before = offers();
+
+    // Asking for a sync offers it again; once the server can fetch it, it takes it.
+    state.lock().unwrap().unreachable.clear();
+    let asked = sync::sync(&db, &client, Trigger::Manual).await.unwrap();
+    assert_eq!((asked.subscribed, offers()), (1, before + 1));
+    let lib = db.call(|s| s.library()).await.unwrap();
+    let feed = lib.feed(mine).unwrap();
+    assert!(feed.error.is_none(), "{:?}", feed.error);
+}
+
+#[tokio::test]
+async fn a_server_that_does_not_say_what_time_it_is_is_read_whole_each_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(dir.path().join("test.db")).unwrap();
+    let mut setup = server();
+    setup.undated = true;
+    let (base, state) = serve(setup).await;
+    let client = Client::new(&base, "key").unwrap();
+    sync::connect(&db, &client).await.unwrap();
+    // This computer's clock is no stand-in for the server's: the next sync reads everything,
+    // and so sees a change that leaves the counts as they were.
+    {
+        let mut server = state.lock().unwrap();
+        server.change("https://shared.example/a", |e| e.starred = true);
+        server.change("https://shared.example/c", |e| e.starred = false);
+    }
+    let from = state.lock().unwrap().log.len();
+    let report = sync::sync(&db, &client, Trigger::Scheduled).await.unwrap();
+    assert_eq!(report.state_changes, 2, "{report:?}");
+    let requests = requests_since(&state, from);
+    assert!(
+        requests.contains(&"GET /v1/entries?status=unread".to_owned()),
+        "{requests:?}"
+    );
+    assert!(requests.iter().all(|r| !r.contains("changed_after")));
 }

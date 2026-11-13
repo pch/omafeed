@@ -719,7 +719,7 @@ impl Ui {
             let result = match (scope, remote) {
                 (Scope::Feed(id), Some((title, url))) => {
                     u.change_library(move |db, client| async move {
-                        subscriptions::update(&db, client.as_ref(), id, title, url, folder).await
+                        subscriptions::update(&db, client.as_deref(), id, title, url, folder).await
                     })
                     .await
                 }
@@ -956,6 +956,7 @@ mod tests {
                 user_id: 1,
                 username: "reader".into(),
                 last_sync: None,
+                last_attempt: None,
                 error: None,
                 unsent: 0,
             }),

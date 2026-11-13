@@ -1,18 +1,21 @@
 //! Subscribing, importing, editing and unsubscribing: what the command line and the window both do with
 //! feeds. Finding the feed (discovery) comes first and is up to the caller, which decides
-//! which candidate to take. While a Miniflux account is connected, each takes its `client`
-//! and makes the change on the server too ([`crate::sync`]); without one it fails with
+//! which candidate to take. While an account is connected, each takes its `backend` and
+//! makes the change on the server too ([`crate::sync`]); without one it fails with
 //! [`Error::Managed`] then.
 use crate::{
     Db, Error,
     model::{FeedId, FolderId, ImportReport},
-    sync::{self, miniflux::Client},
+    sync::{self, Backend},
 };
 use anyhow::Result;
 
-/// `client` if a Miniflux account is connected, `None` if the library is local, and
+/// `client` if an account is connected, `None` if the library is local, and
 /// [`Error::Managed`] if one is connected but there is no client for it.
-async fn connected<'a>(db: &Db, client: Option<&'a Client>) -> Result<Option<&'a Client>> {
+async fn connected<'a>(
+    db: &Db,
+    client: Option<&'a dyn Backend>,
+) -> Result<Option<&'a dyn Backend>> {
     if db.call(|s| s.account()).await?.is_none() {
         return Ok(None);
     }
@@ -38,7 +41,7 @@ pub struct Removal {
 /// [`Error::DuplicateFeed`] if a subscription already has that URL.
 pub async fn subscribe(
     db: &Db,
-    client: Option<&Client>,
+    client: Option<&dyn Backend>,
     title: String,
     url: String,
     folder: Option<FolderId>,
@@ -54,7 +57,7 @@ pub async fn subscribe(
 /// already has the new URL.
 pub async fn update(
     db: &Db,
-    client: Option<&Client>,
+    client: Option<&dyn Backend>,
     id: FeedId,
     title: String,
     url: String,
@@ -79,7 +82,7 @@ pub struct Imported {
 
 /// Add the subscriptions and folders of an OPML document, as [`crate::Store::import`] does;
 /// while connected, Miniflux is subscribed to them too ([`sync::import`]).
-pub async fn import(db: &Db, client: Option<&Client>, text: String) -> Result<Imported> {
+pub async fn import(db: &Db, client: Option<&dyn Backend>, text: String) -> Result<Imported> {
     if let Some(client) = connected(db, client).await? {
         let done = sync::import(db, client, text).await?;
         return Ok(Imported {
@@ -112,7 +115,7 @@ pub async fn subscribed_title(db: &Db, url: String) -> Result<Option<String>> {
 /// be) deleted. Fails with [`Error::FeedNotFound`] if there is no such feed.
 pub async fn unsubscribe(
     db: &Db,
-    client: Option<&Client>,
+    client: Option<&dyn Backend>,
     id: FeedId,
     confirmed: bool,
 ) -> Result<Removal> {
