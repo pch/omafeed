@@ -98,6 +98,7 @@ impl Ui {
             gdk::Key::m => self.toggle_read(),
             gdk::Key::s => self.toggle_star(),
             gdk::Key::o => self.open_original(),
+            gdk::Key::d => self.toggle_full(),
             gdk::Key::space => self.scroll_page(mods.contains(gdk::ModifierType::SHIFT_MASK)),
             gdk::Key::question => crate::dialogs::shortcuts(self.clone()),
             _ => return glib::Propagation::Proceed,

@@ -7,6 +7,7 @@ pub mod config;
 pub mod content;
 mod error;
 pub mod filters;
+pub mod full_article;
 mod fuzzy;
 mod http;
 pub mod ingest;

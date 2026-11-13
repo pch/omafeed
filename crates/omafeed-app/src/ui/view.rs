@@ -235,6 +235,18 @@ impl View {
         true
     }
 
+    /// Show `article` with its content as read again, if it is the open article still; the read
+    /// and star state stay as shown, which may have changed since. Returns whether it is open.
+    pub fn reload_content(&mut self, mut article: Article) -> bool {
+        let Some(open) = self.open.as_mut().filter(|a| a.id == article.id) else {
+            return false;
+        };
+        article.read = open.read;
+        article.starred = open.starred;
+        *open = article;
+        true
+    }
+
     /// Close the open article, and drop any article still being opened.
     pub fn close(&mut self) {
         self.selection_generation += 1;
@@ -476,6 +488,26 @@ mod tests {
     fn opened(view: &mut View, a: Article) {
         let opening = view.start_opening();
         assert!(view.finish_opening(opening, a));
+    }
+
+    #[test]
+    fn the_full_article_reaches_only_the_article_still_open_and_keeps_its_state() {
+        let mut v = View::default();
+        opened(&mut v, article(1, false));
+        // Starred while the full article was being fetched.
+        v.apply(ArticleId(1), StatePatch::starred(true));
+        let full = Article {
+            html: "<p>All of it</p>".into(),
+            full: true,
+            ..article(1, false)
+        };
+        assert!(v.reload_content(full.clone()));
+        let open = v.open().unwrap();
+        assert!(open.full && open.starred);
+        assert_eq!(open.html, "<p>All of it</p>");
+        opened(&mut v, article(2, false));
+        assert!(!v.reload_content(full));
+        assert!(!v.open().unwrap().full);
     }
 
     #[test]

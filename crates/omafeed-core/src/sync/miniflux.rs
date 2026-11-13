@@ -127,6 +127,12 @@ struct WireCounters {
     unreads: HashMap<String, i64>,
 }
 
+/// The reply to `GET /v1/entries/{id}/fetch-content`.
+#[derive(Deserialize)]
+struct WireContent {
+    content: String,
+}
+
 #[derive(Deserialize)]
 struct FeedCreated {
     feed_id: i64,
@@ -556,6 +562,18 @@ impl Backend for Client {
 
     fn update_feed<'a>(&'a self, id: i64, change: &'a FeedChange) -> BoxFuture<'a, Result<()>> {
         Box::pin(self.update_feed_now(id, change))
+    }
+
+    /// With the scraper rules, rewrite rules and cookies set for the entry's feed in
+    /// Miniflux; `update_content=false` leaves the entry's content on the server alone.
+    fn fetch_content(&self, id: i64) -> BoxFuture<'_, Result<Option<String>>> {
+        Box::pin(async move {
+            let path = format!("v1/entries/{id}/fetch-content");
+            let reply: WireContent = self
+                .get(&path, &[("update_content", "false".into())])
+                .await?;
+            Ok(Some(reply.content))
+        })
     }
 
     fn unsubscribe(&self, id: i64) -> BoxFuture<'_, Result<()>> {
@@ -1041,5 +1059,19 @@ mod tests {
         );
         let body: serde_json::Value = serde_json::from_str(&log[2].body).unwrap();
         assert_eq!(body, serde_json::json!({ "title": "News" }));
+    }
+
+    #[tokio::test]
+    async fn the_server_fetches_an_entry_in_full_without_keeping_it() {
+        let (base, log) = server(|_| (200, r#"{"content":"<p>All of it</p>"}"#.into())).await;
+        let client = Client::new(&base, "key").unwrap();
+        assert_eq!(
+            client.fetch_content(42).await.unwrap().as_deref(),
+            Some("<p>All of it</p>")
+        );
+        assert_eq!(
+            log.lock().unwrap()[0].target,
+            "/v1/entries/42/fetch-content?update_content=false"
+        );
     }
 }

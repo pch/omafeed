@@ -20,6 +20,7 @@ fn download(body: &str) -> Download {
 }
 /// Turns a new library back into the version 2 schema, for tests that write older text.
 const UNDO_LATER_MIGRATIONS: &str = "
+    ALTER TABLE articles DROP COLUMN full_html;
     DROP TRIGGER outbox_read; DROP TRIGGER outbox_starred; DROP TABLE outbox; DROP TABLE account;
     DROP INDEX feed_remote; DROP INDEX folder_remote; DROP INDEX article_remote;
     ALTER TABLE feeds DROP COLUMN remote_id; ALTER TABLE folders DROP COLUMN remote_id;

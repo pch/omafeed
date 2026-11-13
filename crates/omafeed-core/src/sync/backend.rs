@@ -167,4 +167,13 @@ pub trait Backend: Send + Sync {
 
     /// Delete the category `id`; see [`Backend::deleting_a_category_deletes_its_feeds`].
     fn delete_category(&self, id: i64) -> BoxFuture<'_, Result<()>>;
+
+    /// The full article of the entry `id`, fetched from its web page by the server, which may
+    /// know better than the library how to read the site; the entry itself stays as it was.
+    /// `None` if the service cannot, and the library fetches the page itself
+    /// ([`crate::full_article`]).
+    fn fetch_content(&self, id: i64) -> BoxFuture<'_, Result<Option<String>>> {
+        let _ = id;
+        Box::pin(async { Ok(None) })
+    }
 }

@@ -4,7 +4,8 @@
 //! the tokio runtime.
 use anyhow::{Context, Result, anyhow, bail};
 use omafeed_core::{
-    Db,
+    Db, full_article,
+    model::ArticleId,
     sync::{self, Backend, Report, backend::User, miniflux::Client},
 };
 use std::{collections::HashMap, time::Duration};
@@ -107,6 +108,18 @@ pub async fn client(db: &Db) -> Result<Option<Box<dyn Backend>>> {
     };
     let token = token(&account.server).await?;
     Ok(Some(Box::new(Client::new(&account.server, &token)?)))
+}
+
+/// Fetch the article `id` in full ([`full_article::fetch`]), by the connected account's server
+/// if it can. If the account's key cannot be read, the page is fetched directly, and the key
+/// is reported only if that fails too.
+pub async fn fetch_full_article(db: &Db, id: ArticleId) -> Result<()> {
+    match client(db).await {
+        Ok(client) => full_article::fetch(db, client.as_deref(), id).await,
+        Err(key) => full_article::fetch(db, None, id)
+            .await
+            .map_err(|e| anyhow!("{e:#}; Miniflux could not be asked either: {key:#}")),
+    }
 }
 
 /// What [`connect`] did.
