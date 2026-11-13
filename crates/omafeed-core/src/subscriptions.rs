@@ -1,11 +1,11 @@
-//! Subscribing, editing and unsubscribing: what the command line and the window both do with
+//! Subscribing, importing, editing and unsubscribing: what the command line and the window both do with
 //! feeds. Finding the feed (discovery) comes first and is up to the caller, which decides
 //! which candidate to take. While a Miniflux account is connected, each takes its `client`
 //! and makes the change on the server too ([`crate::sync`]); without one it fails with
 //! [`Error::Managed`] then.
 use crate::{
     Db, Error,
-    model::{FeedId, FolderId},
+    model::{FeedId, FolderId, ImportReport},
     sync::{self, miniflux::Client},
 };
 use anyhow::Result;
@@ -65,6 +65,33 @@ pub async fn update(
     }
     db.call(move |s| s.update_feed(id, &title, &url, folder))
         .await
+}
+
+/// What [`import`] did.
+#[derive(Debug)]
+pub struct Imported {
+    /// The subscriptions added, skipped, and refused.
+    pub report: ImportReport,
+    /// While a Miniflux account is connected, the sync that sent the subscriptions to it, or
+    /// why it failed; `None` for a local library, whose new feeds are due for a refresh.
+    pub synced: Option<Result<sync::Report>>,
+}
+
+/// Add the subscriptions and folders of an OPML document, as [`crate::Store::import`] does;
+/// while connected, Miniflux is subscribed to them too ([`sync::import`]).
+pub async fn import(db: &Db, client: Option<&Client>, text: String) -> Result<Imported> {
+    if let Some(client) = connected(db, client).await? {
+        let done = sync::import(db, client, text).await?;
+        return Ok(Imported {
+            report: done.report,
+            synced: Some(done.synced),
+        });
+    }
+    let report = db.call(move |s| s.import(&text)).await?;
+    Ok(Imported {
+        report,
+        synced: None,
+    })
 }
 
 /// The title of the subscription with feed URL `url`, if there is one; for saying which

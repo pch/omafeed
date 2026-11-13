@@ -220,7 +220,10 @@ pub fn run(command: Command) -> Result<()> {
 
 async fn import(db: &Db, file: &PathBuf) -> Result<()> {
     let text = std::fs::read_to_string(file).with_context(|| format!("Read {}", file.display()))?;
-    let report = db.call(move |s| s.import(&text)).await?;
+    // While connected, Miniflux is subscribed too; get its key before changing anything.
+    let client = account::client(db).await?;
+    let done = subscriptions::import(db, client.as_ref(), text).await?;
+    let report = done.report;
     println!(
         "Imported {}, skipped {}, invalid {}",
         report.added,
@@ -230,7 +233,16 @@ async fn import(db: &Db, file: &PathBuf) -> Result<()> {
     for e in report.invalid {
         eprintln!("{e}");
     }
-    Ok(())
+    match done.synced {
+        None => Ok(()),
+        Some(Ok(synced)) => {
+            print_report(&synced);
+            Ok(())
+        }
+        Some(Err(e)) => Err(e.context(
+            "The sync with Miniflux failed; the next one subscribes it to the imported feeds",
+        )),
+    }
 }
 
 async fn export(db: &Db, file: &PathBuf) -> Result<()> {
