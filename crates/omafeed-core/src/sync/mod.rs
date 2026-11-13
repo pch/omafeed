@@ -17,7 +17,8 @@
 //! 5. Send any changes step 4 queued: local articles that became entries keep their state.
 //!
 //! The library keeps entries the server has since deleted; only a feed removed from the
-//! server takes its articles with it.
+//! server takes its articles with it. After disconnecting, the first refresh of a feed finds
+//! the articles it had from the server by their links, so they are not added again.
 pub mod miniflux;
 
 use crate::{Db, Error, store::account::same_url};

@@ -33,6 +33,20 @@ ON CONFLICT(feed_id, identity) DO UPDATE SET
     html = excluded.html,
     text = excluded.text";
 
+/// An article a Miniflux account brought, identified by its entry there, takes the identity
+/// `?2` the feed gives the item linking to `?3`, so that refreshing the feed after
+/// disconnecting updates it instead of adding a copy. Only while no account links it, and
+/// only one such article, if the feed has none by that identity yet.
+const ADOPT_SYNCED_ARTICLE: &str = "
+UPDATE articles SET identity = ?2
+WHERE id = (
+    SELECT id FROM articles
+    WHERE feed_id = ?1 AND url = ?3 AND url <> '' AND remote_id IS NULL
+      AND identity LIKE 'miniflux:%'
+    ORDER BY id LIMIT 1
+)
+AND NOT EXISTS (SELECT 1 FROM articles WHERE feed_id = ?1 AND identity = ?2)";
+
 /// Changing a feed URL clears everything learned from the old URL and gives the feed revision
 /// `?5`.
 const UPDATE_FEED: &str = "
@@ -226,7 +240,9 @@ impl Store {
         let changes_articles = matches!(download, Download::Updated(_));
         if let Download::Updated(update) = download {
             let mut upsert = tx.prepare(UPSERT_ARTICLE)?;
+            let mut adopt = tx.prepare(ADOPT_SYNCED_ARTICLE)?;
             for e in update.entries {
+                adopt.execute(params![feed_id, e.identity, e.url])?;
                 upsert.execute(params![
                     feed_id,
                     e.identity,
@@ -239,7 +255,7 @@ impl Store {
                     e.text
                 ])?;
             }
-            drop(upsert);
+            drop((upsert, adopt));
             tx.execute(
                 "UPDATE feeds SET etag = ?1, modified = ?2, site_url = COALESCE(?3, site_url) WHERE id = ?4",
                 params![update.etag, update.modified, update.site_url, feed_id],

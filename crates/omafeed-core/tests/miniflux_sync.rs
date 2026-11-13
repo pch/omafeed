@@ -2,7 +2,7 @@
 //! entries and answers the parts of the API omafeed uses.
 use omafeed_core::{
     Db, Error,
-    model::{ArticleId, FeedId, Query, Scope, StatePatch},
+    model::{ArticleId, Download, FeedId, Query, Scope, StatePatch, Update},
     reading,
     sync::{self, miniflux::Client},
 };
@@ -641,6 +641,35 @@ async fn disconnecting_keeps_the_library_as_local_feeds() {
     reading::change_one(&db, starred, StatePatch::read(true))
         .await
         .unwrap();
+    // Refreshing a feed finds the articles it had from the server by their links, whatever
+    // the feed's own identities for them, and keeps their state instead of adding copies.
+    let shared = lib
+        .feeds
+        .iter()
+        .find(|f| f.url == "https://shared.example/feed")
+        .unwrap()
+        .clone();
+    db.call(move |s| {
+        let entries = omafeed_core::ingest::parse(
+            b"<rss version=\"2.0\"><channel><title>Shared</title>\
+              <item><guid>tag:shared,a</guid><title>A</title><link>https://shared.example/a</link></item>\
+              <item><guid>tag:shared,c</guid><title>C</title><link>https://shared.example/c</link></item>\
+              </channel></rss>",
+            &shared.url,
+        )?;
+        let download = Download::Updated(Update {
+            site_url: None,
+            entries,
+            etag: None,
+            modified: None,
+        });
+        s.commit_download(shared.id, shared.revision, download, NOW, NOW)
+    })
+    .await
+    .unwrap();
+    let refreshed = articles(&db).await;
+    assert_eq!(refreshed.len(), after.len());
+    assert!(refreshed[&starred].starred && refreshed[&starred].read);
     let error = sync::sync(&db, &client).await.unwrap_err();
     assert_eq!(error.to_string(), "No Miniflux account is connected");
     let error = sync::disconnect(&db, None).await.unwrap_err();
