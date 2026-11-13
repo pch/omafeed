@@ -49,9 +49,22 @@ pub(crate) struct Mirror {
     pub unread: Option<Unread>,
     /// Every starred entry: the library's other articles are not starred.
     pub starred: Option<HashSet<i64>>,
-    /// Where the next sync reads changes from, on the server's clock.
-    pub cursor: Option<i64>,
+    /// Where the next sync reads changes from.
+    pub cursor: Cursor,
     pub now: i64,
+}
+
+/// What [`Store::mirror`] does with the cursor the next sync reads changes from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Cursor {
+    /// Leave it.
+    #[default]
+    Keep,
+    /// Read changes after this time on the server's clock.
+    At(i64),
+    /// Read everything again, as the first sync does: the server did not say what time it
+    /// was, and this computer's clock may differ from its clock.
+    Reset,
 }
 
 /// Every unread entry of `feeds` (by the server's IDs; `None` for every feed).
@@ -414,7 +427,12 @@ impl Store {
         if let Some(starred) = &mirror.starred {
             changed.extend(self.follow_starred(starred)?);
         }
-        if let Some(cursor) = mirror.cursor {
+        let cursor = match mirror.cursor {
+            Cursor::Keep => None,
+            Cursor::At(time) => Some(Some(time)),
+            Cursor::Reset => Some(None),
+        };
+        if let Some(cursor) = cursor {
             self.conn
                 .execute("UPDATE account SET cursor = ?1", [cursor])?;
         }

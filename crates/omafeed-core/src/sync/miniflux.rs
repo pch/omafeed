@@ -376,8 +376,17 @@ impl Client {
         if let Some(url) = &change.feed_url {
             body.insert("feed_url".into(), url.as_str().into());
         }
-        if let Some(category) = change.category {
-            body.insert("category_id".into(), category.into());
+        match change.category {
+            Some(Some(category)) => {
+                body.insert("category_id".into(), category.into());
+            }
+            Some(None) => {
+                return Err(crate::Error::Validation(
+                    "Miniflux keeps every feed in a category".into(),
+                )
+                .into());
+            }
+            None => {}
         }
         self.send(Method::PUT, &format!("v1/feeds/{id}"), Some(&body.into()))
             .await?;
@@ -1006,7 +1015,7 @@ mod tests {
                 7,
                 &FeedChange {
                     title: Some("Renamed".into()),
-                    category: Some(3),
+                    category: Some(Some(3)),
                     ..FeedChange::default()
                 },
             )

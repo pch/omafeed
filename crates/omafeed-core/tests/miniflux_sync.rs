@@ -42,6 +42,8 @@ struct Server {
     next_id: i64,
     /// Answer every request for feeds with a server error.
     broken: bool,
+    /// Leave the `Date` header out of replies.
+    undated: bool,
     /// Every request, as "METHOD path".
     log: Vec<String>,
 }
@@ -282,22 +284,25 @@ async fn serve(server: Server) -> (String, Shared) {
                 let mut line = head.lines().next().unwrap().split(' ');
                 let (method, target) = (line.next().unwrap(), line.next().unwrap());
                 let body = String::from_utf8_lossy(&data[head_end..]).into_owned();
-                let (status, reply, clock) = {
+                let (status, reply, clock, undated) = {
                     let mut server = state.lock().unwrap();
                     let (status, reply) = server.handle(method, target, &body);
-                    (status, reply, server.clock)
+                    (status, reply, server.clock, server.undated)
                 };
                 let date = chrono::DateTime::from_timestamp(clock, 0)
                     .unwrap()
                     .to_rfc2822();
-                let date = date.replace("+0000", "GMT");
+                let date = match undated {
+                    true => String::new(),
+                    false => format!("Date: {}\r\n", date.replace("+0000", "GMT")),
+                };
                 let reply = if reply.is_null() {
                     String::new()
                 } else {
                     reply.to_string()
                 };
                 let response = format!(
-                    "HTTP/1.1 {status} X\r\nDate: {date}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                    "HTTP/1.1 {status} X\r\n{date}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
                     reply.len()
                 );
                 let _ = socket.write_all(response.as_bytes()).await;
@@ -1268,6 +1273,17 @@ async fn feeds_the_server_refused_are_offered_again_only_when_asked() {
     assert!(scheduled.refused.is_empty());
     assert_eq!(offers(), before);
 
+    // Importing it again offers it again, as something asked for.
+    let opml = r#"<opml version="2.0"><body>
+        <outline text="Mine" xmlUrl="https://mine.example/feed"/></body></opml>"#;
+    let imported = subscriptions::import(&db, Some(&client as &dyn Backend), opml.into())
+        .await
+        .unwrap();
+    assert_eq!(imported.report.skipped, 1);
+    assert_eq!(imported.synced.unwrap().unwrap().refused.len(), 1);
+    assert_eq!(offers(), before + 1);
+    let before = offers();
+
     // Asking for a sync offers it again; once the server can fetch it, it takes it.
     state.lock().unwrap().unreachable.clear();
     let asked = sync::sync(&db, &client, Trigger::Manual).await.unwrap();
@@ -1275,4 +1291,31 @@ async fn feeds_the_server_refused_are_offered_again_only_when_asked() {
     let lib = db.call(|s| s.library()).await.unwrap();
     let feed = lib.feed(mine).unwrap();
     assert!(feed.error.is_none(), "{:?}", feed.error);
+}
+
+#[tokio::test]
+async fn a_server_that_does_not_say_what_time_it_is_is_read_whole_each_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(dir.path().join("test.db")).unwrap();
+    let mut setup = server();
+    setup.undated = true;
+    let (base, state) = serve(setup).await;
+    let client = Client::new(&base, "key").unwrap();
+    sync::connect(&db, &client).await.unwrap();
+    // This computer's clock is no stand-in for the server's: the next sync reads everything,
+    // and so sees a change that leaves the counts as they were.
+    {
+        let mut server = state.lock().unwrap();
+        server.change("https://shared.example/a", |e| e.starred = true);
+        server.change("https://shared.example/c", |e| e.starred = false);
+    }
+    let from = state.lock().unwrap().log.len();
+    let report = sync::sync(&db, &client, Trigger::Scheduled).await.unwrap();
+    assert_eq!(report.state_changes, 2, "{report:?}");
+    let requests = requests_since(&state, from);
+    assert!(
+        requests.contains(&"GET /v1/entries?status=unread".to_owned()),
+        "{requests:?}"
+    );
+    assert!(requests.iter().all(|r| !r.contains("changed_after")));
 }

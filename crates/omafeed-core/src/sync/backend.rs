@@ -98,8 +98,9 @@ pub struct FeedChange {
     pub title: Option<String>,
     /// Its new address.
     pub feed_url: Option<String>,
-    /// The [`Category::id`] to move it to.
-    pub category: Option<i64>,
+    /// The [`Category::id`] to move it to, or `Some(None)` to take it out of any category
+    /// (for a service that has [`Backend::top_level_category`] `None`).
+    pub category: Option<Option<i64>>,
 }
 
 /// A sync service the library can mirror, signed in to one account. Every call talks to the

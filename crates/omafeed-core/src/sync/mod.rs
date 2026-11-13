@@ -9,12 +9,14 @@
 //!    server's state until the server has them.
 //! 2. Subscribe the server to feeds it does not have (the library's own, when connecting, and
 //!    feeds imported or given a new address since). A feed it refuses stays, showing why, and
-//!    is offered again only by a sync someone asked for ([`Trigger::Manual`]).
+//!    is offered again only by a sync someone asked for ([`Trigger::Manual`]), such as an
+//!    import's.
 //! 3. Read the categories and the feeds, and the entries that changed:
 //!    - on the first sync, every unread and every starred entry, and those published in the
 //!      last [`RECENT_DAYS`] days;
 //!    - after that, only the entries added, read, unread, starred or unstarred since the last
-//!      sync started (by the server's clock), which on most syncs is a handful.
+//!      sync started (by the server's clock, from its `Date`; a server that does not send one
+//!      is read whole every time), which on most syncs is a handful.
 //! 4. Store all of it in one transaction ([`crate::Store`]), with each entry's read and star
 //!    state set to the server's, except where a change still waits to be sent.
 //! 5. Compare the library's unread count of each feed, and its number of starred articles,
@@ -40,7 +42,7 @@ pub use backend::Backend;
 use crate::{
     Db, Error,
     model::{FeedId, FolderId},
-    store::account::{Mirror, Unread, same_url},
+    store::account::{Cursor, Mirror, Unread, same_url},
 };
 use anyhow::{Context, Result, anyhow};
 use backend::{Category, FeedChange, Selection};
@@ -152,7 +154,9 @@ pub async fn import(db: &Db, backend: &dyn Backend, text: String) -> Result<Impo
         return Err(not_connected());
     }
     let report = db.call(move |s| s.import_now(&text)).await?;
-    let synced = sync_in_turn(db, backend, Trigger::Scheduled).await;
+    // Asked for, so feeds the server refused before, perhaps imported again now, are offered
+    // again too.
+    let synced = sync_in_turn(db, backend, Trigger::Manual).await;
     Ok(Imported { report, synced })
 }
 
@@ -241,7 +245,7 @@ pub async fn update_feed(
         feed_url: (same_url(&url) != same_url(&feed.url)).then(|| url.clone()),
         category: match folder == feed.folder {
             true => None,
-            false => category_for(db, backend, folder).await?,
+            false => Some(category_for(db, backend, folder).await?),
         },
     };
     if change == FeedChange::default() {
@@ -400,7 +404,7 @@ async fn sync_now(db: &Db, backend: &dyn Backend, trigger: Trigger) -> Result<Re
                 .entries(Selection::ChangedAfter(cursor - OVERLAP))
                 .await?;
             Mirror {
-                cursor: Some(changed.server_time.unwrap_or(now)),
+                cursor: server_cursor(changed.server_time),
                 entries: changed.entries,
                 ..Mirror::default()
             }
@@ -418,6 +422,14 @@ async fn sync_now(db: &Db, backend: &dyn Backend, trigger: Trigger) -> Result<Re
     Ok(report)
 }
 
+/// The cursor for a server whose clock said `server_time` as it started answering. Without
+/// it, the next sync reads everything again: this computer's clock may be ahead of the
+/// server's, and changes in between would be missed for good where they leave the counts the
+/// same (one entry read and another unread in the same feed).
+fn server_cursor(server_time: Option<i64>) -> Cursor {
+    server_time.map_or(Cursor::Reset, Cursor::At)
+}
+
 /// What the first sync reads: every unread and starred entry, and the recent ones.
 async fn everything(backend: &dyn Backend, now: i64) -> Result<Mirror> {
     let unread = backend.entries(Selection::Unread(None)).await?;
@@ -428,7 +440,7 @@ async fn everything(backend: &dyn Backend, now: i64) -> Result<Mirror> {
     let ids = |entries: &[backend::Entry]| entries.iter().map(|e| e.id).collect::<HashSet<_>>();
     let mut mirror = Mirror {
         // Changes made after the server started answering are read by the next sync.
-        cursor: Some(unread.server_time.unwrap_or(now)),
+        cursor: server_cursor(unread.server_time),
         unread: Some(Unread {
             feeds: None,
             entries: ids(&unread.entries),
