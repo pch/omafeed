@@ -1,5 +1,5 @@
 //! omafeed's core, independent of GTK: the library database, getting feeds into it, article
-//! text and the reader document, OPML, and settings.
+//! text and the reader document, OPML, settings, and syncing with a feed service.
 #![forbid(unsafe_code)]
 // Every public item says what it is for; keep it that way.
 #![warn(missing_docs)]
@@ -16,6 +16,7 @@ pub mod reading;
 pub mod render;
 pub mod store;
 pub mod subscriptions;
+pub mod sync;
 mod util;
 
 pub use config::{Paths, Settings};
