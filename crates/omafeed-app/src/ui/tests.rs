@@ -865,7 +865,7 @@ pub(crate) fn desktop_smoke() {
             .any(|s| s.visible_child_name().as_deref() == Some("empty"))
     );
     // Connecting a Miniflux account from the window turns the library into a mirror of it:
-    // feeds are changed on the server first, and there is no importing OPML.
+    // feeds are changed on the server first, and importing OPML subscribes the server too.
     let miniflux = runtime
         .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
         .unwrap();
@@ -890,7 +890,7 @@ pub(crate) fn desktop_smoke() {
         .set_text("smoke-test-key");
     form_button("Connect").emit_clicked();
     pump_until(|| !open_form() && u.library.borrow().account.is_some());
-    assert!(enabled("add-feed") && !enabled("import"));
+    assert!(enabled("add-feed") && enabled("import"));
     let remote = u
         .library
         .borrow()

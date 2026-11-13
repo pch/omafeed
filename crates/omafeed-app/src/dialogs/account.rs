@@ -78,7 +78,7 @@ async fn connect(u: &Rc<Ui>) {
 }
 
 /// List the feeds Miniflux would not subscribe to, which stay in the library with the reason.
-fn refused(u: &Rc<Ui>, feeds: &[(String, String)]) {
+pub(super) fn refused(u: &Rc<Ui>, feeds: &[(String, String)]) {
     let lines: Vec<String> = feeds
         .iter()
         .map(|(title, reason)| format!("{title}: {reason}"))

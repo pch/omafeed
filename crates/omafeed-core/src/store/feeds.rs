@@ -329,10 +329,24 @@ impl Store {
     /// Add the subscriptions and folders of an OPML document in one transaction. Feeds already
     /// subscribed are skipped, entries that cannot be used are reported and skipped, and
     /// folders of the same name are reused; a document that cannot be read adds nothing.
+    /// Fails with [`Error::Managed`] while a Miniflux account is connected; then
+    /// [`crate::subscriptions::import`] sends the subscriptions to it.
     pub fn import(&self, text: &str) -> Result<ImportReport> {
+        self.import_with(text, true)
+    }
+
+    /// [`Store::import`], even while a Miniflux account is connected: the feeds are the
+    /// library's own until a sync sends them to the server.
+    pub(crate) fn import_now(&self, text: &str) -> Result<ImportReport> {
+        self.import_with(text, false)
+    }
+
+    fn import_with(&self, text: &str, local_only: bool) -> Result<ImportReport> {
         let doc = opml::parse(text)?;
         self.immediate(|s| {
-            s.require_local()?;
+            if local_only {
+                s.require_local()?;
+            }
             let mut report = ImportReport::default();
             Self::import_outlines(&s.conn, &doc.body.outlines, None, &mut report, 0)?;
             Ok(report)

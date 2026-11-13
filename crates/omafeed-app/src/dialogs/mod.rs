@@ -267,27 +267,48 @@ pub fn import(u: Rc<Ui>) {
             Ok((bytes, _)) => String::from_utf8_lossy(&bytes).into_owned(),
             Err(e) => return u.error(e),
         };
-        match u.db.call(move |s| s.import(&text)).await {
-            Ok(r) => {
-                u.toast(&format!(
-                    "Imported {} · Already subscribed {} · Invalid {}",
-                    r.added,
-                    r.skipped,
-                    r.invalid.len()
-                ));
-                if !r.invalid.is_empty() {
-                    let d = adw::AlertDialog::builder()
-                        .heading("Some subscriptions could not be imported")
-                        .body(r.invalid.join("\n"))
-                        .build();
-                    d.add_response("ok", "OK");
-                    d.present(Some(&u.window));
-                }
-                u.reload();
-                // Imported feeds have never been fetched, so they are all due.
-                u.start_refresh(omafeed_core::ingest::Which::Due);
+        let result = u
+            .change_library(move |db, client| async move {
+                omafeed_core::subscriptions::import(&db, client.as_ref(), text).await
+            })
+            .await;
+        let done = match result {
+            Ok(done) => done,
+            Err(e) => return u.error(e),
+        };
+        let r = &done.report;
+        let mut text = format!(
+            "Imported {} · Already subscribed {} · Invalid {}",
+            r.added,
+            r.skipped,
+            r.invalid.len()
+        );
+        if let Some(Ok(synced)) = &done.synced
+            && synced.subscribed > 0
+        {
+            text.push_str(&format!(" · {} added to Miniflux", synced.subscribed));
+        }
+        u.toast(&text);
+        if !r.invalid.is_empty() {
+            let d = adw::AlertDialog::builder()
+                .heading("Some subscriptions could not be imported")
+                .body(r.invalid.join("\n"))
+                .build();
+            d.add_response("ok", "OK");
+            d.present(Some(&u.window));
+        }
+        u.reload();
+        match done.synced {
+            // Imported feeds have never been fetched, so they are all due.
+            None => u.start_refresh(omafeed_core::ingest::Which::Due),
+            Some(Ok(synced)) if !synced.refused.is_empty() => {
+                account::refused(&u, &synced.refused);
             }
-            Err(e) => u.error(e),
+            Some(Ok(_)) => {}
+            Some(Err(e)) => u.error(format!(
+                "The sync with Miniflux failed: {e:#}. The imported feeds go to Miniflux with \
+                 the next one."
+            )),
         }
     });
 }

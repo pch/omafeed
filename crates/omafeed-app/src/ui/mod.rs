@@ -82,8 +82,8 @@ impl Header {
                 .build(),
         );
         let menu = gio::Menu::new();
-        menu.append_item(&hidden_when_disabled("Import OPML…", "win.import"));
         for (title, action) in [
+            ("Import OPML…", "win.import"),
             ("Export OPML…", "win.export"),
             ("Content filters…", "win.filters"),
             ("Miniflux account…", "win.account"),
@@ -112,14 +112,6 @@ impl Header {
             search,
         }
     }
-}
-
-/// A menu item that disappears while its action is disabled, as importing feeds is while a
-/// Miniflux account is connected.
-fn hidden_when_disabled(title: &str, action: &str) -> gio::MenuItem {
-    let item = gio::MenuItem::new(Some(title), Some(action));
-    item.set_attribute_value("hidden-when", Some(&"action-disabled".to_variant()));
-    item
 }
 
 struct SidebarPane {
@@ -829,19 +821,10 @@ impl Ui {
         }
     }
 
-    /// Keep the library just read, and offer what can be done with it: while a Miniflux
-    /// account is connected, there is no importing OPML.
+    /// Keep the library just read.
     fn set_library(&self, lib: Library) {
         self.close_sidebar_menu();
-        let local = lib.account.is_none();
         *self.library.borrow_mut() = lib;
-        if let Some(action) = self
-            .window
-            .lookup_action("import")
-            .and_downcast::<gio::SimpleAction>()
-        {
-            action.set_enabled(local);
-        }
     }
 
     /// Update unread counts without reloading the article list.

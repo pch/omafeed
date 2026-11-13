@@ -22,7 +22,8 @@
 //!
 //! While connected, feeds and categories are changed on the server first, and then in the
 //! library ([`subscribe`], [`update_feed`], [`unsubscribe`], [`rename_category`],
-//! [`remove_category`]). Feeds the server would not take stay the library's own and are
+//! [`remove_category`]); [`import`] adds an OPML document's feeds here and lets the sync
+//! send them. Feeds the server would not take stay the library's own and are
 //! changed only here; the next sync offers them to the server again. Folders of one's own,
 //! to arrange categories in, are the library's alone.
 pub mod miniflux;
@@ -119,6 +120,30 @@ async fn sync_in_turn(db: &Db, client: &miniflux::Client) -> Result<Report> {
 
 fn not_connected() -> anyhow::Error {
     Error::Validation("No Miniflux account is connected".into()).into()
+}
+
+/// Add the subscriptions and folders of an OPML document to the library, as
+/// [`crate::Store::import`] does, and sync to subscribe the server to them, each in the
+/// category named like the folder it is in (made if need be). A feed the server refuses stays,
+/// showing why, as when connecting. Returns what the import did, and the sync's report or why
+/// it failed; the next sync sends what this one could not.
+pub async fn import(db: &Db, client: &miniflux::Client, text: String) -> Result<Imported> {
+    let _turn = ONE_AT_A_TIME.lock().await;
+    if db.call(|s| s.account()).await?.is_none() {
+        return Err(not_connected());
+    }
+    let report = db.call(move |s| s.import_now(&text)).await?;
+    let synced = sync_in_turn(db, client).await;
+    Ok(Imported { report, synced })
+}
+
+/// What [`import`] did.
+#[derive(Debug)]
+pub struct Imported {
+    /// The subscriptions added to the library, skipped, and refused.
+    pub report: crate::model::ImportReport,
+    /// The sync that sent them to the server.
+    pub synced: Result<Report>,
 }
 
 /// Subscribe the server to the feed at `url` in the category `folder` is (or the "All"

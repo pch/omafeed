@@ -968,3 +968,84 @@ async fn feeds_the_server_refused_are_fixed_or_removed_here() {
         Some(Error::Managed)
     ));
 }
+
+#[tokio::test]
+async fn importing_while_connected_subscribes_the_server_in_each_folders_category() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(dir.path().join("test.db")).unwrap();
+    let mut setup = server();
+    setup
+        .unreachable
+        .push("https://refused.example/feed".into());
+    let (base, state) = serve(setup).await;
+    let client = Client::new(&base, "key").unwrap();
+    sync::connect(&db, &client).await.unwrap();
+    let opml = r#"<opml version="2.0"><body>
+        <outline text="Top" xmlUrl="https://top.example/feed"/>
+        <outline text="Refused" xmlUrl="https://refused.example/feed"/>
+        <outline text="Tech">
+          <outline text="Shared" xmlUrl="https://shared.example/feed"/>
+          <outline text="More tech" xmlUrl="https://tech.example/feed"/>
+        </outline>
+        <outline text="Reading">
+          <outline text="Rust">
+            <outline text="Rust news" xmlUrl="https://rust.example/feed"/>
+          </outline>
+        </outline>
+    </body></opml>"#;
+
+    // Without its client, or straight into the store, a connected library refuses.
+    for refused in [
+        subscriptions::import(&db, None, opml.into()).await.err(),
+        db.call(move |s| s.import(opml)).await.err(),
+    ] {
+        assert!(matches!(
+            refused.unwrap().downcast_ref::<Error>(),
+            Some(Error::Managed)
+        ));
+    }
+
+    let done = subscriptions::import(&db, Some(&client), opml.into())
+        .await
+        .unwrap();
+    assert_eq!((done.report.added, done.report.skipped), (4, 1));
+    let synced = done.synced.unwrap().unwrap();
+    assert_eq!(synced.subscribed, 3);
+    assert_eq!(synced.refused.len(), 1);
+    assert_eq!(synced.refused[0].0, "Refused");
+
+    // Each feed went into the category named like its folder, made if need be.
+    let category_of = |url: &str| {
+        let server = state.lock().unwrap();
+        let feed = server.feeds.iter().find(|f| f.3 == url).unwrap();
+        server
+            .categories
+            .iter()
+            .find(|c| c.0 == feed.1)
+            .unwrap()
+            .1
+            .clone()
+    };
+    assert_eq!(category_of("https://top.example/feed"), "All");
+    assert_eq!(category_of("https://tech.example/feed"), "Tech");
+    assert_eq!(category_of("https://rust.example/feed"), "Rust");
+
+    // The library keeps its nesting: the new category stays inside the folder of one's own.
+    let lib = db.call(|s| s.library()).await.unwrap();
+    let folder = |name: &str| lib.folders.iter().find(|f| f.name == name).unwrap();
+    let rust = lib
+        .feeds
+        .iter()
+        .find(|f| f.url == "https://rust.example/feed")
+        .unwrap();
+    assert_eq!(rust.folder, Some(folder("Rust").id));
+    assert!(folder("Rust").remote);
+    assert_eq!(folder("Rust").parent, Some(folder("Reading").id));
+    assert!(!folder("Reading").remote);
+    let refused = lib
+        .feeds
+        .iter()
+        .find(|f| f.url == "https://refused.example/feed")
+        .unwrap();
+    assert!(refused.error.as_deref().unwrap().contains("Miniflux"));
+}
