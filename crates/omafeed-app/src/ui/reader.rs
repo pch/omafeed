@@ -269,20 +269,29 @@ impl Ui {
         }
         let u = self.clone();
         glib::spawn_future_local(async move {
-            let result = u
-                .change_library(move |db, client| async move {
-                    if full {
-                        full_article::forget(&db, id).await?;
-                    } else {
-                        full_article::fetch(&db, client.as_deref(), id).await?;
-                    }
+            let result = if full {
+                // Going back needs no server, nor its key.
+                let db = u.db.clone();
+                u.background(async move {
+                    full_article::forget(&db, id).await?;
                     db.call(move |s| s.article(id)).await
                 })
-                .await;
+                .await
+            } else {
+                u.change_library(move |db, client| async move {
+                    full_article::fetch(&db, client.as_deref(), id).await?;
+                    db.call(move |s| s.article(id)).await
+                })
+                .await
+            };
             let shown = match result {
                 Ok(a) => u.view.borrow_mut().reload_content(a),
                 Err(e) => {
-                    u.error(format!("Could not fetch the full article: {e:#}"));
+                    u.error(if full {
+                        format!("Could not show the feed's version: {e:#}")
+                    } else {
+                        format!("Could not fetch the full article: {e:#}")
+                    });
                     false
                 }
             };
