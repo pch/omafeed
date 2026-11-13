@@ -130,7 +130,8 @@ impl Store {
     /// Subscribe to `url` as `title` (the URL if empty) in `folder`. Fails with
     /// [`Error::DuplicateFeed`] if the library already has the URL, and with
     /// [`Error::Validation`] for a URL that is not HTTP(S) or a bad name. Like every change to
-    /// the feeds, fails with [`Error::Managed`] while a Miniflux account decides them.
+    /// the feeds, fails with [`Error::Managed`] while a Miniflux account is connected:
+    /// [`crate::sync::subscribe`] adds them then.
     pub fn add_feed(&self, title: &str, url: &str, folder: Option<FolderId>) -> Result<FeedId> {
         let url = validate_url(url)?;
         let title = if title.trim().is_empty() {
@@ -152,8 +153,24 @@ impl Store {
 
     /// Rename a feed, move it to `folder`, and set its URL. A new URL keeps the feed's articles
     /// but clears its validators, website, schedule and error, and gives it a new revision;
-    /// fails with [`Error::DuplicateFeed`] if another feed has it.
+    /// fails with [`Error::DuplicateFeed`] if another feed has it, and with [`Error::Managed`]
+    /// for a feed of the connected Miniflux account.
     pub fn update_feed(
+        &self,
+        id: FeedId,
+        title: &str,
+        url: &str,
+        folder: Option<FolderId>,
+    ) -> Result<()> {
+        self.immediate(|s| {
+            s.require_local_feed(id)?;
+            s.update_feed_now(id, title, url, folder)
+        })
+    }
+
+    /// [`Store::update_feed`], whoever decides the feed: for mirroring a change made on the
+    /// Miniflux server.
+    pub(crate) fn update_feed_now(
         &self,
         id: FeedId,
         title: &str,
@@ -162,21 +179,18 @@ impl Store {
     ) -> Result<()> {
         let url = validate_url(url)?;
         let title = Self::name(title)?;
-        self.immediate(|s| {
-            s.require_local()?;
-            let revision = Self::next_revision(&s.conn)?;
-            s.conn
-                .execute(UPDATE_FEED, params![title, folder, url, id, revision])
-                .map_err(Error::duplicate_feed)?;
-            Ok(())
-        })
+        let revision = Self::next_revision(&self.conn)?;
+        self.conn
+            .execute(UPDATE_FEED, params![title, folder, url, id, revision])
+            .map_err(Error::duplicate_feed)?;
+        Ok(())
     }
 
     /// Move a feed to `folder`, or to the top level, keeping everything else about it; a
     /// refresh in progress still saves what it downloads. Fails with
     /// [`Error::FeedNotFound`] if there is no such feed.
     pub fn move_feed(&self, id: FeedId, folder: Option<FolderId>) -> Result<()> {
-        self.require_local()?;
+        self.require_local_feed(id)?;
         let moved = self.conn.execute(
             "UPDATE feeds SET folder = ?1 WHERE id = ?2",
             params![folder, id],
@@ -198,9 +212,16 @@ impl Store {
         )?)
     }
 
-    /// Remove a feed and all its articles, starred ones included.
+    /// Remove a feed and all its articles, starred ones included. Fails with
+    /// [`Error::Managed`] for a feed of the connected Miniflux account.
     pub fn delete_feed(&self, id: FeedId) -> Result<()> {
-        self.require_local()?;
+        self.require_local_feed(id)?;
+        self.delete_feed_now(id)
+    }
+
+    /// [`Store::delete_feed`], whoever decides the feed: for mirroring a feed removed from
+    /// the Miniflux server.
+    pub(crate) fn delete_feed_now(&self, id: FeedId) -> Result<()> {
         self.conn.execute("DELETE FROM feeds WHERE id = ?1", [id])?;
         self.articles_changed();
         Ok(())

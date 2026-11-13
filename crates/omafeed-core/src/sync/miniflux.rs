@@ -197,6 +197,17 @@ struct ErrorReply {
     error_message: String,
 }
 
+/// What [`Client::update_feed`] changes; `None` leaves that part as it is.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FeedChange {
+    /// The feed's new title.
+    pub title: Option<String>,
+    /// Its new address.
+    pub feed_url: Option<String>,
+    /// The category to move it to.
+    pub category_id: Option<i64>,
+}
+
 #[derive(Deserialize)]
 struct FeedCreated {
     feed_id: i64,
@@ -330,6 +341,48 @@ impl Client {
         let body = serde_json::json!({ "feed_url": feed_url, "category_id": category_id });
         let reply = self.send(Method::POST, "v1/feeds", Some(&body)).await?;
         Ok(parse::<FeedCreated>(&reply, "v1/feeds")?.feed_id)
+    }
+
+    /// Change the feed `id`: its title, its address, or its category; `None` leaves that as
+    /// it is.
+    pub async fn update_feed(&self, id: i64, change: &FeedChange) -> Result<()> {
+        let mut body = serde_json::Map::new();
+        if let Some(title) = &change.title {
+            body.insert("title".into(), title.as_str().into());
+        }
+        if let Some(url) = &change.feed_url {
+            body.insert("feed_url".into(), url.as_str().into());
+        }
+        if let Some(category) = change.category_id {
+            body.insert("category_id".into(), category.into());
+        }
+        let body = serde_json::Value::Object(body);
+        self.send(Method::PUT, &format!("v1/feeds/{id}"), Some(&body))
+            .await?;
+        Ok(())
+    }
+
+    /// Unsubscribe from the feed `id`, deleting its entries on the server.
+    pub async fn delete_feed(&self, id: i64) -> Result<()> {
+        self.send(Method::DELETE, &format!("v1/feeds/{id}"), None)
+            .await?;
+        Ok(())
+    }
+
+    /// Rename the category `id` to `title`.
+    pub async fn update_category(&self, id: i64, title: &str) -> Result<()> {
+        let body = serde_json::json!({ "title": title });
+        self.send(Method::PUT, &format!("v1/categories/{id}"), Some(&body))
+            .await?;
+        Ok(())
+    }
+
+    /// Delete the category `id`. Miniflux deletes the feeds in it too, so callers empty it
+    /// first.
+    pub async fn delete_category(&self, id: i64) -> Result<()> {
+        self.send(Method::DELETE, &format!("v1/categories/{id}"), None)
+            .await?;
+        Ok(())
     }
 
     async fn get<T: DeserializeOwned>(&self, path: &str, query: &[(&str, String)]) -> Result<T> {
@@ -730,5 +783,57 @@ mod tests {
         assert!(message("not a url", "key").starts_with("Invalid Miniflux address"));
         let client = Client::new(" https://example.org/rss?x=1#top ", "key").unwrap();
         assert_eq!(client.server(), "https://example.org/rss/");
+    }
+
+    #[tokio::test]
+    async fn feeds_and_categories_are_changed_and_deleted_by_id() {
+        let (base, log) = server(|r| {
+            let status = if r.method == "DELETE" { 204 } else { 201 };
+            (
+                status,
+                if status == 204 {
+                    String::new()
+                } else {
+                    "{}".into()
+                },
+            )
+        })
+        .await;
+        let client = Client::new(&base, "key").unwrap();
+        client
+            .update_feed(
+                7,
+                &FeedChange {
+                    title: Some("Renamed".into()),
+                    category_id: Some(3),
+                    ..FeedChange::default()
+                },
+            )
+            .await
+            .unwrap();
+        client.delete_feed(7).await.unwrap();
+        client.update_category(3, "News").await.unwrap();
+        client.delete_category(3).await.unwrap();
+        let log = log.lock().unwrap();
+        let seen: Vec<(&str, &str)> = log
+            .iter()
+            .map(|r| (r.method.as_str(), r.target.as_str()))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                ("PUT", "/v1/feeds/7"),
+                ("DELETE", "/v1/feeds/7"),
+                ("PUT", "/v1/categories/3"),
+                ("DELETE", "/v1/categories/3"),
+            ]
+        );
+        let body: serde_json::Value = serde_json::from_str(&log[0].body).unwrap();
+        assert_eq!(
+            body,
+            serde_json::json!({ "title": "Renamed", "category_id": 3 })
+        );
+        let body: serde_json::Value = serde_json::from_str(&log[2].body).unwrap();
+        assert_eq!(body, serde_json::json!({ "title": "News" }));
     }
 }

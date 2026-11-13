@@ -19,11 +19,25 @@
 //! The library keeps entries the server has since deleted; only a feed removed from the
 //! server takes its articles with it. After disconnecting, the first refresh of a feed finds
 //! the articles it had from the server by their links, so they are not added again.
+//!
+//! While connected, feeds and categories are changed on the server first, and then in the
+//! library ([`subscribe`], [`update_feed`], [`unsubscribe`], [`rename_category`],
+//! [`remove_category`]). Feeds the server would not take stay the library's own and are
+//! changed only here; the next sync offers them to the server again. Folders of one's own,
+//! to arrange categories in, are the library's alone.
 pub mod miniflux;
 
-use crate::{Db, Error, store::account::same_url};
-use anyhow::Result;
+use crate::{
+    Db, Error,
+    model::{FeedId, FolderId},
+    store::account::same_url,
+};
+use anyhow::{Result, anyhow};
 use std::collections::HashSet;
+
+/// One sync or change at a time in this process: two at once could both see a star the
+/// server lacks, and both toggle it.
+static ONE_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// How many days back a sync reads read, unstarred entries; unread and starred ones come
 /// whatever their age.
@@ -67,6 +81,7 @@ pub async fn disconnect(db: &Db, client: Option<&miniflux::Client>) -> Result<i6
     if db.call(|s| s.account()).await?.is_none() {
         return Err(not_connected());
     }
+    let _turn = ONE_AT_A_TIME.lock().await;
     if let Some(client) = client {
         // Best effort: disconnecting must work with the server gone.
         let _ = send(db, client).await;
@@ -77,6 +92,12 @@ pub async fn disconnect(db: &Db, client: Option<&miniflux::Client>) -> Result<i6
 /// Bring the library and the server into step, as the [module](self) describes. A failure is
 /// recorded on the account ([`crate::model::Account::error`]) as well as returned.
 pub async fn sync(db: &Db, client: &miniflux::Client) -> Result<Report> {
+    let _turn = ONE_AT_A_TIME.lock().await;
+    sync_in_turn(db, client).await
+}
+
+/// [`sync`], once it is this caller's turn.
+async fn sync_in_turn(db: &Db, client: &miniflux::Client) -> Result<Report> {
     let Some(account) = db.call(|s| s.account()).await? else {
         return Err(not_connected());
     };
@@ -98,6 +119,169 @@ pub async fn sync(db: &Db, client: &miniflux::Client) -> Result<Report> {
 
 fn not_connected() -> anyhow::Error {
     Error::Validation("No Miniflux account is connected".into()).into()
+}
+
+/// Subscribe the server to the feed at `url` in the category `folder` is (or the "All"
+/// category Miniflux makes, for the top level), named `title` unless that is empty, and sync
+/// to bring it and its entries into the library; returns its feed there. Fails with
+/// [`Error::DuplicateFeed`] if the library has the address, and with [`Error::Validation`]
+/// for a folder of one's own, which the server knows nothing of.
+pub async fn subscribe(
+    db: &Db,
+    client: &miniflux::Client,
+    title: String,
+    url: String,
+    folder: Option<FolderId>,
+) -> Result<FeedId> {
+    let _turn = ONE_AT_A_TIME.lock().await;
+    let url = crate::util::validate_url(&url)?;
+    let checked = url.clone();
+    db.call(move |s| s.require_new_url(&checked, None)).await?;
+    let category = category_for(db, client, folder).await?;
+    let remote = client.create_feed(&url, category).await?;
+    if !title.trim().is_empty() {
+        let change = miniflux::FeedChange {
+            title: Some(title.trim().to_owned()),
+            ..Default::default()
+        };
+        client.update_feed(remote, &change).await?;
+    }
+    sync_in_turn(db, client).await?;
+    db.call(move |s| s.feed_for_remote(remote))
+        .await?
+        .ok_or_else(|| anyhow!("Miniflux subscribed to {url} but does not list it"))
+}
+
+/// Rename the feed `id`, move it to the category `folder` is, or change its address: on the
+/// server, then in the library, by a sync. A feed the server would not take is changed only
+/// in the library. Fails as [`subscribe`] does.
+pub async fn update_feed(
+    db: &Db,
+    client: &miniflux::Client,
+    id: FeedId,
+    title: String,
+    url: String,
+    folder: Option<FolderId>,
+) -> Result<()> {
+    let _turn = ONE_AT_A_TIME.lock().await;
+    let url = crate::util::validate_url(&url)?;
+    let Some(remote) = db.call(move |s| s.feed_remote_id(id)).await? else {
+        return db
+            .call(move |s| s.immediate(|s| s.update_feed_now(id, &title, &url, folder)))
+            .await;
+    };
+    let (current, checked) = (db.call(|s| s.library()).await?, url.clone());
+    let feed = current.feed(id).ok_or(Error::FeedNotFound(id))?;
+    db.call(move |s| s.require_new_url(&checked, Some(id)))
+        .await?;
+    let title = title.trim().to_owned();
+    let change = miniflux::FeedChange {
+        title: (!title.is_empty() && title != feed.title).then(|| title.clone()),
+        feed_url: (same_url(&url) != same_url(&feed.url)).then(|| url.clone()),
+        category_id: match folder == feed.folder {
+            true => None,
+            false => Some(category_for(db, client, folder).await?),
+        },
+    };
+    if change == miniflux::FeedChange::default() {
+        return Ok(());
+    }
+    client.update_feed(remote, &change).await?;
+    sync_in_turn(db, client).await.map(drop)
+}
+
+/// Unsubscribe from the feed `id` on the server, and remove it and its articles from the
+/// library. A feed the server would not take is removed only from the library.
+pub async fn unsubscribe(db: &Db, client: &miniflux::Client, id: FeedId) -> Result<()> {
+    let _turn = ONE_AT_A_TIME.lock().await;
+    if let Some(remote) = db.call(move |s| s.feed_remote_id(id)).await? {
+        client.delete_feed(remote).await?;
+    }
+    db.call(move |s| s.delete_feed_now(id)).await
+}
+
+/// Rename the category the folder `id` is, on the server and in the library. Fails with
+/// [`Error::Validation`] for a folder of one's own, which [`crate::Store::rename_folder`]
+/// renames.
+pub async fn rename_category(
+    db: &Db,
+    client: &miniflux::Client,
+    id: FolderId,
+    name: String,
+) -> Result<()> {
+    let _turn = ONE_AT_A_TIME.lock().await;
+    let remote = remote_category(db, id).await?;
+    let name = name.trim().to_owned();
+    client.update_category(remote, &name).await?;
+    db.call(move |s| s.rename_folder_now(id, &name)).await
+}
+
+/// Remove the category the folder `id` is, on the server and from the library; folders
+/// inside it move up, as [`crate::Store::delete_folder`] moves them. The server would delete
+/// the category's feeds with it, so this fails with [`Error::Validation`] while it has any,
+/// and for a folder of one's own.
+pub async fn remove_category(db: &Db, client: &miniflux::Client, id: FolderId) -> Result<()> {
+    let _turn = ONE_AT_A_TIME.lock().await;
+    let remote = remote_category(db, id).await?;
+    if db.call(move |s| s.remote_feeds_in(id)).await? > 0 {
+        return Err(Error::Validation(
+            "Miniflux would remove this category's feeds with it; move or remove them first".into(),
+        )
+        .into());
+    }
+    client.delete_category(remote).await?;
+    db.call(move |s| s.immediate(|s| s.delete_folder_now(id)))
+        .await
+}
+
+/// The category the folder `id` is.
+async fn remote_category(db: &Db, id: FolderId) -> Result<i64> {
+    db.call(move |s| s.folder_remote_id(id))
+        .await?
+        .ok_or_else(|| {
+            Error::Validation("This folder is your own, not a Miniflux category".into()).into()
+        })
+}
+
+/// The category for feeds put in `folder`: the one it is, or [`DEFAULT_CATEGORY`] (made if
+/// need be) for the top level.
+async fn category_for(db: &Db, client: &miniflux::Client, folder: Option<FolderId>) -> Result<i64> {
+    match folder {
+        Some(id) => db
+            .call(move |s| s.folder_remote_id(id))
+            .await?
+            .ok_or_else(|| {
+                Error::Validation(
+                "Miniflux keeps feeds in its categories, and this folder is your own; choose one \
+                 of its categories"
+                    .into(),
+            )
+            .into()
+            }),
+        None => {
+            let mut categories = client.categories().await?;
+            category_named(client, &mut categories, DEFAULT_CATEGORY).await
+        }
+    }
+}
+
+/// The category titled `title` (ignoring case) among `categories`, made and added to them if
+/// there is none.
+async fn category_named(
+    client: &miniflux::Client,
+    categories: &mut Vec<miniflux::Category>,
+    title: &str,
+) -> Result<i64> {
+    if let Some(c) = categories
+        .iter()
+        .find(|c| c.title.eq_ignore_ascii_case(title))
+    {
+        return Ok(c.id);
+    }
+    let created = client.create_category(title).await?;
+    let id = created.id;
+    categories.push(created);
+    Ok(id)
 }
 
 async fn sync_now(db: &Db, client: &miniflux::Client, first: bool) -> Result<Report> {
@@ -204,18 +388,7 @@ async fn subscribe_local(db: &Db, client: &miniflux::Client, report: &mut Report
     let mut categories = client.categories().await?;
     for feed in local {
         let wanted = feed.folder.as_deref().unwrap_or(DEFAULT_CATEGORY);
-        let category = match categories
-            .iter()
-            .find(|c| c.title.eq_ignore_ascii_case(wanted))
-        {
-            Some(c) => c.id,
-            None => {
-                let created = client.create_category(wanted).await?;
-                let id = created.id;
-                categories.push(created);
-                id
-            }
-        };
+        let category = category_named(client, &mut categories, wanted).await?;
         match client.create_feed(&feed.url, category).await {
             Ok(_) => report.subscribed += 1,
             Err(e) => {

@@ -84,7 +84,8 @@ impl Store {
             .optional()?)
     }
 
-    /// Fail with [`Error::Managed`] while an account decides the feeds.
+    /// Fail with [`Error::Managed`] while an account is connected, for adding feeds and
+    /// importing them.
     pub(super) fn require_local(&self) -> Result<()> {
         let connected: bool =
             self.conn
@@ -93,6 +94,78 @@ impl Store {
             return Err(Error::Managed.into());
         }
         Ok(())
+    }
+
+    /// Fail with [`Error::Managed`] for a feed that is the server's. Feeds it would not take
+    /// stay the library's own, to fix or remove; the next sync offers them again.
+    pub(super) fn require_local_feed(&self, id: FeedId) -> Result<()> {
+        if self.feed_remote_id(id)?.is_some() {
+            return Err(Error::Managed.into());
+        }
+        Ok(())
+    }
+
+    /// The feed `id`'s ID on the server, or `None` if it is the library's own. Fails with
+    /// [`Error::FeedNotFound`] if there is no such feed.
+    pub(crate) fn feed_remote_id(&self, id: FeedId) -> Result<Option<i64>> {
+        self.conn
+            .query_row("SELECT remote_id FROM feeds WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .optional()?
+            .ok_or_else(|| Error::FeedNotFound(id).into())
+    }
+
+    /// The category the folder `id` is, or `None` if it is one of the user's own (or gone).
+    pub(crate) fn folder_remote_id(&self, id: FolderId) -> Result<Option<i64>> {
+        Ok(self
+            .conn
+            .query_row("SELECT remote_id FROM folders WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .optional()?
+            .flatten())
+    }
+
+    /// The library's feed for the server's feed `remote_id`, if a sync has brought it.
+    pub(crate) fn feed_for_remote(&self, remote_id: i64) -> Result<Option<FeedId>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id FROM feeds WHERE remote_id = ?1",
+                [remote_id],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    /// Fail with [`Error::DuplicateFeed`], as adding it would, if a feed other than `except`
+    /// has the address `url` (as [`same_url`] writes it).
+    pub(crate) fn require_new_url(&self, url: &str, except: Option<FeedId>) -> Result<()> {
+        let url = same_url(url);
+        let taken = self
+            .conn
+            .prepare("SELECT id, url FROM feeds")?
+            .query_map([], |r| Ok((r.get::<_, FeedId>(0)?, r.get::<_, String>(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .any(|(id, other)| Some(id) != except && same_url(&other) == url);
+        if taken {
+            return Err(Error::duplicate_feed(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE),
+                Some("UNIQUE constraint failed: feeds.url".into()),
+            )));
+        }
+        Ok(())
+    }
+
+    /// How many of the server's feeds are directly in the folder `id`.
+    pub(crate) fn remote_feeds_in(&self, id: FolderId) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "SELECT count(*) FROM feeds WHERE folder = ?1 AND remote_id IS NOT NULL",
+            [id],
+            |r| r.get(0),
+        )?)
     }
 
     /// Fail with [`Error::Managed`] for a folder that is a category on the server. Folders of

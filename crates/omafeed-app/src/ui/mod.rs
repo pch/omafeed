@@ -72,7 +72,7 @@ impl Header {
             bar.pack_start(b);
         }
         let add_menu = gio::Menu::new();
-        add_menu.append_item(&hidden_when_disabled("Add feed…", "win.add-feed"));
+        add_menu.append(Some("Add feed…"), Some("win.add-feed"));
         add_menu.append(Some("New folder…"), Some("win.new-folder"));
         bar.pack_start(
             &gtk::MenuButton::builder()
@@ -114,8 +114,8 @@ impl Header {
     }
 }
 
-/// A menu item that disappears while its action is disabled, as adding feeds is while a
-/// Miniflux account decides them.
+/// A menu item that disappears while its action is disabled, as importing feeds is while a
+/// Miniflux account is connected.
 fn hidden_when_disabled(title: &str, action: &str) -> gio::MenuItem {
     let item = gio::MenuItem::new(Some(title), Some(action));
     item.set_attribute_value("hidden-when", Some(&"action-disabled".to_variant()));
@@ -830,19 +830,17 @@ impl Ui {
     }
 
     /// Keep the library just read, and offer what can be done with it: while a Miniflux
-    /// account is connected, feeds are added in Miniflux, not here.
+    /// account is connected, there is no importing OPML.
     fn set_library(&self, lib: Library) {
         self.close_sidebar_menu();
         let local = lib.account.is_none();
         *self.library.borrow_mut() = lib;
-        for name in ["add-feed", "import"] {
-            if let Some(action) = self
-                .window
-                .lookup_action(name)
-                .and_downcast::<gio::SimpleAction>()
-            {
-                action.set_enabled(local);
-            }
+        if let Some(action) = self
+            .window
+            .lookup_action("import")
+            .and_downcast::<gio::SimpleAction>()
+        {
+            action.set_enabled(local);
         }
     }
 
@@ -865,9 +863,17 @@ impl Ui {
         url: String,
     ) -> anyhow::Result<Vec<omafeed_core::ingest::discovery::Candidate>> {
         let refresher = self.refresher.clone();
-        let task = self
-            .runtime
-            .spawn(async move { refresher.discover(&url).await });
+        self.background(async move { refresher.discover(&url).await })
+            .await
+    }
+
+    /// Run `work` on the tokio runtime, which network requests need, and wait for it; dropping
+    /// the returned future cancels it.
+    pub async fn background<T: Send + 'static>(
+        &self,
+        work: impl Future<Output = anyhow::Result<T>> + Send + 'static,
+    ) -> anyhow::Result<T> {
+        let task = self.runtime.spawn(work);
         struct AbortOnDrop(tokio::task::AbortHandle);
         impl Drop for AbortOnDrop {
             fn drop(&mut self) {
@@ -876,6 +882,24 @@ impl Ui {
         }
         let _cancel = AbortOnDrop(task.abort_handle());
         task.await?
+    }
+
+    /// Change the feeds or folders with `change`, given the library's database and, while a
+    /// Miniflux account is connected, the client for it, which makes the change on the
+    /// server first. Runs on the tokio runtime.
+    pub async fn change_library<T: Send + 'static, F>(
+        &self,
+        change: impl FnOnce(Db, Option<omafeed_core::sync::miniflux::Client>) -> F + Send + 'static,
+    ) -> anyhow::Result<T>
+    where
+        F: Future<Output = anyhow::Result<T>> + Send,
+    {
+        let db = self.db.clone();
+        self.background(async move {
+            let client = crate::account::client(&db).await?;
+            change(db, client).await
+        })
+        .await
     }
 
     pub fn start_refresh(self: &Rc<Self>, which: Which) {

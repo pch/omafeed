@@ -119,8 +119,9 @@ async fn connected(u: &Rc<Ui>, account: &Account) {
     form.save.remove_css_class("suggested-action");
     form.save.add_css_class("destructive-action");
     form.note(
-        "Miniflux fetches the feeds and decides which feeds and folders there are; add, edit \
-         and remove them there. omafeed syncs with it whenever it would refresh.",
+        "Miniflux fetches the feeds and keeps the list of them. Feeds and categories you add, \
+         edit or remove here change in Miniflux too. omafeed syncs with it whenever it would \
+         refresh.",
     );
     form.setting("Server", None, &value(&account.server));
     form.setting("Signed in as", None, &value(&account.username));
