@@ -1,7 +1,7 @@
 //! The database worker thread, which serializes all SQLite access.
 use super::Store;
 use anyhow::Result;
-use std::path::Path;
+use std::{path::Path, sync::Arc};
 
 type Job = Box<dyn FnOnce(&Store) + Send>;
 
@@ -9,6 +9,9 @@ type Job = Box<dyn FnOnce(&Store) + Send>;
 #[derive(Clone)]
 pub struct Db {
     sender: std::sync::mpsc::Sender<Job>,
+    /// Syncs and changes on the server take turns on it: a sync that read the server's feeds
+    /// just before an unsubscribe must not bring the feed back.
+    sync_turn: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl Db {
@@ -24,7 +27,15 @@ impl Db {
                     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&store)));
                 }
             })?;
-        Ok(Self { sender })
+        Ok(Self {
+            sender,
+            sync_turn: Arc::default(),
+        })
+    }
+
+    /// Wait for this library's turn to sync or change something on the server.
+    pub(crate) async fn sync_turn(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.sync_turn.lock().await
     }
 
     /// Replace the content filters, as [`Store::set_filters`] does. Jobs run in order, so

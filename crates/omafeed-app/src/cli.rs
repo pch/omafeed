@@ -11,7 +11,7 @@ use omafeed_core::{
     reading,
     store::PAGE_SIZE,
     subscriptions::{self, Removal},
-    sync::{self, miniflux::Client},
+    sync::{self, Backend, Trigger},
 };
 use std::path::PathBuf;
 
@@ -138,7 +138,7 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Sync with the connected Miniflux account now, as `refresh` does while one is connected
+    /// Sync with the connected Miniflux account now, and offer it again the feeds it refused
     Sync {
         /// Print JSON instead of text
         #[arg(long)]
@@ -222,7 +222,7 @@ async fn import(db: &Db, file: &PathBuf) -> Result<()> {
     let text = std::fs::read_to_string(file).with_context(|| format!("Read {}", file.display()))?;
     // While connected, Miniflux is subscribed too; get its key before changing anything.
     let client = account::client(db).await?;
-    let done = subscriptions::import(db, client.as_ref(), text).await?;
+    let done = subscriptions::import(db, client.as_deref(), text).await?;
     let report = done.report;
     println!(
         "Imported {}, skipped {}, invalid {}",
@@ -254,7 +254,7 @@ async fn export(db: &Db, file: &PathBuf) -> Result<()> {
 
 async fn refresh(db: &Db, paths: &Paths, minutes: u32, json: bool) -> Result<()> {
     if let Some(client) = account::client(db).await? {
-        return sync_as_refresh(db, &client, json).await;
+        return sync_as_refresh(db, client.as_ref(), json).await;
     }
     let (tx, rx) = async_channel::unbounded();
     let logger = tokio::spawn(async move {
@@ -306,8 +306,9 @@ async fn refresh(db: &Db, paths: &Paths, minutes: u32, json: bool) -> Result<()>
 
 /// `refresh` while an account is connected: a sync, reported as `refresh` reports, with
 /// each feed's state as Miniflux last fetched it.
-async fn sync_as_refresh(db: &Db, client: &Client, json: bool) -> Result<()> {
-    let report = sync::sync(db, client).await?;
+async fn sync_as_refresh(db: &Db, client: &dyn Backend, json: bool) -> Result<()> {
+    // Often run on a timer (omafeed-bar), so feeds Miniflux refused wait for `sync`.
+    let report = sync::sync(db, client, Trigger::Scheduled).await?;
     let lib = db.call(|s| s.library()).await?;
     if !json {
         print_report(&report);
@@ -356,7 +357,7 @@ async fn sync_now(db: &Db, json: bool) -> Result<()> {
     let Some(client) = account::client(db).await? else {
         bail!("No Miniflux account is connected; connect one with `omafeed account connect`");
     };
-    let report = sync::sync(db, &client).await?;
+    let report = sync::sync(db, client.as_ref(), Trigger::Manual).await?;
     if json {
         return json::print(&json::Synced::from(&report));
     }
@@ -364,22 +365,23 @@ async fn sync_now(db: &Db, json: bool) -> Result<()> {
     Ok(())
 }
 
-/// The API key from the environment, or else a line of standard input, asking for it first if
-/// someone is typing.
+/// The API key from the environment, or else a line of standard input, asking for it first
+/// (without showing what is typed) if someone is typing.
 fn read_token() -> Result<String> {
-    use std::io::{IsTerminal, Write};
+    use std::io::IsTerminal;
     if let Ok(token) = std::env::var(account::TOKEN_VAR)
         && !token.trim().is_empty()
     {
         return Ok(token);
     }
     let stdin = std::io::stdin();
-    if stdin.is_terminal() {
-        eprint!("Miniflux API key: ");
-        std::io::stderr().flush()?;
-    }
-    let mut line = String::new();
-    stdin.read_line(&mut line)?;
+    let line = if stdin.is_terminal() {
+        rpassword::prompt_password("Miniflux API key: ")?
+    } else {
+        let mut line = String::new();
+        stdin.read_line(&mut line)?;
+        line
+    };
     let token = line.trim().to_owned();
     if token.is_empty() {
         bail!(
@@ -724,8 +726,14 @@ async fn subscribe(
     let name = title.unwrap_or_else(|| pick.title.clone());
     let feed_url = pick.url.clone();
     let folder = folder.map(FolderId);
-    let id = subscriptions::subscribe(db, client.as_ref(), name.clone(), feed_url.clone(), folder)
-        .await?;
+    let id = subscriptions::subscribe(
+        db,
+        client.as_deref(),
+        name.clone(),
+        feed_url.clone(),
+        folder,
+    )
+    .await?;
     if !json {
         if client.is_some() {
             println!(
@@ -758,7 +766,7 @@ async fn unsubscribe(db: &Db, id: i64, yes: bool, json: bool) -> Result<()> {
     } else {
         None
     };
-    let removal = subscriptions::unsubscribe(db, client.as_ref(), FeedId(id), yes).await?;
+    let removal = subscriptions::unsubscribe(db, client.as_deref(), FeedId(id), yes).await?;
     let Removal {
         title,
         articles: total,

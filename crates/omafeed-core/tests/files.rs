@@ -60,7 +60,7 @@ fn databases_from_every_schema_version_open_with_their_library_intact() {
     let fresh = dir.path().join("fresh.db");
     drop(Store::open(&fresh).unwrap());
     let current = user_version(&fresh);
-    for version in 1..=4 {
+    for version in 1..=5 {
         let path = historical_database(dir.path(), version);
         let s = Store::open(&path).unwrap();
         assert_eq!(user_version(&path), current, "v{version}");

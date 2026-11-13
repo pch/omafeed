@@ -996,8 +996,12 @@ async fn answer_as_miniflux(
     }
     let category = r#"{"id":1,"title":"All"}"#;
     let entry = r#"{"id":5,"feed_id":7,"status":"unread","starred":false,"title":"Remote entry","url":"https://remote.invalid/post","author":"","content":"<p>From Miniflux.</p>","published_at":"2026-01-01T00:00:00Z","enclosures":null}"#;
-    let body = if line.starts_with("GET /v1/me ") {
+    let body = if line.starts_with("GET /v1/version ") {
+        r#"{"version":"2.3.5"}"#.to_owned()
+    } else if line.starts_with("GET /v1/me ") {
         r#"{"id":1,"username":"smoke"}"#.to_owned()
+    } else if line.starts_with("GET /v1/feeds/counters ") {
+        r#"{"reads":{},"unreads":{"7":1}}"#.to_owned()
     } else if line.starts_with("GET /v1/categories ") {
         format!("[{category}]")
     } else if line.starts_with("POST /v1/categories ") {
@@ -1008,7 +1012,9 @@ async fn answer_as_miniflux(
         )
     } else if line.starts_with("POST /v1/feeds ") {
         r#"{"feed_id":99}"#.to_owned()
-    } else if line.starts_with("GET /v1/entries") && !line.contains("starred=true") {
+    } else if (line.starts_with("GET /v1/entries") || line.starts_with("GET /v1/feeds/7/entries"))
+        && !line.contains("starred=true")
+    {
         format!(r#"{{"total":1,"entries":[{entry}]}}"#)
     } else if line.starts_with("GET /v1/entries") {
         r#"{"total":0,"entries":[]}"#.to_owned()

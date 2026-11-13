@@ -5,10 +5,7 @@
 use anyhow::{Context, Result, anyhow, bail};
 use omafeed_core::{
     Db,
-    sync::{
-        self, Report,
-        miniflux::{Client, User},
-    },
+    sync::{self, Backend, Report, backend::User, miniflux::Client},
 };
 use std::{collections::HashMap, time::Duration};
 
@@ -102,13 +99,14 @@ pub async fn forget_token(server: &str) -> Result<()> {
     with_keyring(async |keyring| keyring.delete(&attributes(&server)).await).await
 }
 
-/// A client for the account the library is connected to, or `None` if it is local.
-pub async fn client(db: &Db) -> Result<Option<Client>> {
+/// The service the library is connected to, signed in with its key, or `None` if the library
+/// is local. Miniflux is the only service there is.
+pub async fn client(db: &Db) -> Result<Option<Box<dyn Backend>>> {
     let Some(account) = db.call(|s| s.account()).await? else {
         return Ok(None);
     };
     let token = token(&account.server).await?;
-    Ok(Some(Client::new(&account.server, &token)?))
+    Ok(Some(Box::new(Client::new(&account.server, &token)?)))
 }
 
 /// What [`connect`] did.
@@ -126,7 +124,7 @@ pub struct Connected {
 /// fails, the account stays connected with its key, to sync again.
 pub async fn connect(db: &Db, server: &str, token: &str) -> Result<Connected> {
     let client = Client::new(server, token)?;
-    let user = client.me().await?;
+    let user = client.check().await?;
     save_token(client.server(), token).await?;
     match sync::connect(db, &client).await {
         Ok(report) => Ok(Connected {
@@ -162,7 +160,7 @@ pub async fn disconnect(db: &Db) -> Result<Disconnected> {
     };
     // Without the key, or with the server gone, unsent changes are dropped.
     let client = client(db).await.ok().flatten();
-    let dropped = sync::disconnect(db, client.as_ref()).await?;
+    let dropped = sync::disconnect(db, client.as_deref()).await?;
     Ok(Disconnected {
         keyring_error: forget_token(&connected.server).await.err(),
         server: connected.server,

@@ -872,7 +872,7 @@ impl Ui {
     /// server first. Runs on the tokio runtime.
     pub async fn change_library<T: Send + 'static, F>(
         &self,
-        change: impl FnOnce(Db, Option<omafeed_core::sync::miniflux::Client>) -> F + Send + 'static,
+        change: impl FnOnce(Db, Option<Box<dyn omafeed_core::sync::Backend>>) -> F + Send + 'static,
     ) -> anyhow::Result<T>
     where
         F: Future<Output = anyhow::Result<T>> + Send,
@@ -903,7 +903,7 @@ impl Ui {
                     if which == Which::Due && !account.sync_due(minutes, now) {
                         Ok(())
                     } else {
-                        sync_with_progress(&db, &tx).await
+                        sync_with_progress(&db, which, &tx).await
                     }
                 }
                 Ok(None) => refresher.refresh(db, which, minutes, tx).await,
@@ -926,14 +926,21 @@ impl Ui {
 /// A sync, told as a refresh of every feed: the window shows it the same way.
 async fn sync_with_progress(
     db: &omafeed_core::Db,
+    which: Which,
     events: &async_channel::Sender<Progress>,
 ) -> anyhow::Result<()> {
+    use omafeed_core::sync::Trigger;
+    // Feeds Miniflux refused are offered again only when someone asks for a refresh.
+    let trigger = match which {
+        Which::Due => Trigger::Scheduled,
+        _ => Trigger::Manual,
+    };
     let _ = events.send(Progress::Started(1)).await;
     let result = async {
         let client = crate::account::client(db)
             .await?
             .ok_or_else(|| anyhow::anyhow!("No Miniflux account is connected"))?;
-        omafeed_core::sync::sync(db, &client).await
+        omafeed_core::sync::sync(db, client.as_ref(), trigger).await
     }
     .await;
     if result.is_err() {

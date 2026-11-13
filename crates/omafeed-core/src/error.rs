@@ -16,11 +16,12 @@ pub enum Error {
     /// The library was written by a newer omafeed, whose schema this one does not know.
     #[error("Database was created by a newer omafeed version")]
     NewerDatabase,
-    /// The library mirrors a Miniflux account, which decides its feeds and categories; change
-    /// them through [`crate::sync`] (or [`crate::subscriptions`] with a client), or disconnect
-    /// first.
+    /// The library mirrors an account (such as Miniflux), which decides its feeds and
+    /// categories; change them through [`crate::sync`] (or [`crate::subscriptions`] with its
+    /// backend), or disconnect first.
     #[error(
-        "Miniflux manages this library's feeds and folders; change them there, or disconnect first"
+        "The synced account manages this library's feeds and folders; change them there, or \
+         disconnect first"
     )]
     Managed,
     /// Input that cannot be stored, such as an empty name or a feed URL that is not HTTP(S).

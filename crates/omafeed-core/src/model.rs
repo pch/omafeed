@@ -235,7 +235,7 @@ pub struct ImportReport {
     pub invalid: Vec<String>,
 }
 
-/// The Miniflux account the library mirrors, if one is connected. While it is, Miniflux
+/// The account the library mirrors, if one is connected. While it is, the service (Miniflux)
 /// fetches the feeds and decides which feeds and folders there are; omafeed syncs with it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Account {
@@ -245,8 +245,10 @@ pub struct Account {
     pub user_id: i64,
     /// The name the user signs in with.
     pub username: String,
-    /// When the last sync finished, in Unix seconds, or `None` before the first.
+    /// When the last sync that worked finished, in Unix seconds, or `None` before the first.
     pub last_sync: Option<i64>,
+    /// When the last sync finished, whether it worked or not.
+    pub last_attempt: Option<i64>,
     /// Why the last sync failed, or `None` if it succeeded.
     pub error: Option<String>,
     /// Read and star changes not yet sent to the server.
@@ -257,7 +259,7 @@ impl Account {
     /// Whether a sync is due at `now` (Unix seconds) when the library syncs every `minutes`:
     /// before the first, and once that long has passed since the last, failed or not.
     pub fn sync_due(&self, minutes: u32, now: i64) -> bool {
-        self.last_sync
+        self.last_attempt
             .is_none_or(|last| now - last >= i64::from(minutes) * 60)
     }
 }
@@ -443,11 +445,13 @@ mod tests {
             user_id: 1,
             username: "reader".into(),
             last_sync: None,
+            last_attempt: None,
             error: None,
             unsent: 0,
         };
         assert!(account.sync_due(30, 1_000));
-        account.last_sync = Some(1_000);
+        // A failed sync counts too, so a server that is down is not asked again at once.
+        account.last_attempt = Some(1_000);
         assert!(!account.sync_due(30, 1_000 + 29 * 60));
         assert!(account.sync_due(30, 1_000 + 30 * 60));
     }

@@ -22,7 +22,7 @@ Run without a command, `omafeed` opens the reader window; with a command (`omafe
 | `filters` | `ContentFilters`: the words and `/regexes/` that hide articles, matched against title and preview, and `validate` for a new pattern. |
 | `reading` | Marking articles read, unread, starred or not: a batch that fails as a whole (command line), one article that may be gone (window), and a whole view with its undo. |
 | `ingest` | Getting feeds in. `refresh` has `Refresher` (one pass over due feeds, with per-host and global concurrency limits) and its `Progress` events; `download` the conditional GET; `schedule` when a feed is due next (the refresh interval, backoff after failures, and `Retry-After`) as pure functions of the time, so the store only records the timestamps they give; `parse` feed-rs to `Entry`; `discovery` turns a website or feed URL into feed candidates; `icons` finds, downloads, normalizes (to 64×64 PNG), caches and prunes website icons. |
-| `sync` | Mirroring a Miniflux account: `connect`, `sync` and `disconnect`, and the order a sync works in (its module documentation). `miniflux` is the client for Miniflux's REST API: the account, categories, feeds, entries (paged by ID), marking entries read or unread, toggling stars, and creating categories and feeds. It authenticates with an API key and follows no redirects, so the key never goes to an address the user did not enter. The key itself is the app's to keep. |
+| `sync` | Mirroring a sync service's account: `connect`, `sync` (scheduled or asked for, `Trigger`) and `disconnect`, the changes made on the server first, and the order a sync works in (its module documentation). `backend` is what a service has to offer: the `Backend` trait (object-safe, with boxed futures, so callers hold `&dyn Backend`) and the categories, feeds and entries it describes by its own IDs, plus what differs between services (a top-level category feeds must go in, whether deleting a category deletes its feeds). Nothing else in `sync` or `store` knows which service it is. `miniflux` implements it on Miniflux's REST API (2.3.2 or later): entries paged by ID and dated by the server's `Date`, per-feed unread counts, setting read and star state in batches. It authenticates with an API key and follows no redirects, so the key never goes to an address the user did not enter. The key itself is the app's to keep. |
 | `content` | Article HTML: `sanitize`, plain text for previews and search (`plain`), and Markdown-like reading text for the command line (`readable`). |
 | `render` | The reader's HTML document (`document`). |
 | `opml` | OPML parsing and export. |
@@ -34,7 +34,7 @@ Run without a command, `omafeed` opens the reader window; with a command (`omafe
 
 | Module | Contents |
 | --- | --- |
-| `account` | The Miniflux API key in the keyring (the Secret Service, through `oo7`), or `OMAFEED_MINIFLUX_TOKEN` instead, and the client for the connected account. Both the command line and the window's refresh use it. |
+| `account` | The Miniflux API key in the keyring (the Secret Service, through `oo7`), or `OMAFEED_MINIFLUX_TOKEN` instead, and the connected account's `Backend` (always Miniflux, for now). Both the command line and the window's refresh use it. |
 | `lib` | Argument parsing (`main`), which dispatches to `cli::run` or builds the GTK application. `main.rs` only calls it. With the `test-support` feature, `test_support` exposes the desktop smoke test to `tests/desktop_smoke.rs`. |
 | `cli` | Every command: argument definitions and text output. `cli/json.rs` has one `Serialize` type per `--json` shape, printed through `serde_json::Value` so the keys stay sorted, byte for byte as before. |
 | `ui` | The main window. `Ui` coordinates: it owns the panes (`Header`, `SidebarPane`, `ListPane`, `ReaderPane`), each holding its own widgets, and a `View` (`view.rs`) with what is shown: view and page, the articles on it, the open article, collapsed folders, and the read/star changes (`changes.rs`) and undo in flight. `View` has no GTK and decides what each late database result may change, and what a removed feed or folder takes with it; it is unit-tested on its own. `articles`, `sidebar`, `reader`, `keys`, `theme` and `account` (connecting and disconnecting a Miniflux account, shown like a refresh) add methods to `Ui`. While an account is connected (`Library::account`), feed and category changes and OPML import go through `Ui::change_library`, which runs them on the tokio runtime with the account's client, and the sidebar offers no per-feed refresh and drops feeds only into categories (`Folder::remote`). `sidebar` and `articles` also build the context menus of sidebar entries and articles: which commands a row has and which apply now are pure functions, unit-tested; `context_menu` opens either menu on a right click or the Menu key and fills its one `gtk::PopoverMenu` from a `gio::Menu` with a fresh action group (`sidebar.`, `article.`) each time. The sidebar's menu is closed with its actions dropped whenever the library is read again (an entry's ID may since belong to another feed or folder), the article menu whenever the list is; the sidebar's commands open the feed and folder forms and confirmations (`dialogs::add_feed`, `dialogs::new_folder`, `dialogs::edit`, `dialogs::remove`). Feeds and folders move by drag and drop: each row is a drag source carrying its `Scope` as text, the list is the drop target, and where a drop lands is another pure function (`destination`), unit-tested; `widgets` has small constructors; `tests` holds the desktop smoke test (only with `test-support`). |
@@ -65,8 +65,15 @@ asked for.
 While a Miniflux account is connected, `Refresher` refreshes nothing: the window's refresh and
 `omafeed refresh` run `sync::sync` instead, which the window shows as a refresh that started
 with one feed and finished with all of them. The window's scheduled checks sync once the
-refresh interval has passed since the last sync (`Account::sync_due`); the refresh button
-syncs at once.
+refresh interval has passed since the last attempt, failed or not (`Account::sync_due`); the
+refresh button syncs at once. Only a sync someone asked for (the refresh button, `omafeed
+sync`) offers the server again the feeds it refused: it fetches each before answering.
+
+After the first sync, which reads every unread and starred entry and the last 30 days, a sync
+reads only the entries that changed since the previous one started (Miniflux's
+`changed_after`, from a cursor on the server's clock), then compares per-feed unread counts and
+the starred count with the server's, and reads the whole state of the feeds that disagree. A
+quiet sync is five small requests, however many articles are unread.
 
 The window notices changes made by other programs (such as `omafeed star 3` in a terminal)
 by polling SQLite's `PRAGMA data_version` every two seconds and reloading when it moves.
@@ -92,7 +99,8 @@ The library is `omafeed.db` in the data directory (`$XDG_DATA_HOME/omafeed`, or
 `$OMAFEED_HOME/data`). The schema version is SQLite's `user_version`; migration `n` upgrades
 version `n` to `n + 1`, each in its own transaction. The upgrades to versions 2 and 3
 recompute article text from stored HTML; the upgrade to version 4 adds feed revisions, and
-the one to version 5 the Miniflux account. A database from a newer omafeed is
+the one to version 5 the Miniflux account, and version 6 its sync cursor and last attempt. A
+database from a newer omafeed is
 refused, not modified.
 
 Each feed has a `revision`, drawn from a counter in the one-row `meta` table whenever a feed
@@ -115,8 +123,8 @@ snapshot or transaction joins it. Work that reads and then writes on what it rea
 Articles are indexed in an FTS5 table kept in step by triggers. The search vocabulary is read
 from an `fts5vocab` view and cached per connection until articles change.
 
-A connected Miniflux account is the one row of `account` (server, user, last sync and its
-error); while it exists, the server decides the feeds and categories, so the `Store` methods
+A connected Miniflux account is the one row of `account` (server, user, the last sync and
+attempt and its error, and the cursor the next sync reads changes from); while it exists, the server decides the feeds and categories, so the `Store` methods
 that change them (and adding feeds or importing) fail with `Error::Managed`; `sync` changes
 them on the server first and then here (`subscriptions` sends its callers there while
 connected). Feeds the server would not take, and folders of one's own, stay the library's to
@@ -126,11 +134,12 @@ and is NULL for anything the server does not have. Triggers on `article_state` q
 read or star change of an article with a `remote_id` in `outbox`, one row per article and
 field holding the newest value, in the same statement as the change, so every way of changing
 state (one article, a batch, a whole view and its undo) is covered. A sync sends the outbox
-first, then stores the server's state in one transaction that leaves articles with unsent
+first (the server skips entries it no longer has, so one cannot hold up the rest), then stores
+the server's state in one transaction (`Store::mirror`) that leaves articles with unsent
 changes alone and removes the outbox rows its own writes queued. Disconnecting clears every
 `remote_id`, gives every feed a new revision and an immediate refresh, and drops the outbox.
-Article identities from Miniflux are `miniflux:ID`, so the first local refresh after
-disconnecting adds the feed's current articles again under their own identities.
+Article identities from Miniflux are `miniflux:ID`; the first local refresh after
+disconnecting finds those articles by their links and gives them the feed's own identities.
 
 Content filters live in `settings.toml`, so `Store` holds no copy on disk: `Store::set_filters`
 (or `Db::set_filters`) registers a SQL function on the connection, and `predicate` and
@@ -170,7 +179,8 @@ These are properties of the current design, not promises. Change them deliberate
 - `crates/omafeed-core/tests/reader.rs`: storage, refresh, discovery, icons and search
   against in-memory databases and local HTTP servers.
 - `crates/omafeed-core/tests/miniflux_sync.rs`: connecting, syncing and disconnecting a
-  Miniflux account, against a mock server that keeps its own categories, feeds and entries.
+  Miniflux account, against a mock server that keeps its own categories, feeds and entries,
+  and a clock for each entry's last change.
 - `crates/omafeed-core/tests/stale_refresh.rs`: refresh results that arrive after their feed
   was edited, removed or replaced.
 - Unit tests next to the code, notably `ingest/schedule.rs` (when feeds are due),
