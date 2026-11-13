@@ -850,8 +850,22 @@ impl Ui {
         let tx = self.progress.clone();
         let (err_tx, err_rx) = async_channel::bounded(1);
         self.runtime.spawn(async move {
-            if let Err(e) = refresher.refresh(db, which, minutes, tx).await {
-                let _ = err_tx.send(e.to_string()).await;
+            let result = match db.call(|s| s.account()).await {
+                // While an account is connected, Miniflux fetches the feeds: sync instead,
+                // as often as feeds would be refreshed, or whenever asked to.
+                Ok(Some(account)) => {
+                    let now = chrono::Utc::now().timestamp();
+                    if which == Which::Due && !account.sync_due(minutes, now) {
+                        Ok(())
+                    } else {
+                        sync_with_progress(&db, &tx).await
+                    }
+                }
+                Ok(None) => refresher.refresh(db, which, minutes, tx).await,
+                Err(e) => Err(e),
+            };
+            if let Err(e) = result {
+                let _ = err_tx.send(format!("{e:#}")).await;
             }
         });
         let u = self.clone();
@@ -862,4 +876,37 @@ impl Ui {
             }
         });
     }
+}
+
+/// A sync, told as a refresh of every feed: the window shows it the same way.
+async fn sync_with_progress(
+    db: &omafeed_core::Db,
+    events: &async_channel::Sender<Progress>,
+) -> anyhow::Result<()> {
+    let _ = events.send(Progress::Started(1)).await;
+    let result = async {
+        let client = crate::account::client(db)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("No Miniflux account is connected"))?;
+        omafeed_core::sync::sync(db, &client).await
+    }
+    .await;
+    if result.is_err() {
+        let _ = events
+            .send(Progress::Finished {
+                total: 0,
+                failed: 0,
+            })
+            .await;
+    }
+    result?;
+    let lib = db.call(|s| s.library()).await?;
+    let failed = lib.feeds.iter().filter(|f| f.error.is_some()).count();
+    let _ = events
+        .send(Progress::Finished {
+            total: lib.feeds.len(),
+            failed,
+        })
+        .await;
+    Ok(())
 }

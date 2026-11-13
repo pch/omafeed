@@ -133,7 +133,19 @@ Click **+** in the header to **Add feed** (Ctrl+N) or create a **New folder** (C
 
 Search looks through the current view, including nested folders. It forgives typos (`agentc` finds `agentic`), treats regular plural and singular forms alike (`box` and `boxes`, `story` and `stories`), and matches the start of the last word you type, so results appear as you go. Words shorter than five letters are not typo-corrected; the last word can match prefixes from three letters onward. Numbers are matched exactly, and a word that appears in your articles is never swapped for a similar one. Summary-only feeds show the summary; open the original for the rest. Podcast episodes appear as download links.
 
-Not yet supported: full-article extraction, podcast playback, sync between devices, and notifications.
+Not yet supported: full-article extraction, podcast playback, and notifications.
+
+## Miniflux
+
+omafeed can mirror a [Miniflux](https://miniflux.app) account, so your subscriptions and read and star state are the same everywhere you read. While connected, Miniflux fetches the feeds and decides which feeds and folders there are; omafeed syncs with it whenever it would refresh, and you read offline as before. For now, connect from the command line, with an API key made in Miniflux under **Settings → API Keys**:
+
+```sh
+omafeed account connect https://miniflux.example.org   # asks for the API key
+```
+
+Connecting subscribes Miniflux to your feeds it does not have yet, and articles you already have keep their read and star state, which goes up to the server. Miniflux's categories become folders, and you can still arrange them inside folders of your own. Adding, editing and removing feeds happens in Miniflux while connected; `omafeed account disconnect` turns the feeds back into local ones, with their folders, articles and state, which omafeed fetches itself again.
+
+The API key is kept in your keyring (the Secret Service, such as GNOME Keyring or KWallet). Without one, set `OMAFEED_MINIFLUX_TOKEN` to the key instead. A sync reads every unread and starred entry and those from the last 30 days, and keeps articles Miniflux later deletes. It needs Miniflux 2.0.21 or newer, the first version with API keys.
 
 ## Command line
 
@@ -152,6 +164,8 @@ Not yet supported: full-article extraction, podcast playback, sync between devic
 | `read`, `unread`, `star`, `unstar` `ID...` | Change article state |
 | `subscribe URL [--folder ID] [--title NAME]` | Find a site's feed and add it; run `refresh` to fetch its articles |
 | `unsubscribe ID --yes` | Delete a feed and all its articles, starred ones included |
+| `account connect URL` / `account status` / `account disconnect` | Mirror a [Miniflux](#miniflux) account, show it, or stop |
+| `sync` | Sync with the connected Miniflux account now (`refresh` does the same while connected) |
 
 `articles` and `search` share these options; `search` also takes the words to find:
 
@@ -265,7 +279,7 @@ The [Omarchy bar plugin](https://github.com/pch/omafeed-bar) is built on this ou
 
 Articles, subscriptions, read state, stars, and the search index live in `$XDG_DATA_HOME/omafeed/omafeed.db` (default `~/.local/share/omafeed`). Settings live in `$XDG_CONFIG_HOME/omafeed/settings.toml`, and website icons are cached under `$XDG_CACHE_HOME/omafeed`.
 
-No account, telemetry, cloud sync, or background daemon. Closing omafeed stops scheduled refreshes. Requests go to your feed servers, their redirects, favicon URLs, and article image servers when enabled. Remote images can be disabled in Settings. Feeds on your own machine or network work when you enter their address, but a site on the internet cannot send omafeed to `localhost` or a private, link-local, or loopback IP address, whether by a redirect, a feed link found during discovery, or an icon link. Host names are not resolved for this check, and images in articles are loaded by WebKit without it. Article JavaScript, frames, forms, and embedded media are disabled; links open in your browser.
+No telemetry or background daemon, and no account unless you connect your own [Miniflux](#miniflux) server. Closing omafeed stops scheduled refreshes. Requests go to your feed servers (or, while connected, your Miniflux server), their redirects, favicon URLs, and article image servers when enabled. Remote images can be disabled in Settings. Feeds on your own machine or network work when you enter their address, but a site on the internet cannot send omafeed to `localhost` or a private, link-local, or loopback IP address, whether by a redirect, a feed link found during discovery, or an icon link. Host names are not resolved for this check, and images in articles are loaded by WebKit without it. Article JavaScript, frames, forms, and embedded media are disabled; links open in your browser.
 
 Article text works offline; images need a connection unless they were already loaded. Articles are never deleted automatically. To back up everything, copy the data directory while omafeed is closed; OPML export saves subscriptions only.
 

@@ -1,5 +1,6 @@
 //! The library database: one SQLite connection ([`Store`]) and the worker thread that owns it
 //! ([`Db`]). Each file adds one concern's methods to `Store`.
+pub(crate) mod account;
 mod articles;
 mod feeds;
 mod folders;

@@ -60,7 +60,7 @@ fn databases_from_every_schema_version_open_with_their_library_intact() {
     let fresh = dir.path().join("fresh.db");
     drop(Store::open(&fresh).unwrap());
     let current = user_version(&fresh);
-    for version in 1..=3 {
+    for version in 1..=4 {
         let path = historical_database(dir.path(), version);
         let s = Store::open(&path).unwrap();
         assert_eq!(user_version(&path), current, "v{version}");
@@ -155,7 +155,7 @@ fn databases_from_every_schema_version_open_with_their_library_intact() {
 #[test]
 fn a_database_from_a_newer_version_is_refused_and_left_alone() {
     let dir = tempfile::tempdir().unwrap();
-    let path = historical_database(dir.path(), 3);
+    let path = historical_database(dir.path(), 4);
     let current = {
         drop(Store::open(&path).unwrap());
         user_version(&path)

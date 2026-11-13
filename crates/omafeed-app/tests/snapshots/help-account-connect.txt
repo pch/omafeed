@@ -1,0 +1,17 @@
+$ omafeed account connect --help
+exit: 0
+--- stdout
+Mirror a Miniflux account, reading its API key from standard input
+
+Miniflux then fetches the feeds and decides which feeds and folders there are, and omafeed syncs read and star state with it. Your feeds Miniflux does not have are subscribed there, and articles it has too keep their read and star state. The API key (in Miniflux: Settings, API Keys) is read from standard input, or from OMAFEED_MINIFLUX_TOKEN, and kept in the keyring.
+
+Usage: omafeed account connect <SERVER>
+
+Arguments:
+  <SERVER>
+          The server's address, e.g. https://miniflux.example.org
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+--- stderr

@@ -1,0 +1,11 @@
+$ omafeed sync --help
+exit: 0
+--- stdout
+Sync with the connected Miniflux account now, as `refresh` does while one is connected
+
+Usage: omafeed sync [OPTIONS]
+
+Options:
+      --json  Print JSON instead of text
+  -h, --help  Print help
+--- stderr

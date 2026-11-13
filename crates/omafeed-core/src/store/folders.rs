@@ -24,8 +24,17 @@ impl Store {
         Ok(FolderId(self.conn.last_insert_rowid()))
     }
 
-    /// Rename a folder; the name must be unique among its siblings.
+    /// Rename a folder; the name must be unique among its siblings. Fails with
+    /// [`Error::Managed`] for a folder that is a Miniflux category, unless the name stays.
     pub fn rename_folder(&self, id: FolderId, name: &str) -> Result<()> {
+        let unchanged: bool = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM folders WHERE id = ?1 AND name = ?2)",
+            params![id, Self::name(name)?],
+            |r| r.get(0),
+        )?;
+        if !unchanged {
+            self.require_local_folder(id)?;
+        }
         self.conn
             .execute(
                 "UPDATE folders SET name = ?1 WHERE id = ?2",
@@ -64,12 +73,16 @@ impl Store {
         })
     }
 
-    /// Removing a folder keeps all feeds and promotes child folders to its parent.
+    /// Removing a folder keeps all feeds and promotes child folders to its parent. Fails with
+    /// [`Error::Managed`] for a folder that is a Miniflux category.
     pub fn delete_folder(&self, id: FolderId) -> Result<()> {
-        self.immediate(|s| s.delete_folder_now(id))
+        self.immediate(|s| {
+            s.require_local_folder(id)?;
+            s.delete_folder_now(id)
+        })
     }
 
-    fn delete_folder_now(&self, id: FolderId) -> Result<()> {
+    pub(super) fn delete_folder_now(&self, id: FolderId) -> Result<()> {
         let tx = &self.conn;
         let parent: Option<FolderId> =
             tx.query_row("SELECT parent FROM folders WHERE id = ?1", [id], |r| {

@@ -1,0 +1,10 @@
+$ omafeed account status --help
+exit: 0
+--- stdout
+Show the connected account and its last sync
+
+Usage: omafeed account status
+
+Options:
+  -h, --help  Print help
+--- stderr

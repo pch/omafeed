@@ -1,4 +1,5 @@
 //! omafeed, the reader window and the `omafeed` command line. `main.rs` only calls [`main`].
+mod account;
 mod cli;
 mod dialogs;
 mod ui;

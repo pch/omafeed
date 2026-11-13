@@ -1,0 +1,16 @@
+$ omafeed account --help
+exit: 0
+--- stdout
+Connect a Miniflux account, show it, or disconnect it
+
+Usage: omafeed account <COMMAND>
+
+Commands:
+  connect     Mirror a Miniflux account, reading its API key from standard input
+  status      Show the connected account and its last sync
+  disconnect  Stop mirroring the account; its feeds stay, as local ones
+  help        Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help  Print help
+--- stderr
