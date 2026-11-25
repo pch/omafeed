@@ -19,6 +19,7 @@ A native RSS reader for Linux and Omarchy, written in Rust. A three-pane library
 - Omarchy palette following across the top bar, menus, sidebar, and reader; light/dark modes, persisted window/pane sizes, keyboard navigation, and favicon caching.
 - A companion [Omarchy bar plugin](https://github.com/pch/omafeed-bar): an RSS icon that lights up when something is unread, with the newest articles one click away.
 - Conditional HTTP requests, bounded concurrency, timeouts, retry backoff, and visible per-feed errors.
+- Optional sync with your own [Miniflux or FreshRSS](#sync-with-miniflux-or-freshrss) server: subscriptions, folders, and read and star state stay the same everywhere.
 
 ## Install
 
@@ -131,21 +132,41 @@ OPML contains subscriptions, not historical articles or read/star state. The fir
 
 Click **+** in the header to **Add feed** (Ctrl+N) or create a **New folder** (Ctrl+Shift+N); either goes into the folder you are viewing. Subscribe with a website or feed URL: omafeed finds the site's RSS, Atom, or JSON feed, lets you choose when there are several, and uses the feed's title if you leave the name blank. Drag feeds and folders in the sidebar to move them: drop on a folder to put it inside, or on a smart view to move it to the top level. Right-click a feed or folder and choose **Edit…** to rename it, move it, or correct its URL without losing saved articles, or **Remove…** to remove it. **Refresh** in the same menu downloads just that feed, or every feed in the folder. Removing a feed deletes its articles after confirmation; removing a folder keeps them.
 
-Search looks through the current view, including nested folders. It forgives typos (`agentc` finds `agentic`), treats regular plural and singular forms alike (`box` and `boxes`, `story` and `stories`), and matches the start of the last word you type, so results appear as you go. Words shorter than five letters are not typo-corrected; the last word can match prefixes from three letters onward. Numbers are matched exactly, and a word that appears in your articles is never swapped for a similar one. Summary-only feeds show the summary. For the rest, press D or the download button above the article: omafeed fetches the article's web page and shows its main text in place of the summary, and keeps it for reading offline; press D again for the feed's version. While a Miniflux account is connected, Miniflux fetches it, with the scraper rules and cookies you set for the feed there; if Miniflux can't, omafeed fetches the page itself. Search and previews keep using the feed's text. Podcast episodes appear as download links.
+Search looks through the current view, including nested folders. It forgives typos (`agentc` finds `agentic`), treats regular plural and singular forms alike (`box` and `boxes`, `story` and `stories`), and matches the start of the last word you type, so results appear as you go. Words shorter than five letters are not typo-corrected; the last word can match prefixes from three letters onward. Numbers are matched exactly, and a word that appears in your articles is never swapped for a similar one. Summary-only feeds show the summary. For the rest, press D or the download button above the article: omafeed fetches the article's web page and shows its main text in place of the summary, and keeps it for reading offline; press D again for the feed's version. While a Miniflux account is connected, Miniflux fetches it, with the scraper rules and cookies you set for the feed there; if Miniflux can't (or with FreshRSS, which offers no such fetch), omafeed fetches the page itself. Search and previews keep using the feed's text. Podcast episodes appear as download links.
 
 Not yet supported: podcast playback and notifications.
 
-## Miniflux
+## Sync with Miniflux or FreshRSS
 
-omafeed can mirror a [Miniflux](https://miniflux.app) account, so your subscriptions and read and star state are the same everywhere you read. While connected, Miniflux fetches the feeds and decides which feeds and folders there are; omafeed syncs with it whenever it would refresh, and you read offline as before. Connect from **Miniflux account…** in the window's menu, or from the command line, with an API key made in Miniflux under **Settings → API Keys**:
+omafeed can mirror a [Miniflux](https://miniflux.app) or [FreshRSS](https://freshrss.org) account, so your subscriptions and read and star state are the same everywhere you read. While connected, the server fetches the feeds and decides which feeds and folders there are; omafeed syncs with it whenever it would refresh, and you read offline as before. Connect from **Sync account…** in the window's menu (choose the service there), or from the command line:
 
 ```sh
-omafeed account connect https://miniflux.example.org   # asks for the API key
+omafeed account connect https://miniflux.example.org                                    # asks for the API key
+omafeed account connect --service freshrss --username ann https://freshrss.example.org  # asks for the API password
 ```
 
-Connecting subscribes Miniflux to your feeds it does not have yet, and articles you already have keep their read and star state, which goes up to the server. Miniflux's categories become folders, and you can still arrange them inside folders of your own. While connected, adding, editing, moving and removing feeds, and renaming and removing categories, happen on the server first, from the window or with `subscribe` and `unsubscribe`; a feed goes in one of Miniflux's categories (the top level is its "All" category), and a category is removed only once empty, since Miniflux would delete its feeds with it. A feed Miniflux would not take stays with the reason, for you to fix or remove; it is offered again when you change its address, import it again, press refresh, or run `omafeed sync` (not on scheduled syncs or `omafeed refresh`, since Miniflux fetches it before answering). Importing OPML while connected subscribes Miniflux to the new feeds, each in the category named like the folder holding it; the folders around those keep their nesting here. Disconnecting, from the same dialog or `omafeed account disconnect`, turns the feeds back into local ones, with their folders, articles and state, which omafeed fetches itself again.
+Connecting subscribes the server to your feeds it does not have yet, and articles you already have keep their read and star state, which goes up to the server. The server's categories become folders, and you can still arrange them inside folders of your own. While connected, adding, editing, moving and removing feeds, and renaming and removing categories, happen on the server first, from the window or with `subscribe` and `unsubscribe`; a feed goes in one of the server's categories. A feed the server would not take stays with the reason, for you to fix or remove; it is offered again when you change its address, import it again, press refresh, or run `omafeed sync` (not on scheduled syncs or `omafeed refresh`, since the server fetches it before answering). Importing OPML while connected subscribes the server to the new feeds, each in the category named like the folder holding it; the folders around those keep their nesting here. Disconnecting, from the same dialog or `omafeed account disconnect`, turns the feeds back into local ones, with their folders, articles and state, which omafeed fetches itself again.
 
-The API key is kept in your keyring (the Secret Service, such as GNOME Keyring or KWallet). Without one, set `OMAFEED_MINIFLUX_TOKEN` to the key instead. The first sync reads every unread and starred entry and those from the last 30 days; after that, a sync reads only what changed since the last one, and checks the unread and starred counts to catch anything else, so it stays quick however many articles are unread. omafeed keeps articles Miniflux later deletes. It needs Miniflux 2.3.2 or newer.
+The secret (Miniflux's API key, or FreshRSS's API password) is kept in your keyring (the Secret Service, such as GNOME Keyring or KWallet). Without one, set `OMAFEED_SYNC_TOKEN` to it instead (`OMAFEED_MINIFLUX_TOKEN` still works too). The first sync reads every unread and starred entry and those from the last 30 days. omafeed keeps articles the server later deletes.
+
+### Miniflux
+
+Make an API key in Miniflux under **Settings → API Keys**. Top-level feeds go in Miniflux's "All" category, and a category is removed only once empty, since Miniflux would delete its feeds with it. After the first sync, a sync reads only what changed since the last one, and checks the unread and starred counts to catch anything else, so it stays quick however many articles are unread. While connected, pressing D fetches the full article through Miniflux, with the scraper rules and cookies you set for the feed there. omafeed needs Miniflux 2.3.2 or newer.
+
+### FreshRSS
+
+In FreshRSS, allow API access under **Settings → Authentication**, then set an API password under **Settings → Profile → API management**; omafeed signs in with your user name and that password (not your login password) through FreshRSS's Google Reader API. The server's address is enough (`https://freshrss.example.org`, or the folder FreshRSS is in); its API address (`…/api/greader.php`) works too.
+
+FreshRSS differs from Miniflux in a few ways omafeed follows:
+
+- Each sync reads the IDs of every unread and every starred article (FreshRSS cannot say what changed since a time), and downloads only articles omafeed does not have yet. That stays quick, but a sync is a few requests more than with Miniflux.
+- Every feed is in a category: feeds put at the top level go into FreshRSS's default category ("Uncategorized", or its name in your language), which cannot be removed. Removing another category moves its feeds there.
+- A new category appears in FreshRSS once a feed goes in it. Renaming a category in FreshRSS's own pages shows here as a new folder, and the old one goes, losing its place among your folders.
+- A feed's address cannot be changed (the field is locked); add the new address as a feed and remove the old one.
+- FreshRSS reports no feed errors, and fetching a full article (D) uses omafeed's own fetch.
+- FreshRSS replaces some punctuation in titles with look-alike characters (such as `＜` for `<`); omafeed shows them as FreshRSS sends them.
+- Feeds set in FreshRSS to show only in their own feed are synced like the others.
+- Feeds archived (hidden) in FreshRSS are not offered by its API, so they do not appear here.
 
 ## Command line
 
@@ -164,8 +185,8 @@ The API key is kept in your keyring (the Secret Service, such as GNOME Keyring o
 | `read`, `unread`, `star`, `unstar` `ID...` | Change article state |
 | `subscribe URL [--folder ID] [--title NAME]` | Find a site's feed and add it; run `refresh` to fetch its articles |
 | `unsubscribe ID --yes` | Delete a feed and all its articles, starred ones included |
-| `account connect URL` / `account status` / `account disconnect` | Mirror a [Miniflux](#miniflux) account, show it, or stop |
-| `sync` | Sync with the connected Miniflux account now (`refresh` does the same while connected) |
+| `account connect [--service freshrss --username NAME] URL` / `account status` / `account disconnect` | Mirror a [Miniflux or FreshRSS](#sync-with-miniflux-or-freshrss) account, show it, or stop |
+| `sync` | Sync with the connected account now (`refresh` does the same while connected) |
 
 `articles` and `search` share these options; `search` also takes the words to find:
 
@@ -281,7 +302,7 @@ The [Omarchy bar plugin](https://github.com/pch/omafeed-bar) is built on this ou
 
 Articles, subscriptions, read state, stars, and the search index live in `$XDG_DATA_HOME/omafeed/omafeed.db` (default `~/.local/share/omafeed`). Settings live in `$XDG_CONFIG_HOME/omafeed/settings.toml`, and website icons are cached under `$XDG_CACHE_HOME/omafeed`.
 
-No telemetry or background daemon, and no account unless you connect your own [Miniflux](#miniflux) server. Closing omafeed stops scheduled refreshes. Requests go to your feed servers (or, while connected, your Miniflux server), their redirects, favicon URLs, and article image servers when enabled. Remote images can be disabled in Settings. Feeds on your own machine or network work when you enter their address, but a site on the internet cannot send omafeed to `localhost` or a private, link-local, or loopback IP address, whether by a redirect, a feed link found during discovery, or an icon link. Host names are not resolved for this check, and images in articles are loaded by WebKit without it. Article JavaScript, frames, forms, and embedded media are disabled; links open in your browser.
+No telemetry or background daemon, and no account unless you connect your own [Miniflux or FreshRSS](#sync-with-miniflux-or-freshrss) server. Closing omafeed stops scheduled refreshes. Requests go to your feed servers (or, while connected, your Miniflux or FreshRSS server), their redirects, favicon URLs, and article image servers when enabled. Remote images can be disabled in Settings. Feeds on your own machine or network work when you enter their address, but a site on the internet cannot send omafeed to `localhost` or a private, link-local, or loopback IP address, whether by a redirect, a feed link found during discovery, or an icon link. Host names are not resolved for this check, and images in articles are loaded by WebKit without it. Article JavaScript, frames, forms, and embedded media are disabled; links open in your browser.
 
 Article text works offline; images need a connection unless they were already loaded. Articles are never deleted automatically. To back up everything, copy the data directory while omafeed is closed; OPML export saves subscriptions only.
 
