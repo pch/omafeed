@@ -729,9 +729,13 @@ impl Store {
         }
         let mut body = entry.html.clone();
         for enclosure in &entry.enclosures {
-            // Some services (FreshRSS) already link attachments in the content.
-            if entry.html.contains(enclosure.as_str())
-                || entry.html.contains(escape(enclosure).as_str())
+            // Some services (FreshRSS) already link attachments in the content: skip one
+            // the content names as a whole attribute value.
+            let quoted = |url: &str| [format!("\"{url}\""), format!("'{url}'")];
+            if quoted(enclosure)
+                .into_iter()
+                .chain(quoted(&escape(enclosure)))
+                .any(|q| entry.html.contains(&q))
             {
                 continue;
             }

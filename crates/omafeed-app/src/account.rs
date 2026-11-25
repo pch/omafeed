@@ -176,6 +176,14 @@ pub async fn connect(
     username: &str,
     secret: &str,
 ) -> Result<Connected> {
+    // Refuse before the keyring is touched: the connected account's secret must stay.
+    if let Some(account) = db.call(|s| s.account()).await? {
+        bail!(
+            "Already connected to {} at {}; disconnect first",
+            account.service,
+            account.server
+        );
+    }
     let client = backend(service, server, username, secret)?;
     let user = client.check().await?;
     save_token(service, client.server(), secret).await?;

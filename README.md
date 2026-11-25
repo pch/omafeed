@@ -166,7 +166,7 @@ FreshRSS differs from Miniflux in a few ways omafeed follows:
 - FreshRSS reports no feed errors, and fetching a full article (D) uses omafeed's own fetch.
 - FreshRSS replaces some punctuation in titles with look-alike characters (such as `＜` for `<`); omafeed shows them as FreshRSS sends them.
 - Feeds set in FreshRSS to show only in their own feed are synced like the others.
-- Feeds archived (hidden) in FreshRSS are not offered by its API, so they do not appear here.
+- Feeds archived in FreshRSS are not offered by its API, so they look unsubscribed: archiving a feed there removes it from omafeed with its articles, starred ones included (unarchive it and the next sync brings it back).
 
 ## Command line
 
