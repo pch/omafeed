@@ -1,7 +1,8 @@
-//! Mirroring a sync service's account, such as Miniflux. While one is connected, the service
-//! fetches the feeds and decides which feeds and folders the library has; omafeed reads them
-//! from it and keeps read and star state the same on both sides. [`backend`] says what a
-//! service offers, and [`miniflux`] implements it; nothing else here knows which service it is.
+//! Mirroring a sync service's account: Miniflux or FreshRSS. While one is connected, the
+//! service fetches the feeds and decides which feeds and folders the library has; omafeed
+//! reads them from it and keeps read and star state the same on both sides. [`backend`] says
+//! what a service offers, and [`miniflux`] and [`freshrss`] implement it; nothing else here
+//! knows which service it is.
 //!
 //! A sync ([`sync`]) works in this order:
 //!
@@ -11,18 +12,26 @@
 //!    feeds imported or given a new address since). A feed it refuses stays, showing why, and
 //!    is offered again only by a sync someone asked for ([`Trigger::Manual`]), such as an
 //!    import's.
-//! 3. Read the categories and the feeds, and the entries that changed:
+//! 3. Read the categories and the feeds, and the entries that changed. From a service that
+//!    lists changes ([`backend::StateSync::Changes`], Miniflux):
 //!    - on the first sync, every unread and every starred entry, and those published in the
 //!      last [`RECENT_DAYS`] days;
 //!    - after that, only the entries added, read, unread, starred or unstarred since the last
 //!      sync started (by the server's clock, from its `Date`; a server that does not send one
 //!      is read whole every time), which on most syncs is a handful.
+//!
+//!    From a service that gives ID sets instead ([`backend::StateSync::IdSets`], FreshRSS):
+//!    the IDs of the entries added since the last sync started (or in the last
+//!    [`RECENT_DAYS`] days, the first time), of every unread and of every starred entry, and
+//!    the entries among them the library does not have yet, each with the state the sets
+//!    give it.
 //! 4. Store all of it in one transaction ([`crate::Store`]), with each entry's read and star
 //!    state set to the server's, except where a change still waits to be sent.
-//! 5. Compare the library's unread count of each feed, and its number of starred articles,
-//!    with the server's (two small requests). Where they differ, say because the server
-//!    deleted old entries, read that feed's whole unread state, or every starred entry, and
-//!    store it as in step 4. This keeps the library right without reading everything again.
+//! 5. For a service that lists changes, compare the library's unread count of each feed, and
+//!    its number of starred articles, with the server's (two small requests). Where they
+//!    differ, say because the server deleted old entries, read that feed's whole unread
+//!    state, or every starred entry, and store it as in step 4. This keeps the library right
+//!    without reading everything again. ID sets are complete, so they need no such check.
 //! 6. Send any changes step 4 queued: local articles that became entries keep their state.
 //!
 //! The library keeps entries the server has since deleted; only a feed removed from the
@@ -46,7 +55,7 @@ use crate::{
     store::account::{Cursor, Mirror, Unread, same_url},
 };
 use anyhow::{Context, Result, anyhow};
-use backend::{Category, FeedChange, Selection};
+use backend::{Category, FeedChange, Selection, StateSync};
 use std::collections::HashSet;
 
 /// How many days back the first sync reads read, unstarred entries; unread and starred ones
@@ -421,7 +430,9 @@ async fn sync_now(db: &Db, backend: &dyn Backend, trigger: Trigger) -> Result<Re
 
     let cursor = db.call(|s| s.sync_cursor()).await?;
     let now = chrono::Utc::now().timestamp();
+    let by_changes = backend.state_sync() == StateSync::Changes;
     let mut mirror = match cursor {
+        _ if !by_changes => by_id_sets(db, backend, cursor, now).await?,
         None => everything(backend, now).await?,
         Some(cursor) => {
             let changed = backend
@@ -439,7 +450,7 @@ async fn sync_now(db: &Db, backend: &dyn Backend, trigger: Trigger) -> Result<Re
     let applied = db.call(move |s| s.mirror(&mirror)).await?;
     report.new_articles = applied.new_articles;
     report.state_changes = applied.state_changes;
-    if cursor.is_some() {
+    if cursor.is_some() && by_changes {
         repair(db, backend, now, &mut report).await?;
     }
     report.sent += send(db, backend).await?;
@@ -476,6 +487,49 @@ async fn everything(backend: &dyn Backend, now: i64) -> Result<Mirror> {
     mirror.entries.extend(starred.entries);
     mirror.entries.extend(recent.entries);
     Ok(mirror)
+}
+
+/// What a sync reads from a service that gives ID sets ([`StateSync::IdSets`]): the IDs of the
+/// entries new since the cursor (or in the last [`RECENT_DAYS`] days, the first time), of
+/// every unread and of every starred entry, and then only the entries among them the library
+/// does not have, taking their state from the sets. New IDs matter only for entries already
+/// read elsewhere; the sets bring every other.
+async fn by_id_sets(
+    db: &Db,
+    backend: &dyn Backend,
+    cursor: Option<i64>,
+    now: i64,
+) -> Result<Mirror> {
+    let since = cursor.map_or(now - RECENT_DAYS * 86_400, |cursor| cursor - OVERLAP);
+    let new = backend.new_ids(since).await?;
+    let unread = backend.unread_ids().await?;
+    let starred = backend.starred_ids().await?;
+    let wanted: Vec<i64> = new
+        .ids
+        .iter()
+        .chain(&unread)
+        .chain(&starred)
+        .copied()
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let mut missing = db.call(move |s| s.missing_entries(&wanted)).await?;
+    missing.sort_unstable();
+    let mut entries = backend.entries_by_id(&missing).await?;
+    for entry in &mut entries {
+        entry.read = !unread.contains(&entry.id);
+        entry.starred = starred.contains(&entry.id);
+    }
+    Ok(Mirror {
+        cursor: server_cursor(new.server_time),
+        entries,
+        unread: Some(Unread {
+            feeds: None,
+            entries: unread,
+        }),
+        starred: Some(starred),
+        ..Mirror::default()
+    })
 }
 
 /// Step 5 of the [module](self): read the whole state of the feeds whose counts disagree.

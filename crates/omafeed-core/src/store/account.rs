@@ -390,6 +390,18 @@ impl Store {
             .collect())
     }
 
+    /// Which of the server's entries `ids` the library has no article for.
+    pub(crate) fn missing_entries(&self, ids: &[i64]) -> Result<Vec<i64>> {
+        Ok(self
+            .conn
+            .prepare(
+                "SELECT value FROM json_each(?1)
+                 WHERE value NOT IN (SELECT remote_id FROM articles WHERE remote_id IS NOT NULL)",
+            )?
+            .query_map([serde_json::to_string(ids)?], |r| r.get(0))?
+            .collect::<Result<_, _>>()?)
+    }
+
     /// Show why the server would not take the feed `id`.
     pub(crate) fn set_feed_error(&self, id: FeedId, error: &str) -> Result<()> {
         self.conn.execute(
