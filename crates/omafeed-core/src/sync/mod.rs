@@ -92,7 +92,9 @@ pub struct Report {
 pub async fn connect(db: &Db, backend: &dyn Backend) -> Result<Report> {
     let user = backend.check().await?;
     let server = backend.server().to_owned();
-    db.call(move |s| s.begin_account(&server, &user)).await?;
+    let service = backend.service();
+    db.call(move |s| s.begin_account(service, &server, &user))
+        .await?;
     sync(db, backend, Trigger::Manual).await
 }
 
@@ -123,10 +125,14 @@ async fn sync_in_turn(db: &Db, backend: &dyn Backend, trigger: Trigger) -> Resul
     let Some(account) = db.call(|s| s.account()).await? else {
         return Err(not_connected());
     };
-    if same_url(&account.server) != same_url(backend.server()) {
+    if account.service != backend.service()
+        || same_url(&account.server) != same_url(backend.server())
+    {
         return Err(Error::Validation(format!(
-            "The library is connected to {}, not {}",
+            "The library is connected to {} at {}, not {} at {}",
+            account.service,
             account.server,
+            backend.name(),
             backend.server()
         ))
         .into());
@@ -186,7 +192,7 @@ pub async fn subscribe(
     let checked = url.clone();
     db.call(move |s| s.require_new_url(&checked, None)).await?;
     let category = category_for(db, backend, folder).await?;
-    let remote = backend.subscribe(&url, category).await?;
+    let remote = backend.subscribe(&url, category.as_deref()).await?;
     let title = title.trim().to_owned();
     let renamed = match title.is_empty() {
         true => Ok(()),
@@ -240,9 +246,17 @@ pub async fn update_feed(
     db.call(move |s| s.require_new_url(&checked, Some(id)))
         .await?;
     let title = title.trim().to_owned();
+    let new_url = same_url(&url) != same_url(&feed.url);
+    if new_url && !backend.can_change_feed_url() {
+        return Err(Error::Validation(format!(
+            "{} cannot change a feed's address; subscribe to the new one and remove this feed",
+            backend.name()
+        ))
+        .into());
+    }
     let change = FeedChange {
         title: (!title.is_empty() && title != feed.title).then(|| title.clone()),
-        feed_url: (same_url(&url) != same_url(&feed.url)).then(|| url.clone()),
+        feed_url: new_url.then(|| url.clone()),
         category: match folder == feed.folder {
             true => None,
             false => Some(category_for(db, backend, folder).await?),
@@ -279,8 +293,9 @@ pub async fn rename_category(
     let _turn = db.sync_turn().await;
     let remote = remote_category(db, backend, id).await?;
     let name = name.trim().to_owned();
-    backend.rename_category(remote, &name).await?;
-    db.call(move |s| s.rename_folder_now(id, &name)).await
+    let renamed = backend.rename_category(&remote, &name).await?;
+    db.call(move |s| s.rename_category_now(id, &name, &renamed))
+        .await
 }
 
 /// Remove the category the folder `id` is, on the server and from the library; folders
@@ -299,13 +314,18 @@ pub async fn remove_category(db: &Db, backend: &dyn Backend, id: FolderId) -> Re
         ))
         .into());
     }
-    backend.delete_category(remote).await?;
+    backend.delete_category(&remote).await?;
     db.call(move |s| s.immediate(|s| s.delete_folder_now(id)))
-        .await
+        .await?;
+    if !backend.deleting_a_category_deletes_its_feeds() {
+        // Its feeds moved to another category on the server: show them there.
+        sync_in_turn(db, backend, Trigger::Scheduled).await?;
+    }
+    Ok(())
 }
 
 /// The category the folder `id` is.
-async fn remote_category(db: &Db, backend: &dyn Backend, id: FolderId) -> Result<i64> {
+async fn remote_category(db: &Db, backend: &dyn Backend, id: FolderId) -> Result<String> {
     db.call(move |s| s.folder_remote_id(id))
         .await?
         .ok_or_else(|| {
@@ -323,7 +343,7 @@ async fn category_for(
     db: &Db,
     backend: &dyn Backend,
     folder: Option<FolderId>,
-) -> Result<Option<i64>> {
+) -> Result<Option<String>> {
     match folder {
         Some(id) => {
             let category = db.call(move |s| s.folder_remote_id(id)).await?;
@@ -345,7 +365,10 @@ async fn category_for(
 
 /// The service's top-level category among `categories`, made if need be, or `None` if feeds
 /// may have no category.
-async fn top_level(backend: &dyn Backend, categories: &mut Vec<Category>) -> Result<Option<i64>> {
+async fn top_level(
+    backend: &dyn Backend,
+    categories: &mut Vec<Category>,
+) -> Result<Option<String>> {
     match backend.top_level_category() {
         Some(title) => category_named(backend, categories, title).await.map(Some),
         None => Ok(None),
@@ -358,15 +381,15 @@ async fn category_named(
     backend: &dyn Backend,
     categories: &mut Vec<Category>,
     title: &str,
-) -> Result<i64> {
+) -> Result<String> {
     if let Some(c) = categories
         .iter()
         .find(|c| c.title.eq_ignore_ascii_case(title))
     {
-        return Ok(c.id);
+        return Ok(c.id.clone());
     }
     let created = backend.create_category(title).await?;
-    let id = created.id;
+    let id = created.id.clone();
     categories.push(created);
     Ok(id)
 }
@@ -532,7 +555,7 @@ async fn subscribe_local(
             Some(name) => Some(category_named(backend, categories, name).await?),
             None => top_level(backend, categories).await?,
         };
-        match backend.subscribe(&feed.url, category).await {
+        match backend.subscribe(&feed.url, category.as_deref()).await {
             Ok(_) => report.subscribed += 1,
             Err(e) => {
                 let reason = format!("{} would not subscribe: {e:#}", backend.name());

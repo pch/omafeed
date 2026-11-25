@@ -819,7 +819,10 @@ async fn a_failed_sync_is_recorded_on_the_account() {
         .unwrap_err();
     assert_eq!(
         error.to_string(),
-        format!("The library is connected to {base}, not https://elsewhere.example/")
+        format!(
+            "The library is connected to Miniflux at {base}, not Miniflux at \
+             https://elsewhere.example/"
+        )
     );
 }
 

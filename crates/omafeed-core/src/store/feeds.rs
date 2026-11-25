@@ -33,16 +33,16 @@ ON CONFLICT(feed_id, identity) DO UPDATE SET
     html = excluded.html,
     text = excluded.text";
 
-/// An article a Miniflux account brought, identified by its entry there, takes the identity
-/// `?2` the feed gives the item linking to `?3`, so that refreshing the feed after
-/// disconnecting updates it instead of adding a copy. Only while no account links it, and
+/// An article a synced account (Miniflux or FreshRSS) brought, identified by its entry there,
+/// takes the identity `?2` the feed gives the item linking to `?3`, so that refreshing the
+/// feed after disconnecting updates it instead of adding a copy. Only while no account links it, and
 /// only one such article, if the feed has none by that identity yet.
 const ADOPT_SYNCED_ARTICLE: &str = "
 UPDATE articles SET identity = ?2
 WHERE id = (
     SELECT id FROM articles
     WHERE feed_id = ?1 AND url = ?3 AND url <> '' AND remote_id IS NULL
-      AND identity LIKE 'miniflux:%'
+      AND (identity LIKE 'miniflux:%' OR identity LIKE 'freshrss:%')
     ORDER BY id LIMIT 1
 )
 AND NOT EXISTS (SELECT 1 FROM articles WHERE feed_id = ?1 AND identity = ?2)";

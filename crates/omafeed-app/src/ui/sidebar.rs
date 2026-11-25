@@ -952,6 +952,7 @@ mod tests {
             folders: vec![folder(1, "Category", true), folder(2, "Mine", false)],
             feeds: vec![feed(1, Some(1), "https://example.org/", 2)],
             account: Some(Account {
+                service: omafeed_core::model::Service::Miniflux,
                 server: "https://miniflux.example/".into(),
                 user_id: 1,
                 username: "reader".into(),

@@ -8,6 +8,7 @@
 //! names, for the user to enter instead.
 use super::backend::{Backend, Category, Entries, Entry, Feed, FeedChange, Selection, User};
 use crate::http::{BODY_LIMIT, Body, read_limited};
+use crate::model::Service;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use futures_util::future::BoxFuture;
@@ -155,7 +156,7 @@ where
 impl From<WireCategory> for Category {
     fn from(c: WireCategory) -> Self {
         Self {
-            id: c.id,
+            id: c.id.to_string(),
             title: c.title,
         }
     }
@@ -168,7 +169,7 @@ impl From<WireFeed> for Feed {
             title: f.title,
             feed_url: f.feed_url,
             site_url: f.site_url,
-            category: Some(f.category.id),
+            category: Some(f.category.id.to_string()),
             error: Some(f.parsing_error_message).filter(|e| !e.is_empty()),
         }
     }
@@ -202,6 +203,13 @@ struct Reply {
 struct EntryQuery {
     path: String,
     filters: Vec<(&'static str, String)>,
+}
+
+/// The Miniflux category `id`, which the library keeps as text.
+fn category_id(id: &str) -> Result<i64> {
+    id.parse().map_err(|_| {
+        crate::Error::Validation(format!("\"{id}\" is not a Miniflux category ID")).into()
+    })
 }
 
 /// Whether the version Miniflux reports is [`MIN_VERSION`] or later. A version it cannot
@@ -365,10 +373,10 @@ impl Client {
         Ok(())
     }
 
-    async fn subscribe_now(&self, url: &str, category: Option<i64>) -> Result<i64> {
+    async fn subscribe_now(&self, url: &str, category: Option<&str>) -> Result<i64> {
         let mut body = serde_json::json!({ "feed_url": url });
         if let Some(category) = category {
-            body["category_id"] = category.into();
+            body["category_id"] = category_id(category)?.into();
         }
         let reply = self.send(Method::POST, "v1/feeds", Some(&body)).await?;
         Ok(parse::<FeedCreated>(&reply, "v1/feeds")?.feed_id)
@@ -382,9 +390,9 @@ impl Client {
         if let Some(url) = &change.feed_url {
             body.insert("feed_url".into(), url.as_str().into());
         }
-        match change.category {
+        match &change.category {
             Some(Some(category)) => {
-                body.insert("category_id".into(), category.into());
+                body.insert("category_id".into(), category_id(category)?.into());
             }
             Some(None) => {
                 return Err(crate::Error::Validation(
@@ -489,8 +497,8 @@ impl Client {
 }
 
 impl Backend for Client {
-    fn name(&self) -> &'static str {
-        "Miniflux"
+    fn service(&self) -> Service {
+        Service::Miniflux
     }
 
     fn server(&self) -> &str {
@@ -556,7 +564,11 @@ impl Backend for Client {
         Box::pin(self.set_entries(ids, "starred", starred.into()))
     }
 
-    fn subscribe<'a>(&'a self, url: &'a str, category: Option<i64>) -> BoxFuture<'a, Result<i64>> {
+    fn subscribe<'a>(
+        &'a self,
+        url: &'a str,
+        category: Option<&'a str>,
+    ) -> BoxFuture<'a, Result<i64>> {
         Box::pin(self.subscribe_now(url, category))
     }
 
@@ -594,17 +606,19 @@ impl Backend for Client {
         })
     }
 
-    fn rename_category<'a>(&'a self, id: i64, title: &'a str) -> BoxFuture<'a, Result<()>> {
+    fn rename_category<'a>(&'a self, id: &'a str, title: &'a str) -> BoxFuture<'a, Result<String>> {
         Box::pin(async move {
             let body = serde_json::json!({ "title": title });
-            self.send(Method::PUT, &format!("v1/categories/{id}"), Some(&body))
+            let number = category_id(id)?;
+            self.send(Method::PUT, &format!("v1/categories/{number}"), Some(&body))
                 .await?;
-            Ok(())
+            Ok(id.to_owned())
         })
     }
 
-    fn delete_category(&self, id: i64) -> BoxFuture<'_, Result<()>> {
+    fn delete_category<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
+            let id = category_id(id)?;
             self.send(Method::DELETE, &format!("v1/categories/{id}"), None)
                 .await?;
             Ok(())
@@ -838,7 +852,7 @@ mod tests {
         assert_eq!(
             client.categories().await.unwrap(),
             vec![Category {
-                id: 1,
+                id: "1".into(),
                 title: "All".into()
             }]
         );
@@ -850,7 +864,7 @@ mod tests {
                 title: "Feed".into(),
                 feed_url: "https://example.org/feed.xml".into(),
                 site_url: "https://example.org/".into(),
-                category: Some(1),
+                category: Some("1".into()),
                 error: None,
             }
         );
@@ -949,9 +963,9 @@ mod tests {
         client.set_starred(&[42], true).await.unwrap();
         client.set_starred(&[43], false).await.unwrap();
         let category = client.create_category("News").await.unwrap();
-        assert_eq!(category.id, 4);
+        assert_eq!(category.id, "4");
         let feed = client
-            .subscribe("https://example.org/feed.xml", Some(category.id))
+            .subscribe("https://example.org/feed.xml", Some(&category.id))
             .await
             .unwrap();
         assert_eq!(feed, 12);
@@ -1033,15 +1047,15 @@ mod tests {
                 7,
                 &FeedChange {
                     title: Some("Renamed".into()),
-                    category: Some(Some(3)),
+                    category: Some(Some("3".into())),
                     ..FeedChange::default()
                 },
             )
             .await
             .unwrap();
         client.unsubscribe(7).await.unwrap();
-        client.rename_category(3, "News").await.unwrap();
-        client.delete_category(3).await.unwrap();
+        assert_eq!(client.rename_category("3", "News").await.unwrap(), "3");
+        client.delete_category("3").await.unwrap();
         assert_eq!(
             targets(&log),
             [
