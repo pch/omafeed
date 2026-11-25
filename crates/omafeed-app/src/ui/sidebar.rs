@@ -162,7 +162,7 @@ fn feeds_of(lib: &Library, scope: &Scope) -> Vec<FeedId> {
 /// The context menu of the sidebar entry for `scope`: sections of commands, each with
 /// whether it can be used now. Empty for a feed or folder no longer in the library.
 /// `refreshing` tells whether a refresh is under way, which leaves no room for another.
-/// While a Miniflux account is connected, it fetches the feeds, so there is no refreshing one
+/// While a sync account is connected, it fetches the feeds, so there is no refreshing one
 /// alone, and feeds are added only to its categories.
 fn menu(scope: &Scope, lib: &Library, refreshing: bool) -> Vec<Vec<(Command, bool)>> {
     // Smart views other than All Unread show no count, so they may always have unread ones.
@@ -228,7 +228,7 @@ fn menu(scope: &Scope, lib: &Library, refreshing: bool) -> Vec<Vec<(Command, boo
 /// Where dropping `dragged` on the sidebar entry `onto` moves it: into the folder dropped on,
 /// into the folder of the feed dropped on, or to the top level when dropped on a smart view
 /// or below the last entry. `None` if it would stay where it is, if a folder would go
-/// inside itself, or if a feed would leave the categories of a connected Miniflux account.
+/// inside itself, or if a feed would leave the categories of the connected account.
 fn destination(lib: &Library, dragged: &Scope, onto: Option<&Scope>) -> Option<Option<FolderId>> {
     let target = match onto {
         Some(Scope::Folder(id)) => Some(*id),
@@ -765,6 +765,7 @@ mod tests {
             last_attempt: None,
             failures: 0,
             revision: 0,
+            remote: false,
         }
     }
 

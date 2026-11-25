@@ -1,5 +1,5 @@
 $ omafeed account status
 exit: 0
 --- stdout
-No Miniflux account is connected
+No sync account is connected
 --- stderr

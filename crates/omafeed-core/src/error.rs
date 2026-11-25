@@ -16,7 +16,7 @@ pub enum Error {
     /// The library was written by a newer omafeed, whose schema this one does not know.
     #[error("Database was created by a newer omafeed version")]
     NewerDatabase,
-    /// The library mirrors an account (such as Miniflux), which decides its feeds and
+    /// The library mirrors an account (Miniflux or FreshRSS), which decides its feeds and
     /// categories; change them through [`crate::sync`] (or [`crate::subscriptions`] with its
     /// backend), or disconnect first.
     #[error(

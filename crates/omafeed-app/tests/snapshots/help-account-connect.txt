@@ -1,17 +1,26 @@
 $ omafeed account connect --help
 exit: 0
 --- stdout
-Mirror a Miniflux account, reading its API key from standard input
+Mirror a Miniflux or FreshRSS account, reading its secret from standard input
 
-Miniflux then fetches the feeds and decides which feeds and folders there are, and omafeed syncs read and star state with it. Your feeds Miniflux does not have are subscribed there, and articles it has too keep their read and star state. The API key (in Miniflux: Settings, API Keys) is read from standard input, or from OMAFEED_MINIFLUX_TOKEN, and kept in the keyring.
+The server then fetches the feeds and decides which feeds and folders there are, and omafeed syncs read and star state with it. Your feeds the server does not have are subscribed there, and articles it has too keep their read and star state. The secret is read from standard input, or from OMAFEED_SYNC_TOKEN, and kept in the keyring: for Miniflux an API key (Settings, API Keys), for FreshRSS the API password (Settings, Profile, API management, once API access is allowed under Settings, Authentication).
 
-Usage: omafeed account connect <SERVER>
+Usage: omafeed account connect [OPTIONS] <SERVER>
 
 Arguments:
   <SERVER>
-          The server's address, e.g. https://miniflux.example.org
+          The server's address, e.g. https://miniflux.example.org; for FreshRSS also its API address (https://freshrss.example.org/api/greader.php)
 
 Options:
+      --service <SERVICE>
+          The service the server runs
+          
+          [default: miniflux]
+          [possible values: miniflux, freshrss]
+
+      --username <USERNAME>
+          The user name to sign in with (FreshRSS)
+
   -h, --help
           Print help (see a summary with '-h')
 --- stderr

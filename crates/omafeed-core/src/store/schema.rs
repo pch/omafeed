@@ -101,8 +101,8 @@ CREATE TABLE meta(
 INSERT INTO meta(id, next_revision) VALUES(1, (SELECT COALESCE(max(id), 0) + 1 FROM feeds));
 ";
 
-/// While an `account` row exists, Miniflux owns the library: `remote_id` is what a feed
-/// (Miniflux feed), folder (category) or article (entry) is on the server, or NULL for one it
+/// While an `account` row exists, the sync server owns the library: `remote_id` is what a feed
+/// (feed), folder (category) or article (entry) is on the server, or NULL for one it
 /// does not have. Changing the read or star state of an article with a `remote_id` queues the
 /// new value in `outbox`, in the same statement, whichever code made the change; the sync
 /// sends it and clears it. One row per article and field, so the newest value replaces an

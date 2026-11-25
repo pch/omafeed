@@ -16,7 +16,8 @@ fn library_feeds(visible: &str) -> String {
         "SELECT f.id, f.folder, f.title, f.url, f.site_url,
                 (SELECT count(*) FROM articles a JOIN article_state s ON s.article_id = a.id
                  WHERE a.feed_id = f.id AND s.read = 0{visible}),
-                f.error, f.etag, f.modified, f.next_fetch, f.failures, f.revision, f.last_attempt
+                f.error, f.etag, f.modified, f.next_fetch, f.failures, f.revision, f.last_attempt,
+                f.remote_id IS NOT NULL
          FROM feeds f
          ORDER BY f.title COLLATE NOCASE"
     )
@@ -104,6 +105,7 @@ impl Store {
                     failures: r.get(10)?,
                     revision: r.get(11)?,
                     last_attempt: r.get(12)?,
+                    remote: r.get(13)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -130,7 +132,7 @@ impl Store {
     /// Subscribe to `url` as `title` (the URL if empty) in `folder`. Fails with
     /// [`Error::DuplicateFeed`] if the library already has the URL, and with
     /// [`Error::Validation`] for a URL that is not HTTP(S) or a bad name. Like every change to
-    /// the feeds, fails with [`Error::Managed`] while a Miniflux account is connected:
+    /// the feeds, fails with [`Error::Managed`] while a sync account is connected:
     /// [`crate::sync::subscribe`] adds them then.
     pub fn add_feed(&self, title: &str, url: &str, folder: Option<FolderId>) -> Result<FeedId> {
         let url = validate_url(url)?;
@@ -154,7 +156,7 @@ impl Store {
     /// Rename a feed, move it to `folder`, and set its URL. A new URL keeps the feed's articles
     /// but clears its validators, website, schedule and error, and gives it a new revision;
     /// fails with [`Error::DuplicateFeed`] if another feed has it, and with [`Error::Managed`]
-    /// for a feed of the connected Miniflux account.
+    /// for a feed of the connected sync account.
     pub fn update_feed(
         &self,
         id: FeedId,
@@ -169,7 +171,7 @@ impl Store {
     }
 
     /// [`Store::update_feed`], whoever decides the feed: for mirroring a change made on the
-    /// Miniflux server.
+    /// sync server.
     pub(crate) fn update_feed_now(
         &self,
         id: FeedId,
@@ -213,14 +215,14 @@ impl Store {
     }
 
     /// Remove a feed and all its articles, starred ones included. Fails with
-    /// [`Error::Managed`] for a feed of the connected Miniflux account.
+    /// [`Error::Managed`] for a feed of the connected sync account.
     pub fn delete_feed(&self, id: FeedId) -> Result<()> {
         self.require_local_feed(id)?;
         self.delete_feed_now(id)
     }
 
     /// [`Store::delete_feed`], whoever decides the feed: for mirroring a feed removed from
-    /// the Miniflux server.
+    /// the sync server.
     pub(crate) fn delete_feed_now(&self, id: FeedId) -> Result<()> {
         self.conn.execute("DELETE FROM feeds WHERE id = ?1", [id])?;
         self.articles_changed();
@@ -329,13 +331,13 @@ impl Store {
     /// Add the subscriptions and folders of an OPML document in one transaction. Feeds already
     /// subscribed are skipped, entries that cannot be used are reported and skipped, and
     /// folders of the same name are reused; a document that cannot be read adds nothing.
-    /// Fails with [`Error::Managed`] while a Miniflux account is connected; then
+    /// Fails with [`Error::Managed`] while a sync account is connected; then
     /// [`crate::subscriptions::import`] sends the subscriptions to it.
     pub fn import(&self, text: &str) -> Result<ImportReport> {
         self.import_with(text, true)
     }
 
-    /// [`Store::import`], even while a Miniflux account is connected: the feeds are the
+    /// [`Store::import`], even while a sync account is connected: the feeds are the
     /// library's own until a sync sends them to the server.
     pub(crate) fn import_now(&self, text: &str) -> Result<ImportReport> {
         self.import_with(text, false)

@@ -51,7 +51,7 @@ pub struct Folder {
     pub parent: Option<FolderId>,
     /// Unique among its siblings, trimmed, 1–300 bytes.
     pub name: String,
-    /// Whether it is a category of the connected Miniflux account, which names and removes
+    /// Whether it is a category of the connected sync account, which names and removes
     /// it; folders of one's own, to arrange categories in, are not.
     pub remote: bool,
 }
@@ -88,6 +88,9 @@ pub struct Feed {
     /// when its URL changes. A refresh that started earlier must not store anything once it
     /// differs, even if the ID was reused for a new feed.
     pub revision: i64,
+    /// Whether it is a feed of the connected account, which fetches it; feeds the server
+    /// would not take are the library's own.
+    pub remote: bool,
 }
 
 impl Feed {
@@ -540,6 +543,7 @@ mod tests {
             last_attempt: None,
             failures: 0,
             revision: 0,
+            remote: false,
         }
     }
 

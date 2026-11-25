@@ -56,7 +56,7 @@ impl Store {
     }
 
     /// Where to fetch the article `id` in full from: its web page, its feed's address (which
-    /// decides whether the page may be on the local network), its entry on the Miniflux
+    /// decides whether the page may be on the local network), its entry on the sync
     /// server, if it is one, and its identity in its feed, for [`Store::keep_full_article`].
     pub(crate) fn full_article_source(&self, id: ArticleId) -> Result<FullArticleSource> {
         self.conn

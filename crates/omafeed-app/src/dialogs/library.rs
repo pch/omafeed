@@ -6,13 +6,13 @@ use gtk::glib;
 use omafeed_core::{
     Error,
     ingest::{Which, discovery::Candidate},
-    model::{FeedId, FolderId, Library, Scope, TreeItem},
+    model::{FeedId, FolderId, Library, Scope, Service, TreeItem},
     subscriptions, sync,
 };
 use std::rc::Rc;
 
 /// Folder choices as (id, "Parent / Child" path), starting with the top level. While a
-/// Miniflux account is connected, feeds go only into its categories (`categories_only`).
+/// sync account is connected, feeds go only into its categories (`categories_only`).
 fn folder_paths(lib: &Library, categories_only: bool) -> Vec<(Option<FolderId>, String)> {
     let mut out = vec![(None, "Top level".into())];
     if categories_only {
@@ -43,7 +43,7 @@ struct FolderPicker {
 
 impl FolderPicker {
     /// A folder choice in `group`, leaving out `except` and the folders inside it, where a
-    /// folder cannot go. A feed's choice (`for_feed`) holds only categories while a Miniflux
+    /// folder cannot go. A feed's choice (`for_feed`) holds only categories while a sync
     /// account is connected.
     fn new(
         form: &Form,
@@ -117,32 +117,51 @@ pub fn remove(u: Rc<Ui>, scope: Scope) {
 
 /// Ask, then remove a feed or folder. Returns whether it is gone.
 async fn remove_confirmed(u: &Rc<Ui>, window: &adw::ApplicationWindow, scope: Scope) -> bool {
-    let remote = {
+    let (remote, service) = {
         let lib = u.library.borrow();
-        match scope {
+        let remote = match scope {
             Scope::Folder(id) => lib.folder(id).is_some_and(|f| f.remote),
             _ => lib.account.is_some(),
-        }
+        };
+        (remote, lib.account.as_ref().map(|a| a.service))
     };
-    let (heading, body) = match (&scope, remote) {
-        (Scope::Folder(_), false) => (
-            "Remove folder?",
-            "Feeds and child folders will move to its parent. Your articles and read state are kept.",
-        ),
-        (Scope::Folder(_), true) => (
+    let (heading, body) = match (&scope, remote, service) {
+        (Scope::Folder(_), true, Some(Service::FreshRss)) => (
             "Remove category?",
-            "This removes the category from Miniflux too, once it holds no feeds. Folders inside it move to its parent.",
+            "This removes the category from FreshRSS too; its feeds move to FreshRSS's default \
+             category. Folders inside it move to its parent."
+                .to_owned(),
         ),
-        (_, false) => (
-            "Remove subscription?",
-            "This removes the feed and its downloaded articles, stars, and read state from omafeed.",
+        (Scope::Folder(_), true, service) => (
+            "Remove category?",
+            format!(
+                "This removes the category from {} too, once it holds no feeds. Folders inside \
+                 it move to its parent.",
+                service.unwrap_or_default()
+            ),
         ),
-        (_, true) => (
+        (Scope::Folder(_), false, _) => (
+            "Remove folder?",
+            "Feeds and child folders will move to its parent. Your articles and read state are \
+             kept."
+                .to_owned(),
+        ),
+        (_, false, _) => (
             "Remove subscription?",
-            "This unsubscribes Miniflux from the feed, deleting its entries there, and removes its articles, stars, and read state from omafeed.",
+            "This removes the feed and its downloaded articles, stars, and read state from \
+             omafeed."
+                .to_owned(),
+        ),
+        (_, true, service) => (
+            "Remove subscription?",
+            format!(
+                "This unsubscribes {} from the feed, deleting its entries there, and removes its \
+                 articles, stars, and read state from omafeed.",
+                service.unwrap_or_default()
+            ),
         ),
     };
-    if !confirm(window, heading, body).await {
+    if !confirm(window, heading, &body).await {
         return false;
     }
     let result = match scope {
@@ -183,11 +202,12 @@ async fn edit_folder(
     id: Option<FolderId>,
     parent: Option<FolderId>,
 ) {
-    let (name, parent, remote) = {
+    let (name, parent, remote, service) = {
         let lib = u.library.borrow();
+        let service = lib.account.as_ref().map(|a| a.service).unwrap_or_default();
         match id.and_then(|id| lib.folder(id)) {
-            Some(f) => (f.name.clone(), f.parent, f.remote),
-            None => (String::new(), parent, false),
+            Some(f) => (f.name.clone(), f.parent, f.remote, service),
+            None => (String::new(), parent, false, service),
         }
     };
     let form = match id {
@@ -195,10 +215,10 @@ async fn edit_folder(
         None => Form::new(window, "New folder", "Create"),
     };
     if remote {
-        form.note(
-            "This folder is a category in Miniflux, renamed there too. Where it sits among your \
-             folders is yours alone.",
-        );
+        form.note(&format!(
+            "This folder is a category in {service}, renamed there too. Where it sits among \
+             your folders is yours alone."
+        ));
     }
     let name_entry = form.entry("Name", &name);
     let picker = FolderPicker::new(&form, &u.library.borrow(), parent, id, false);
@@ -240,11 +260,19 @@ async fn edit_feed(
     id: Option<FeedId>,
     parent: Option<FolderId>,
 ) {
-    let (title, original_url, parent) = {
+    let (title, original_url, parent, fixed_url) = {
         let lib = u.library.borrow();
+        // FreshRSS cannot change the address of a feed it has.
+        let fixed = |remote: bool| {
+            remote
+                && lib
+                    .account
+                    .as_ref()
+                    .is_some_and(|a| a.service == Service::FreshRss)
+        };
         match id.and_then(|id| lib.feed(id)) {
-            Some(f) => (f.title.clone(), f.url.clone(), f.folder),
-            None => (String::new(), String::new(), parent),
+            Some(f) => (f.title.clone(), f.url.clone(), f.folder, fixed(f.remote)),
+            None => (String::new(), String::new(), parent, false),
         }
     };
     let form = match id {
@@ -266,6 +294,15 @@ async fn edit_feed(
         Some(_) => {
             let name = form.entry("Name", &title);
             let url = form.entry("Feed address", &original_url);
+            if fixed_url {
+                url.set_editable(false);
+                url.set_can_focus(false);
+                url.add_css_class("dim-label");
+                form.note(
+                    "FreshRSS cannot change a feed's address. To use another, add it as a new \
+                     feed and remove this one.",
+                );
+            }
             (url, name)
         }
     };
@@ -309,7 +346,7 @@ async fn edit_feed(
             Ok(feed) => {
                 // While connected, the change synced the feed already.
                 let local = u.library.borrow().account.is_none();
-                // Show where it ended up: Miniflux puts top-level feeds in a category.
+                // Show where it ended up: the server may put top-level feeds in a category.
                 let folder =
                     u.db.call(move |s| Ok(s.library()?.feed(feed).and_then(|f| f.folder)))
                         .await

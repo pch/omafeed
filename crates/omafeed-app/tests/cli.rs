@@ -443,6 +443,28 @@ fn bad_input_fails_with_a_message_and_the_right_exit_code() {
     cli.fails(&["unread", "999"], 1, "No article with id 999");
     cli.fails(&["unsubscribe", "999", "--yes"], 1, "No feed with id 999");
     cli.fails(&["subscribe", "ftp://example.org/feed"], 1, "");
+    cli.fails(
+        &[
+            "account",
+            "connect",
+            "--service",
+            "tt-rss",
+            "https://example.org",
+        ],
+        2,
+        "possible values: miniflux, freshrss",
+    );
+    cli.fails(
+        &[
+            "account",
+            "connect",
+            "--service",
+            "freshrss",
+            "https://example.org",
+        ],
+        1,
+        "FreshRSS needs the user name to sign in with: add --username NAME",
+    );
 }
 
 #[test]

@@ -1,6 +1,6 @@
 //! The full article, for feeds that give only a summary: fetched from the article's web page
 //! on request, with its main text found the way Firefox's Reader View finds it, and kept
-//! beside the feed's version, which a refresh may still update. While a Miniflux account is
+//! beside the feed's version, which a refresh may still update. While a sync account is
 //! connected, the server fetches its entries instead if it can, as Miniflux does with the
 //! scraper rules and cookies set for each feed there.
 use crate::{
