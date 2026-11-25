@@ -2,4 +2,4 @@ $ omafeed sync
 exit: 1
 --- stdout
 --- stderr
-omafeed: No Miniflux account is connected; connect one with `omafeed account connect`
+omafeed: No sync account is connected; connect one with `omafeed account connect`

@@ -6,7 +6,7 @@
 use super::Store;
 use crate::{
     Error, content,
-    model::{Account, ArticleId, FeedId, FolderId},
+    model::{Account, ArticleId, FeedId, FolderId, Service},
     sync::backend::{Category, Entry, Feed, User},
     util::{escape, validate_url},
 };
@@ -119,11 +119,19 @@ impl Store {
             .conn
             .query_row(
                 "SELECT server, user_id, username, last_sync, last_attempt, error,
-                        (SELECT count(*) FROM outbox)
+                        (SELECT count(*) FROM outbox), service
                  FROM account WHERE id = 1",
                 [],
                 |r| {
+                    let service: String = r.get(7)?;
                     Ok(Account {
+                        service: service.parse().map_err(|e| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                7,
+                                rusqlite::types::Type::Text,
+                                Box::new(e),
+                            )
+                        })?,
                         server: r.get(0)?,
                         user_id: r.get(1)?,
                         username: r.get(2)?,
@@ -179,7 +187,7 @@ impl Store {
     }
 
     /// The category the folder `id` is, or `None` if it is one of the user's own (or gone).
-    pub(crate) fn folder_remote_id(&self, id: FolderId) -> Result<Option<i64>> {
+    pub(crate) fn folder_remote_id(&self, id: FolderId) -> Result<Option<String>> {
         Ok(self
             .conn
             .query_row("SELECT remote_id FROM folders WHERE id = ?1", [id], |r| {
@@ -244,8 +252,22 @@ impl Store {
         Ok(())
     }
 
-    /// Start mirroring the account `user` on `server`. Fails if one is connected already.
-    pub(crate) fn begin_account(&self, server: &str, user: &User) -> Result<()> {
+    /// Rename the folder `id`, a category, to `name`, and link it to the category's ID
+    /// `remote` (which is its name for some services).
+    pub(crate) fn rename_category_now(&self, id: FolderId, name: &str, remote: &str) -> Result<()> {
+        self.immediate(|s| {
+            s.rename_folder_now(id, name)?;
+            s.conn.execute(
+                "UPDATE folders SET remote_id = ?1 WHERE id = ?2",
+                params![remote, id],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Start mirroring the account `user` of `service` on `server`. Fails if one is
+    /// connected already.
+    pub(crate) fn begin_account(&self, service: Service, server: &str, user: &User) -> Result<()> {
         self.immediate(|s| {
             if let Some(account) = s.account()? {
                 return Err(Error::Validation(format!(
@@ -255,8 +277,9 @@ impl Store {
                 .into());
             }
             s.conn.execute(
-                "INSERT INTO account(id, server, user_id, username) VALUES(1, ?1, ?2, ?3)",
-                params![server, user.id, user.username],
+                "INSERT INTO account(id, server, user_id, username, service)
+                 VALUES(1, ?1, ?2, ?3, ?4)",
+                params![server, user.id, user.username, service.key()],
             )?;
             Ok(())
         })
@@ -367,6 +390,18 @@ impl Store {
             .collect())
     }
 
+    /// Which of the server's entries `ids` the library has no article for.
+    pub(crate) fn missing_entries(&self, ids: &[i64]) -> Result<Vec<i64>> {
+        Ok(self
+            .conn
+            .prepare(
+                "SELECT value FROM json_each(?1)
+                 WHERE value NOT IN (SELECT remote_id FROM articles WHERE remote_id IS NOT NULL)",
+            )?
+            .query_map([serde_json::to_string(ids)?], |r| r.get(0))?
+            .collect::<Result<_, _>>()?)
+    }
+
     /// Show why the server would not take the feed `id`.
     pub(crate) fn set_feed_error(&self, id: FeedId, error: &str) -> Result<()> {
         self.conn.execute(
@@ -389,6 +424,11 @@ impl Store {
     }
 
     fn mirror_now(&self, mirror: &Mirror) -> Result<Applied> {
+        let service: String = self
+            .conn
+            .query_row("SELECT service FROM account", [], |r| r.get(0))
+            .optional()?
+            .unwrap_or_else(|| Service::default().key().to_owned());
         if let Some((categories, feeds)) = &mirror.tree {
             let folders = self.apply_categories(categories)?;
             self.apply_feeds(feeds, &folders)?;
@@ -408,7 +448,7 @@ impl Store {
             if !seen.insert(entry.id) {
                 continue;
             }
-            match self.store_entry(*feed, entry, site, mirror.now)? {
+            match self.store_entry(*feed, entry, site, &service, mirror.now)? {
                 Stored::Adopted => {}
                 Stored::New(id) => {
                     added.insert(id);
@@ -478,7 +518,7 @@ impl Store {
     /// to the category is renamed to match; otherwise one of the user's folders with its name
     /// becomes it, wherever it is nested, or a new top-level one is made. Folders of
     /// categories gone from the server are removed as [`Store::delete_folder`] removes them.
-    fn apply_categories(&self, categories: &[Category]) -> Result<HashMap<i64, FolderId>> {
+    fn apply_categories(&self, categories: &[Category]) -> Result<HashMap<String, FolderId>> {
         let conn = &self.conn;
         let mut map = HashMap::new();
         for c in categories {
@@ -486,7 +526,7 @@ impl Store {
             let linked: Option<(FolderId, Option<FolderId>, String)> = conn
                 .query_row(
                     "SELECT id, parent, name FROM folders WHERE remote_id = ?1",
-                    [c.id],
+                    [&c.id],
                     |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
                 )
                 .optional()?;
@@ -510,20 +550,20 @@ impl Store {
             {
                 conn.execute(
                     "UPDATE folders SET remote_id = ?1 WHERE id = ?2",
-                    params![c.id, id],
+                    params![&c.id, id],
                 )?;
                 id
             } else {
                 let name = self.free_folder_name(None, title, None)?;
                 conn.execute(
                     "INSERT INTO folders(name, parent, remote_id) VALUES(?1, NULL, ?2)",
-                    params![name, c.id],
+                    params![name, &c.id],
                 )?;
                 FolderId(conn.last_insert_rowid())
             };
-            map.insert(c.id, id);
+            map.insert(c.id.clone(), id);
         }
-        let ids: Vec<i64> = categories.iter().map(|c| c.id).collect();
+        let ids: Vec<&str> = categories.iter().map(|c| c.id.as_str()).collect();
         let gone = conn
             .prepare(
                 "SELECT id FROM folders WHERE remote_id IS NOT NULL
@@ -560,12 +600,12 @@ impl Store {
 
     /// The server's feeds, in the folders of their categories. Feeds the server dropped are
     /// removed with their articles; feeds it does not know and never had stay.
-    fn apply_feeds(&self, feeds: &[Feed], folders: &HashMap<i64, FolderId>) -> Result<()> {
+    fn apply_feeds(&self, feeds: &[Feed], folders: &HashMap<String, FolderId>) -> Result<()> {
         let conn = &self.conn;
         for f in feeds {
             let url = same_url(&f.feed_url);
             let title = Self::name(&f.title).unwrap_or(url.as_str()).to_owned();
-            let folder = f.category.and_then(|c| folders.get(&c).copied());
+            let folder = f.category.as_ref().and_then(|c| folders.get(c).copied());
             let site = validate_url(&f.site_url).unwrap_or_default();
             let linked: Option<FeedId> = conn
                 .query_row("SELECT id FROM feeds WHERE remote_id = ?1", [f.id], |r| {
@@ -630,10 +670,17 @@ impl Store {
         Ok(())
     }
 
-    /// Store `entry` in `feed` (whose website is `site`) unless the library has it. A local
-    /// article with the same link becomes the entry, and its read and star state, where it
-    /// differs from the server's, is queued to be sent.
-    fn store_entry(&self, feed: FeedId, entry: &Entry, site: &str, now: i64) -> Result<Stored> {
+    /// Store `entry` in `feed` (whose website is `site`) unless the library has it, with the
+    /// identity `service:ID`. A local article with the same link becomes the entry, and its
+    /// read and star state, where it differs from the server's, is queued to be sent.
+    fn store_entry(
+        &self,
+        feed: FeedId,
+        entry: &Entry,
+        site: &str,
+        service: &str,
+        now: i64,
+    ) -> Result<Stored> {
         let conn = &self.conn;
         let known: Option<ArticleId> = conn
             .query_row(
@@ -682,6 +729,16 @@ impl Store {
         }
         let mut body = entry.html.clone();
         for enclosure in &entry.enclosures {
+            // Some services (FreshRSS) already link attachments in the content: skip one
+            // the content names as a whole attribute value.
+            let quoted = |url: &str| [format!("\"{url}\""), format!("'{url}'")];
+            if quoted(enclosure)
+                .into_iter()
+                .chain(quoted(&escape(enclosure)))
+                .any(|q| entry.html.contains(&q))
+            {
+                continue;
+            }
             if let Some(href) = crate::util::resolve_http(&url, enclosure) {
                 body.push_str(&format!(
                     "<p><a href=\"{}\">Download attachment</a></p>",
@@ -700,7 +757,7 @@ impl Store {
              ON CONFLICT(feed_id, identity) DO UPDATE SET remote_id = excluded.remote_id",
             params![
                 feed,
-                format!("miniflux:{}", entry.id),
+                format!("{service}:{}", entry.id),
                 title,
                 url,
                 content::one_line(&entry.author),

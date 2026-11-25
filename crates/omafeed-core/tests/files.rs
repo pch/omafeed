@@ -5,7 +5,7 @@
 use omafeed_core::{
     Paths, Settings, Store,
     config::Theme,
-    model::{ArticleId, FeedId, FolderId, Query, Scope},
+    model::{ArticleId, FeedId, FolderId, Query, Scope, Service},
 };
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
@@ -150,6 +150,68 @@ fn databases_from_every_schema_version_open_with_their_library_intact() {
             ("Links", "Ann", 1704067200)
         );
     }
+}
+
+/// A library with a connected Miniflux account keeps its folders, their nesting, the feeds in
+/// them, the account and its unsent change, and its category IDs become text.
+#[test]
+fn a_connected_library_keeps_its_folders_and_account_through_the_upgrades() {
+    let dir = tempfile::tempdir().unwrap();
+    let fresh = dir.path().join("fresh.db");
+    drop(Store::open(&fresh).unwrap());
+    let path = historical_database(dir.path(), 7);
+    let s = Store::open(&path).unwrap();
+    assert_eq!(user_version(&path), user_version(&fresh));
+    assert_eq!(
+        schema(&Connection::open(&path).unwrap()),
+        schema(&Connection::open(&fresh).unwrap())
+    );
+
+    let lib = s.library().unwrap();
+    let folders: Vec<_> = lib
+        .folders
+        .iter()
+        .map(|f| (f.id, f.parent, f.name.as_str(), f.remote))
+        .collect();
+    assert_eq!(
+        folders,
+        [
+            (FolderId(2), Some(FolderId(1)), "Sub", false),
+            (FolderId(1), None, "Work", true)
+        ]
+    );
+    let folder_of = |id| {
+        lib.feeds
+            .iter()
+            .find(|f| f.id == FeedId(id))
+            .unwrap()
+            .folder
+    };
+    assert_eq!(folder_of(1), Some(FolderId(2)));
+    assert_eq!(folder_of(2), None);
+    assert_eq!(folder_of(3), Some(FolderId(1)));
+    let account = lib.account.unwrap();
+    assert_eq!(account.service, Service::Miniflux);
+    assert_eq!(
+        (
+            account.server.as_str(),
+            account.user_id,
+            account.username.as_str()
+        ),
+        ("https://miniflux.example/", 3, "ann")
+    );
+    assert_eq!(account.unsent, 1);
+    assert_eq!(s.article(ArticleId(4)).unwrap().title, "Remote");
+
+    let conn = Connection::open(&path).unwrap();
+    let remote: (String, String) = conn
+        .query_row(
+            "SELECT remote_id, typeof(remote_id) FROM folders WHERE id = 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(remote, ("12".to_owned(), "text".to_owned()));
 }
 
 #[test]

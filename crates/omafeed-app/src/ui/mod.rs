@@ -86,7 +86,7 @@ impl Header {
             ("Import OPML…", "win.import"),
             ("Export OPML…", "win.export"),
             ("Content filters…", "win.filters"),
-            ("Miniflux account…", "win.account"),
+            ("Sync account…", "win.account"),
             ("Settings…", "win.settings"),
             ("Keyboard shortcuts", "win.shortcuts"),
             ("About omafeed", "win.about"),
@@ -528,8 +528,9 @@ impl Ui {
                         // Read the library first: a sync may have connected or ended it.
                         u.load_library().await;
                         let feeds = if total == 1 { "feed" } else { "feeds" };
-                        let mut tip = if u.library.borrow().account.is_some() {
-                            format!("Synced {total} {feeds} with Miniflux at {time}")
+                        let service = u.library.borrow().account.as_ref().map(|a| a.service);
+                        let mut tip = if let Some(service) = service {
+                            format!("Synced {total} {feeds} with {service} at {time}")
                         } else {
                             format!("Refreshed {total} {feeds} at {time}")
                         };
@@ -559,8 +560,9 @@ impl Ui {
         if !refresh.child().is_some_and(|c| c.is::<adw::Spinner>()) {
             refresh.set_child(Some(&adw::Spinner::new()));
         }
-        let tip = if self.library.borrow().account.is_some() {
-            "Syncing with Miniflux…".to_owned()
+        let service = self.library.borrow().account.as_ref().map(|a| a.service);
+        let tip = if let Some(service) = service {
+            format!("Syncing with {service}…")
         } else {
             format!("Refreshing feeds · {done} of {total}")
         };
@@ -868,7 +870,7 @@ impl Ui {
     }
 
     /// Change the feeds or folders with `change`, given the library's database and, while a
-    /// Miniflux account is connected, the client for it, which makes the change on the
+    /// sync account is connected, the client for it, which makes the change on the
     /// server first. Runs on the tokio runtime.
     pub async fn change_library<T: Send + 'static, F>(
         &self,
@@ -896,7 +898,7 @@ impl Ui {
         let (err_tx, err_rx) = async_channel::bounded(1);
         self.runtime.spawn(async move {
             let result = match db.call(|s| s.account()).await {
-                // While an account is connected, Miniflux fetches the feeds: sync instead,
+                // While an account is connected, its server fetches the feeds: sync instead,
                 // as often as feeds would be refreshed, or whenever asked to.
                 Ok(Some(account)) => {
                     let now = chrono::Utc::now().timestamp();
@@ -930,7 +932,7 @@ async fn sync_with_progress(
     events: &async_channel::Sender<Progress>,
 ) -> anyhow::Result<()> {
     use omafeed_core::sync::Trigger;
-    // Feeds Miniflux refused are offered again only when someone asks for a refresh.
+    // Feeds the server refused are offered again only when someone asks for a refresh.
     let trigger = match which {
         Which::Due => Trigger::Scheduled,
         _ => Trigger::Manual,
@@ -939,7 +941,7 @@ async fn sync_with_progress(
     let result = async {
         let client = crate::account::client(db)
             .await?
-            .ok_or_else(|| anyhow::anyhow!("No Miniflux account is connected"))?;
+            .ok_or_else(|| anyhow::anyhow!("No sync account is connected"))?;
         omafeed_core::sync::sync(db, client.as_ref(), trigger).await
     }
     .await;

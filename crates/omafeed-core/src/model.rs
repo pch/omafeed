@@ -51,7 +51,7 @@ pub struct Folder {
     pub parent: Option<FolderId>,
     /// Unique among its siblings, trimmed, 1–300 bytes.
     pub name: String,
-    /// Whether it is a category of the connected Miniflux account, which names and removes
+    /// Whether it is a category of the connected sync account, which names and removes
     /// it; folders of one's own, to arrange categories in, are not.
     pub remote: bool,
 }
@@ -88,6 +88,9 @@ pub struct Feed {
     /// when its URL changes. A refresh that started earlier must not store anything once it
     /// differs, even if the ID was reused for a new feed.
     pub revision: i64,
+    /// Whether it is a feed of the connected account, which fetches it; feeds the server
+    /// would not take are the library's own.
+    pub remote: bool,
 }
 
 impl Feed {
@@ -238,13 +241,69 @@ pub struct ImportReport {
     pub invalid: Vec<String>,
 }
 
-/// The account the library mirrors, if one is connected. While it is, the service (Miniflux)
-/// fetches the feeds and decides which feeds and folders there are; omafeed syncs with it.
+/// A sync service the library can mirror.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Service {
+    /// [Miniflux](https://miniflux.app), through its REST API.
+    #[default]
+    Miniflux,
+    /// [FreshRSS](https://freshrss.org), through its Google Reader API.
+    FreshRss,
+}
+
+impl Service {
+    /// Every service, the default first.
+    pub const ALL: [Service; 2] = [Service::Miniflux, Service::FreshRss];
+
+    /// How the library and the command line write it: `miniflux` or `freshrss`.
+    pub fn key(self) -> &'static str {
+        match self {
+            Service::Miniflux => "miniflux",
+            Service::FreshRss => "freshrss",
+        }
+    }
+
+    /// Its name, for messages: "Miniflux" or "FreshRSS".
+    pub fn name(self) -> &'static str {
+        match self {
+            Service::Miniflux => "Miniflux",
+            Service::FreshRss => "FreshRSS",
+        }
+    }
+}
+
+impl std::fmt::Display for Service {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+impl std::str::FromStr for Service {
+    type Err = crate::Error;
+
+    /// Reads [`Service::key`], ignoring case.
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        Service::ALL
+            .into_iter()
+            .find(|s| s.key().eq_ignore_ascii_case(text.trim()))
+            .ok_or_else(|| {
+                crate::Error::Validation(format!(
+                    "Unknown sync service \"{text}\"; use miniflux or freshrss"
+                ))
+            })
+    }
+}
+
+/// The account the library mirrors, if one is connected. While it is, the service (Miniflux
+/// or FreshRSS) fetches the feeds and decides which feeds and folders there are; omafeed
+/// syncs with it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Account {
+    /// The service the server runs.
+    pub service: Service,
     /// The server's address, ending in `/`.
     pub server: String,
-    /// The user's ID on the server.
+    /// The user's ID on the server, or 0 for a service without numeric IDs (FreshRSS).
     pub user_id: i64,
     /// The name the user signs in with.
     pub username: String,
@@ -278,7 +337,7 @@ pub struct Library {
     pub unread: i64,
     /// Starred articles in the whole library.
     pub starred: i64,
-    /// The Miniflux account the library mirrors, if one is connected.
+    /// The account the library mirrors, if one is connected.
     pub account: Option<Account>,
 }
 
@@ -444,6 +503,7 @@ mod tests {
     #[test]
     fn account_sync_is_due_once_the_interval_passes() {
         let mut account = Account {
+            service: Service::Miniflux,
             server: "https://miniflux.example/".into(),
             user_id: 1,
             username: "reader".into(),
@@ -483,6 +543,7 @@ mod tests {
             last_attempt: None,
             failures: 0,
             revision: 0,
+            remote: false,
         }
     }
 

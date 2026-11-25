@@ -1,4 +1,4 @@
-//! Modal dialogs: feed and folder forms, OPML import/export, content filters, the Miniflux
+//! Modal dialogs: feed and folder forms, OPML import/export, content filters, the sync
 //! account, settings, and help.
 mod account;
 mod filters;
@@ -137,12 +137,18 @@ impl Form {
 
     /// `widget` with a label above it.
     fn field(&self, title: &str, widget: &impl IsA<gtk::Widget>) {
+        self.labeled(title, widget);
+    }
+
+    /// [`Form::field`], returning the field and its label, to hide or relabel.
+    fn labeled(&self, title: &str, widget: &impl IsA<gtk::Widget>) -> (gtk::Box, gtk::Label) {
         let field = gtk::Box::new(gtk::Orientation::Vertical, 6);
         let caption = label(title, "form-label");
         caption.set_mnemonic_widget(Some(widget));
         field.append(&caption);
         field.append(widget);
         self.body.append(&field);
+        (field, caption)
     }
 
     /// A text field that saves the form on Enter.
@@ -283,10 +289,12 @@ pub fn import(u: Rc<Ui>) {
             r.skipped,
             r.invalid.len()
         );
+        let connected = u.library.borrow().account.as_ref().map(|a| a.service);
+        let service = connected.map_or("the sync server", |s| s.name());
         if let Some(Ok(synced)) = &done.synced
             && synced.subscribed > 0
         {
-            text.push_str(&format!(" · {} added to Miniflux", synced.subscribed));
+            text.push_str(&format!(" · {} added to {service}", synced.subscribed));
         }
         u.toast(&text);
         if !r.invalid.is_empty() {
@@ -302,12 +310,12 @@ pub fn import(u: Rc<Ui>) {
             // Imported feeds have never been fetched, so they are all due.
             None => u.start_refresh(omafeed_core::ingest::Which::Due),
             Some(Ok(synced)) if !synced.refused.is_empty() => {
-                account::refused(&u, &synced.refused);
+                account::refused(&u, connected.unwrap_or_default(), &synced.refused);
             }
             Some(Ok(_)) => {}
             Some(Err(e)) => u.error(format!(
-                "The sync with Miniflux failed: {e:#}. The imported feeds go to Miniflux with \
-                 the next one."
+                "The sync with {service} failed: {e:#}. The imported feeds go to {service} \
+                 with the next one."
             )),
         }
     });
@@ -366,12 +374,14 @@ pub fn settings(u: Rc<Ui>) {
         let refresh =
             gtk::SpinButton::with_range((*minutes.start()).into(), (*minutes.end()).into(), 5.0);
         refresh.set_value(current.refresh_minutes.into());
-        let note = if u.library.borrow().account.is_some() {
-            "Minutes between syncs with Miniflux, while omafeed is open"
-        } else {
-            "Minutes, while omafeed is open"
+        let note = match &u.library.borrow().account {
+            Some(account) => format!(
+                "Minutes between syncs with {}, while omafeed is open",
+                account.service
+            ),
+            None => "Minutes, while omafeed is open".to_owned(),
         };
-        form.setting("Refresh every", Some(note), &refresh);
+        form.setting("Refresh every", Some(&note), &refresh);
         if !form.run().await {
             return;
         }

@@ -1,35 +1,47 @@
-//! The Miniflux API key, kept in the desktop's keyring (the Secret Service, such as GNOME
-//! Keyring or KWallet) under the server's address, the client the window and the command
-//! line sync with, and connecting and disconnecting the account with its key. Must run on
-//! the tokio runtime.
+//! The sync account's secret (Miniflux's API key, or FreshRSS's API password), kept in the
+//! desktop's keyring (the Secret Service, such as GNOME Keyring or KWallet) under the service
+//! and the server's address, the client the window and the command line sync with, and
+//! connecting and disconnecting the account with its secret. Must run on the tokio runtime.
 use anyhow::{Context, Result, anyhow, bail};
 use omafeed_core::{
     Db, full_article,
-    model::ArticleId,
-    sync::{self, Backend, Report, backend::User, miniflux::Client},
+    model::{ArticleId, Service},
+    sync::{self, Backend, Report, backend::User, freshrss, miniflux},
 };
 use std::{collections::HashMap, time::Duration};
 
 /// Used instead of the keyring when set, by every command and the window; nothing is saved to
 /// or removed from the keyring then. For scripts, and systems without a keyring.
-pub const TOKEN_VAR: &str = "OMAFEED_MINIFLUX_TOKEN";
+pub const TOKEN_VAR: &str = "OMAFEED_SYNC_TOKEN";
+
+/// The older name of [`TOKEN_VAR`], still read when it is not set.
+pub const MINIFLUX_TOKEN_VAR: &str = "OMAFEED_MINIFLUX_TOKEN";
 
 /// How long to wait for the keyring, which may first ask for the password that unlocks it.
 const KEYRING_TIMEOUT: Duration = Duration::from_secs(60);
 
-fn attributes(server: &str) -> HashMap<&str, &str> {
+/// What the service calls the secret omafeed signs in with.
+pub fn secret_name(service: Service) -> &'static str {
+    match service {
+        Service::Miniflux => "API key",
+        Service::FreshRss => "API password",
+    }
+}
+
+fn attributes(service: Service, server: &str) -> HashMap<&str, &str> {
     HashMap::from([
         ("application", "omafeed"),
-        ("service", "miniflux"),
+        ("service", service.key()),
         ("server", server),
     ])
 }
 
-/// The key from [`TOKEN_VAR`], if it is set and not empty.
-fn from_environment() -> Option<String> {
-    std::env::var(TOKEN_VAR)
-        .ok()
-        .filter(|token| !token.trim().is_empty())
+/// The secret from [`TOKEN_VAR`] (or [`MINIFLUX_TOKEN_VAR`]), if one is set and not empty.
+pub fn from_environment() -> Option<String> {
+    [TOKEN_VAR, MINIFLUX_TOKEN_VAR]
+        .into_iter()
+        .filter_map(|name| std::env::var(name).ok())
+        .find(|token| !token.trim().is_empty())
 }
 
 /// Run `work` against the keyring, failing clearly if there is none or it does not answer.
@@ -46,19 +58,19 @@ async fn with_keyring<T>(
         .with_context(|| {
             format!(
                 "Could not use the keyring; is a Secret Service such as GNOME Keyring running? \
-                 Set {TOKEN_VAR} to use the API key without one"
+                 Set {TOKEN_VAR} to sign in without one"
             )
         })
 }
 
-/// The API key for `server`.
-pub async fn token(server: &str) -> Result<String> {
+/// The secret for `service` on `server`.
+pub async fn token(service: Service, server: &str) -> Result<String> {
     if let Some(token) = from_environment() {
         return Ok(token);
     }
     let server = server.to_owned();
     let secret = with_keyring(async |keyring| {
-        let items = keyring.search_items(&attributes(&server)).await?;
+        let items = keyring.search_items(&attributes(service, &server)).await?;
         let Some(item) = items.into_iter().next() else {
             return Ok(None);
         };
@@ -70,85 +82,122 @@ pub async fn token(server: &str) -> Result<String> {
     .await?
     .ok_or_else(|| {
         anyhow!(
-            "The keyring has no Miniflux API key for {server}; connect again, or set {TOKEN_VAR}"
+            "The keyring has no {service} {} for {server}; connect again, or set {TOKEN_VAR}",
+            secret_name(service)
         )
     })?;
-    String::from_utf8(secret).context("The Miniflux API key in the keyring is not text")
+    String::from_utf8(secret).with_context(|| {
+        format!(
+            "The {service} {} in the keyring is not text",
+            secret_name(service)
+        )
+    })
 }
 
-/// Keep `token` as the API key for `server`, replacing any older one.
-pub async fn save_token(server: &str, token: &str) -> Result<()> {
+/// Keep `token` as the secret for `service` on `server`, replacing any older one.
+pub async fn save_token(service: Service, server: &str, token: &str) -> Result<()> {
     if from_environment().is_some() {
         return Ok(());
     }
-    let label = format!("omafeed: Miniflux API key for {server}");
+    let label = format!("omafeed: {service} {} for {server}", secret_name(service));
     let (server, token) = (server.to_owned(), token.to_owned());
     with_keyring(async |keyring| {
         keyring
-            .create_item(&label, &attributes(&server), token, true)
+            .create_item(&label, &attributes(service, &server), token, true)
             .await
     })
     .await
 }
 
-/// Remove the API key for `server`.
-pub async fn forget_token(server: &str) -> Result<()> {
+/// Remove the secret for `service` on `server`.
+pub async fn forget_token(service: Service, server: &str) -> Result<()> {
     if from_environment().is_some() {
         return Ok(());
     }
     let server = server.to_owned();
-    with_keyring(async |keyring| keyring.delete(&attributes(&server)).await).await
+    with_keyring(async |keyring| keyring.delete(&attributes(service, &server)).await).await
 }
 
-/// The service the library is connected to, signed in with its key, or `None` if the library
-/// is local. Miniflux is the only service there is.
+/// A client for `service` at `server`, signing in as `username` (FreshRSS) with `secret`.
+pub fn backend(
+    service: Service,
+    server: &str,
+    username: &str,
+    secret: &str,
+) -> Result<Box<dyn Backend>> {
+    Ok(match service {
+        Service::Miniflux => Box::new(miniflux::Client::new(server, secret)?),
+        Service::FreshRss => Box::new(freshrss::Client::new(server, username, secret)?),
+    })
+}
+
+/// The service the library is connected to, signed in with its secret, or `None` if the
+/// library is local.
 pub async fn client(db: &Db) -> Result<Option<Box<dyn Backend>>> {
     let Some(account) = db.call(|s| s.account()).await? else {
         return Ok(None);
     };
-    let token = token(&account.server).await?;
-    Ok(Some(Box::new(Client::new(&account.server, &token)?)))
+    let token = token(account.service, &account.server).await?;
+    backend(account.service, &account.server, &account.username, &token).map(Some)
 }
 
 /// Fetch the article `id` in full ([`full_article::fetch`]), by the connected account's server
-/// if it can. If the account's key cannot be read, the page is fetched directly, and the key
-/// is reported only if that fails too.
+/// if it can. If the account's secret cannot be read, the page is fetched directly, and the
+/// secret is reported only if that fails too.
 pub async fn fetch_full_article(db: &Db, id: ArticleId) -> Result<()> {
     match client(db).await {
         Ok(client) => full_article::fetch(db, client.as_deref(), id).await,
         Err(key) => full_article::fetch(db, None, id)
             .await
-            .map_err(|e| anyhow!("{e:#}; Miniflux could not be asked either: {key:#}")),
+            .map_err(|e| anyhow!("{e:#}; the sync server could not be asked either: {key:#}")),
     }
 }
 
 /// What [`connect`] did.
 pub struct Connected {
+    /// The service.
+    pub service: Service,
     /// The server's address, as the library keeps it.
     pub server: String,
-    /// Who the key signs in as.
+    /// Who the secret signs in as.
     pub user: User,
     /// What the first sync did.
     pub report: Report,
 }
 
-/// Connect the library to the account `token` signs in to on `server`, keep the key, and run
-/// the first sync. If the server refuses the key, nothing is kept; if only the first sync
-/// fails, the account stays connected with its key, to sync again.
-pub async fn connect(db: &Db, server: &str, token: &str) -> Result<Connected> {
-    let client = Client::new(server, token)?;
+/// Connect the library to the account on `server` of `service`, signing in as `username`
+/// (FreshRSS; Miniflux's API key says whose it is) with `secret`, keep the secret, and run the
+/// first sync. If the server refuses the secret, nothing is kept; if only the first sync
+/// fails, the account stays connected with its secret, to sync again.
+pub async fn connect(
+    db: &Db,
+    service: Service,
+    server: &str,
+    username: &str,
+    secret: &str,
+) -> Result<Connected> {
+    // Refuse before the keyring is touched: the connected account's secret must stay.
+    if let Some(account) = db.call(|s| s.account()).await? {
+        bail!(
+            "Already connected to {} at {}; disconnect first",
+            account.service,
+            account.server
+        );
+    }
+    let client = backend(service, server, username, secret)?;
     let user = client.check().await?;
-    save_token(client.server(), token).await?;
-    match sync::connect(db, &client).await {
+    save_token(service, client.server(), secret).await?;
+    match sync::connect(db, client.as_ref()).await {
         Ok(report) => Ok(Connected {
+            service,
             server: client.server().to_owned(),
             user,
             report,
         }),
         Err(e) => {
-            // A first sync that failed leaves the account connected, and needs the key.
+            // A first sync that failed leaves the account connected, and needs the secret.
             if db.call(|s| s.account()).await?.is_none() {
-                let _ = forget_token(client.server()).await;
+                let _ = forget_token(service, client.server()).await;
             }
             Err(e)
         }
@@ -157,25 +206,30 @@ pub async fn connect(db: &Db, server: &str, token: &str) -> Result<Connected> {
 
 /// What [`disconnect`] did.
 pub struct Disconnected {
+    /// The service the library mirrored.
+    pub service: Service,
     /// The server the library mirrored.
     pub server: String,
     /// Read and star changes that could not be sent first, and were dropped.
     pub dropped: i64,
-    /// Why the API key could not be removed from the keyring, if it could not.
+    /// Why the secret could not be removed from the keyring, if it could not.
     pub keyring_error: Option<anyhow::Error>,
 }
 
-/// Stop mirroring the account, sending unsent changes first if its key and server allow, and
-/// remove its key.
+/// Stop mirroring the account, sending unsent changes first if its secret and server allow,
+/// and remove its secret.
 pub async fn disconnect(db: &Db) -> Result<Disconnected> {
     let Some(connected) = db.call(|s| s.account()).await? else {
-        bail!("No Miniflux account is connected");
+        bail!("No sync account is connected");
     };
-    // Without the key, or with the server gone, unsent changes are dropped.
+    // Without the secret, or with the server gone, unsent changes are dropped.
     let client = client(db).await.ok().flatten();
     let dropped = sync::disconnect(db, client.as_deref()).await?;
     Ok(Disconnected {
-        keyring_error: forget_token(&connected.server).await.err(),
+        keyring_error: forget_token(connected.service, &connected.server)
+            .await
+            .err(),
+        service: connected.service,
         server: connected.server,
         dropped,
     })

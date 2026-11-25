@@ -2,4 +2,4 @@ $ omafeed account connect https://example.org
 exit: 1
 --- stdout
 --- stderr
-omafeed: No API key given; pipe it in, or set OMAFEED_MINIFLUX_TOKEN
+omafeed: No API key given; pipe it in, or set OMAFEED_SYNC_TOKEN

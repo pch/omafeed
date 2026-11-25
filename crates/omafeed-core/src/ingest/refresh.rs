@@ -148,7 +148,7 @@ impl Refresher {
     }
 
     /// Refresh the feeds `which` chooses. Overlapping calls return immediately. While a
-    /// Miniflux account is connected, Miniflux fetches the feeds and this refreshes none; see
+    /// sync account is connected, its server fetches the feeds and this refreshes none; see
     /// [`crate::sync::sync`].
     pub async fn refresh(
         &self,

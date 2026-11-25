@@ -1,11 +1,15 @@
-//! Connecting the library to a Miniflux account from the window, and disconnecting it. Both
+//! Connecting the library to a sync account (Miniflux or FreshRSS) from the window, and
+//! disconnecting it. Both
 //! talk to the server, so the window shows them as it shows a refresh, and neither starts
 //! while one is under way.
 use super::Ui;
 use crate::account::{Connected, Disconnected};
 use anyhow::{Result, bail};
 use gtk::prelude::*;
-use omafeed_core::ingest::{Progress, Which};
+use omafeed_core::{
+    ingest::{Progress, Which},
+    model::Service,
+};
 use std::rc::Rc;
 
 impl Ui {
@@ -29,17 +33,21 @@ impl Ui {
         result
     }
 
-    /// Connect the library to the account `token` signs in to on `server`, as
-    /// [`crate::account::connect`] does, and show the library it mirrors.
+    /// Connect the library to the account of `service` on `server` that `username` and
+    /// `token` sign in to, as [`crate::account::connect`] does, and show the library it
+    /// mirrors.
     pub async fn connect_account(
         self: &Rc<Self>,
+        service: Service,
         server: String,
+        username: String,
         token: String,
     ) -> Result<Connected> {
         let db = self.db.clone();
+        let tip = format!("Connecting to {service}…");
         let result = self
-            .talk_to_server("Connecting to Miniflux…", async move {
-                crate::account::connect(&db, &server, &token).await
+            .talk_to_server(&tip, async move {
+                crate::account::connect(&db, service, &server, &username, &token).await
             })
             .await;
         let failed = match &result {
@@ -67,10 +75,13 @@ impl Ui {
     /// feeds, which are local again.
     pub async fn disconnect_account(self: &Rc<Self>) -> Result<Disconnected> {
         let db = self.db.clone();
+        let service = self.library.borrow().account.as_ref().map(|a| a.service);
+        let tip = format!(
+            "Disconnecting from {}…",
+            service.map_or("the sync server", Service::name)
+        );
         let result = self
-            .talk_to_server("Disconnecting from Miniflux…", async move {
-                crate::account::disconnect(&db).await
-            })
+            .talk_to_server(&tip, async move { crate::account::disconnect(&db).await })
             .await;
         self.header
             .refresh

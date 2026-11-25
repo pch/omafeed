@@ -75,13 +75,13 @@ pub async fn update(
 pub struct Imported {
     /// The subscriptions added, skipped, and refused.
     pub report: ImportReport,
-    /// While a Miniflux account is connected, the sync that sent the subscriptions to it, or
+    /// While a sync account is connected, the sync that sent the subscriptions to it, or
     /// why it failed; `None` for a local library, whose new feeds are due for a refresh.
     pub synced: Option<Result<sync::Report>>,
 }
 
 /// Add the subscriptions and folders of an OPML document, as [`crate::Store::import`] does;
-/// while connected, Miniflux is subscribed to them too ([`sync::import`]).
+/// while connected, the server is subscribed to them too ([`sync::import`]).
 pub async fn import(db: &Db, client: Option<&dyn Backend>, text: String) -> Result<Imported> {
     if let Some(client) = connected(db, client).await? {
         let done = sync::import(db, client, text).await?;

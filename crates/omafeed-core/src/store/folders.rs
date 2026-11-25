@@ -25,7 +25,7 @@ impl Store {
     }
 
     /// Rename a folder; the name must be unique among its siblings. Fails with
-    /// [`Error::Managed`] for a folder that is a Miniflux category, unless the name stays.
+    /// [`Error::Managed`] for a folder that is a category of the connected account, unless the name stays.
     pub fn rename_folder(&self, id: FolderId, name: &str) -> Result<()> {
         let unchanged: bool = self.conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM folders WHERE id = ?1 AND name = ?2)",
@@ -39,7 +39,7 @@ impl Store {
     }
 
     /// [`Store::rename_folder`], whoever decides the folder: for mirroring a category renamed
-    /// on the Miniflux server.
+    /// on the sync server.
     pub(crate) fn rename_folder_now(&self, id: FolderId, name: &str) -> Result<()> {
         self.conn
             .execute(
@@ -80,7 +80,7 @@ impl Store {
     }
 
     /// Removing a folder keeps all feeds and promotes child folders to its parent. Fails with
-    /// [`Error::Managed`] for a folder that is a Miniflux category.
+    /// [`Error::Managed`] for a folder that is a category of the connected account.
     pub fn delete_folder(&self, id: FolderId) -> Result<()> {
         self.immediate(|s| {
             s.require_local_folder(id)?;

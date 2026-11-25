@@ -25,6 +25,9 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(SYNC_CURSOR),
     // The full article, fetched from its web page on request, beside the feed's version.
     Migration::Sql("ALTER TABLE articles ADD COLUMN full_html TEXT;"),
+    // More services: which one the account is on, and category IDs as text, since FreshRSS
+    // knows a category only by its name.
+    Migration::Sql(SERVICES),
 ];
 
 const SCHEMA_V1: &str = r#"
@@ -98,8 +101,8 @@ CREATE TABLE meta(
 INSERT INTO meta(id, next_revision) VALUES(1, (SELECT COALESCE(max(id), 0) + 1 FROM feeds));
 ";
 
-/// While an `account` row exists, Miniflux owns the library: `remote_id` is what a feed
-/// (Miniflux feed), folder (category) or article (entry) is on the server, or NULL for one it
+/// While an `account` row exists, the sync server owns the library: `remote_id` is what a feed
+/// (feed), folder (category) or article (entry) is on the server, or NULL for one it
 /// does not have. Changing the read or star state of an article with a `remote_id` queues the
 /// new value in `outbox`, in the same statement, whichever code made the change; the sync
 /// sends it and clears it. One row per article and field, so the newest value replaces an
@@ -147,6 +150,20 @@ const SYNC_CURSOR: &str = "
 ALTER TABLE account ADD COLUMN cursor INTEGER;
 ALTER TABLE account ADD COLUMN last_attempt INTEGER;
 UPDATE account SET last_attempt = last_sync;
+";
+
+/// `account.service` is `miniflux` or `freshrss`. `folders.remote_id` becomes a TEXT column
+/// (Miniflux's numbers written as text): with INTEGER affinity a category named "12" would
+/// be stored as a number. The column is replaced in place, not by rebuilding the table, which
+/// with foreign keys on would clear every `feeds.folder` and `folders.parent` pointing at it.
+const SERVICES: &str = "
+ALTER TABLE account ADD COLUMN service TEXT NOT NULL DEFAULT 'miniflux';
+DROP INDEX folder_remote;
+ALTER TABLE folders ADD COLUMN remote_key TEXT;
+UPDATE folders SET remote_key = CAST(remote_id AS TEXT);
+ALTER TABLE folders DROP COLUMN remote_id;
+ALTER TABLE folders RENAME COLUMN remote_key TO remote_id;
+CREATE UNIQUE INDEX folder_remote ON folders(remote_id) WHERE remote_id IS NOT NULL;
 ";
 
 /// Recompute search/preview text from stored HTML (the FTS index follows via trigger).

@@ -1,7 +1,8 @@
-//! Mirroring a sync service's account, such as Miniflux. While one is connected, the service
-//! fetches the feeds and decides which feeds and folders the library has; omafeed reads them
-//! from it and keeps read and star state the same on both sides. [`backend`] says what a
-//! service offers, and [`miniflux`] implements it; nothing else here knows which service it is.
+//! Mirroring a sync service's account: Miniflux or FreshRSS. While one is connected, the
+//! service fetches the feeds and decides which feeds and folders the library has; omafeed
+//! reads them from it and keeps read and star state the same on both sides. [`backend`] says
+//! what a service offers, and [`miniflux`] and [`freshrss`] implement it; nothing else here
+//! knows which service it is.
 //!
 //! A sync ([`sync`]) works in this order:
 //!
@@ -11,18 +12,26 @@
 //!    feeds imported or given a new address since). A feed it refuses stays, showing why, and
 //!    is offered again only by a sync someone asked for ([`Trigger::Manual`]), such as an
 //!    import's.
-//! 3. Read the categories and the feeds, and the entries that changed:
+//! 3. Read the categories and the feeds, and the entries that changed. From a service that
+//!    lists changes ([`backend::StateSync::Changes`], Miniflux):
 //!    - on the first sync, every unread and every starred entry, and those published in the
 //!      last [`RECENT_DAYS`] days;
 //!    - after that, only the entries added, read, unread, starred or unstarred since the last
 //!      sync started (by the server's clock, from its `Date`; a server that does not send one
 //!      is read whole every time), which on most syncs is a handful.
+//!
+//!    From a service that gives ID sets instead ([`backend::StateSync::IdSets`], FreshRSS):
+//!    the IDs of the entries added since the last sync started (or in the last
+//!    [`RECENT_DAYS`] days, the first time), of every unread and of every starred entry, and
+//!    the entries among them the library does not have yet, each with the state the sets
+//!    give it.
 //! 4. Store all of it in one transaction ([`crate::Store`]), with each entry's read and star
 //!    state set to the server's, except where a change still waits to be sent.
-//! 5. Compare the library's unread count of each feed, and its number of starred articles,
-//!    with the server's (two small requests). Where they differ, say because the server
-//!    deleted old entries, read that feed's whole unread state, or every starred entry, and
-//!    store it as in step 4. This keeps the library right without reading everything again.
+//! 5. For a service that lists changes, compare the library's unread count of each feed, and
+//!    its number of starred articles, with the server's (two small requests). Where they
+//!    differ, say because the server deleted old entries, read that feed's whole unread
+//!    state, or every starred entry, and store it as in step 4. This keeps the library right
+//!    without reading everything again. ID sets are complete, so they need no such check.
 //! 6. Send any changes step 4 queued: local articles that became entries keep their state.
 //!
 //! The library keeps entries the server has since deleted; only a feed removed from the
@@ -35,6 +44,7 @@
 //! send them. Feeds the server would not take stay the library's own and are changed only
 //! here. Folders of one's own, to arrange categories in, are the library's alone.
 pub mod backend;
+pub mod freshrss;
 pub mod miniflux;
 
 pub use backend::Backend;
@@ -45,7 +55,7 @@ use crate::{
     store::account::{Cursor, Mirror, Unread, same_url},
 };
 use anyhow::{Context, Result, anyhow};
-use backend::{Category, FeedChange, Selection};
+use backend::{Category, FeedChange, Selection, StateSync};
 use std::collections::HashSet;
 
 /// How many days back the first sync reads read, unstarred entries; unread and starred ones
@@ -92,7 +102,9 @@ pub struct Report {
 pub async fn connect(db: &Db, backend: &dyn Backend) -> Result<Report> {
     let user = backend.check().await?;
     let server = backend.server().to_owned();
-    db.call(move |s| s.begin_account(&server, &user)).await?;
+    let service = backend.service();
+    db.call(move |s| s.begin_account(service, &server, &user))
+        .await?;
     sync(db, backend, Trigger::Manual).await
 }
 
@@ -123,10 +135,14 @@ async fn sync_in_turn(db: &Db, backend: &dyn Backend, trigger: Trigger) -> Resul
     let Some(account) = db.call(|s| s.account()).await? else {
         return Err(not_connected());
     };
-    if same_url(&account.server) != same_url(backend.server()) {
+    if account.service != backend.service()
+        || same_url(&account.server) != same_url(backend.server())
+    {
         return Err(Error::Validation(format!(
-            "The library is connected to {}, not {}",
+            "The library is connected to {} at {}, not {} at {}",
+            account.service,
             account.server,
+            backend.name(),
             backend.server()
         ))
         .into());
@@ -186,7 +202,7 @@ pub async fn subscribe(
     let checked = url.clone();
     db.call(move |s| s.require_new_url(&checked, None)).await?;
     let category = category_for(db, backend, folder).await?;
-    let remote = backend.subscribe(&url, category).await?;
+    let remote = backend.subscribe(&url, category.as_deref()).await?;
     let title = title.trim().to_owned();
     let renamed = match title.is_empty() {
         true => Ok(()),
@@ -240,9 +256,17 @@ pub async fn update_feed(
     db.call(move |s| s.require_new_url(&checked, Some(id)))
         .await?;
     let title = title.trim().to_owned();
+    let new_url = same_url(&url) != same_url(&feed.url);
+    if new_url && !backend.can_change_feed_url() {
+        return Err(Error::Validation(format!(
+            "{} cannot change a feed's address; subscribe to the new one and remove this feed",
+            backend.name()
+        ))
+        .into());
+    }
     let change = FeedChange {
         title: (!title.is_empty() && title != feed.title).then(|| title.clone()),
-        feed_url: (same_url(&url) != same_url(&feed.url)).then(|| url.clone()),
+        feed_url: new_url.then(|| url.clone()),
         category: match folder == feed.folder {
             true => None,
             false => Some(category_for(db, backend, folder).await?),
@@ -279,8 +303,9 @@ pub async fn rename_category(
     let _turn = db.sync_turn().await;
     let remote = remote_category(db, backend, id).await?;
     let name = name.trim().to_owned();
-    backend.rename_category(remote, &name).await?;
-    db.call(move |s| s.rename_folder_now(id, &name)).await
+    let renamed = backend.rename_category(&remote, &name).await?;
+    db.call(move |s| s.rename_category_now(id, &name, &renamed))
+        .await
 }
 
 /// Remove the category the folder `id` is, on the server and from the library; folders
@@ -299,13 +324,18 @@ pub async fn remove_category(db: &Db, backend: &dyn Backend, id: FolderId) -> Re
         ))
         .into());
     }
-    backend.delete_category(remote).await?;
+    backend.delete_category(&remote).await?;
     db.call(move |s| s.immediate(|s| s.delete_folder_now(id)))
-        .await
+        .await?;
+    if !backend.deleting_a_category_deletes_its_feeds() {
+        // Its feeds moved to another category on the server: show them there.
+        sync_in_turn(db, backend, Trigger::Scheduled).await?;
+    }
+    Ok(())
 }
 
 /// The category the folder `id` is.
-async fn remote_category(db: &Db, backend: &dyn Backend, id: FolderId) -> Result<i64> {
+async fn remote_category(db: &Db, backend: &dyn Backend, id: FolderId) -> Result<String> {
     db.call(move |s| s.folder_remote_id(id))
         .await?
         .ok_or_else(|| {
@@ -323,7 +353,7 @@ async fn category_for(
     db: &Db,
     backend: &dyn Backend,
     folder: Option<FolderId>,
-) -> Result<Option<i64>> {
+) -> Result<Option<String>> {
     match folder {
         Some(id) => {
             let category = db.call(move |s| s.folder_remote_id(id)).await?;
@@ -345,7 +375,10 @@ async fn category_for(
 
 /// The service's top-level category among `categories`, made if need be, or `None` if feeds
 /// may have no category.
-async fn top_level(backend: &dyn Backend, categories: &mut Vec<Category>) -> Result<Option<i64>> {
+async fn top_level(
+    backend: &dyn Backend,
+    categories: &mut Vec<Category>,
+) -> Result<Option<String>> {
     match backend.top_level_category() {
         Some(title) => category_named(backend, categories, title).await.map(Some),
         None => Ok(None),
@@ -358,15 +391,15 @@ async fn category_named(
     backend: &dyn Backend,
     categories: &mut Vec<Category>,
     title: &str,
-) -> Result<i64> {
+) -> Result<String> {
     if let Some(c) = categories
         .iter()
         .find(|c| c.title.eq_ignore_ascii_case(title))
     {
-        return Ok(c.id);
+        return Ok(c.id.clone());
     }
     let created = backend.create_category(title).await?;
-    let id = created.id;
+    let id = created.id.clone();
     categories.push(created);
     Ok(id)
 }
@@ -397,7 +430,9 @@ async fn sync_now(db: &Db, backend: &dyn Backend, trigger: Trigger) -> Result<Re
 
     let cursor = db.call(|s| s.sync_cursor()).await?;
     let now = chrono::Utc::now().timestamp();
+    let by_changes = backend.state_sync() == StateSync::Changes;
     let mut mirror = match cursor {
+        _ if !by_changes => by_id_sets(db, backend, cursor, now).await?,
         None => everything(backend, now).await?,
         Some(cursor) => {
             let changed = backend
@@ -415,7 +450,7 @@ async fn sync_now(db: &Db, backend: &dyn Backend, trigger: Trigger) -> Result<Re
     let applied = db.call(move |s| s.mirror(&mirror)).await?;
     report.new_articles = applied.new_articles;
     report.state_changes = applied.state_changes;
-    if cursor.is_some() {
+    if cursor.is_some() && by_changes {
         repair(db, backend, now, &mut report).await?;
     }
     report.sent += send(db, backend).await?;
@@ -452,6 +487,49 @@ async fn everything(backend: &dyn Backend, now: i64) -> Result<Mirror> {
     mirror.entries.extend(starred.entries);
     mirror.entries.extend(recent.entries);
     Ok(mirror)
+}
+
+/// What a sync reads from a service that gives ID sets ([`StateSync::IdSets`]): the IDs of the
+/// entries new since the cursor (or in the last [`RECENT_DAYS`] days, the first time), of
+/// every unread and of every starred entry, and then only the entries among them the library
+/// does not have, taking their state from the sets. New IDs matter only for entries already
+/// read elsewhere; the sets bring every other.
+async fn by_id_sets(
+    db: &Db,
+    backend: &dyn Backend,
+    cursor: Option<i64>,
+    now: i64,
+) -> Result<Mirror> {
+    let since = cursor.map_or(now - RECENT_DAYS * 86_400, |cursor| cursor - OVERLAP);
+    let new = backend.new_ids(since).await?;
+    let unread = backend.unread_ids().await?;
+    let starred = backend.starred_ids().await?;
+    let wanted: Vec<i64> = new
+        .ids
+        .iter()
+        .chain(&unread)
+        .chain(&starred)
+        .copied()
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let mut missing = db.call(move |s| s.missing_entries(&wanted)).await?;
+    missing.sort_unstable();
+    let mut entries = backend.entries_by_id(&missing).await?;
+    for entry in &mut entries {
+        entry.read = !unread.contains(&entry.id);
+        entry.starred = starred.contains(&entry.id);
+    }
+    Ok(Mirror {
+        cursor: server_cursor(new.server_time),
+        entries,
+        unread: Some(Unread {
+            feeds: None,
+            entries: unread,
+        }),
+        starred: Some(starred),
+        ..Mirror::default()
+    })
 }
 
 /// Step 5 of the [module](self): read the whole state of the feeds whose counts disagree.
@@ -532,7 +610,7 @@ async fn subscribe_local(
             Some(name) => Some(category_named(backend, categories, name).await?),
             None => top_level(backend, categories).await?,
         };
-        match backend.subscribe(&feed.url, category).await {
+        match backend.subscribe(&feed.url, category.as_deref()).await {
             Ok(_) => report.subscribed += 1,
             Err(e) => {
                 let reason = format!("{} would not subscribe: {e:#}", backend.name());
