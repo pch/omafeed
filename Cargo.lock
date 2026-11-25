@@ -1970,7 +1970,7 @@ dependencies = [
 
 [[package]]
 name = "omafeed"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -1991,7 +1991,7 @@ dependencies = [
 
 [[package]]
 name = "omafeed-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "ammonia",
  "anyhow",
