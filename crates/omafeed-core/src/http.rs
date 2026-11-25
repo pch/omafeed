@@ -5,7 +5,7 @@
 //! links found in fetched content (discovered feeds, icons) by their callers, with
 //! [`crate::util::may_request`]. Only `localhost` and IP literals count as local; names are not
 //! resolved first, so a public name that resolves to a local address is not caught.
-use anyhow::{Result, bail};
+use anyhow::Result;
 use futures_util::StreamExt;
 use reqwest::{Client, Response};
 use std::time::Duration;
@@ -74,6 +74,11 @@ pub(crate) enum Body {
     Head,
 }
 
+/// A body larger than [`read_limited`] allows; find it with `error.downcast_ref`.
+#[derive(Debug, thiserror::Error)]
+#[error("Response exceeds {} MB decompressed limit", .0 / 1024 / 1024)]
+pub(crate) struct TooLarge(pub usize);
+
 /// Read a response body of at most `limit` bytes.
 pub(crate) async fn read_limited(response: Response, limit: usize, body: Body) -> Result<Vec<u8>> {
     let mut data = Vec::new();
@@ -85,10 +90,7 @@ pub(crate) async fn read_limited(response: Response, limit: usize, body: Body) -
                 data.extend_from_slice(&chunk[..limit - data.len()]);
                 break;
             }
-            bail!(
-                "Response exceeds {} MB decompressed limit",
-                limit / 1024 / 1024
-            );
+            return Err(TooLarge(limit).into());
         }
         // Only search the new data (plus a tag-sized overlap) for the end of <head>.
         let search_from = data.len().saturating_sub(6);

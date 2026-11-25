@@ -35,6 +35,7 @@
 //! send them. Feeds the server would not take stay the library's own and are changed only
 //! here. Folders of one's own, to arrange categories in, are the library's alone.
 pub mod backend;
+pub mod freshrss;
 pub mod miniflux;
 
 pub use backend::Backend;
