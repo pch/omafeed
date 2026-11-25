@@ -6,6 +6,8 @@
 
 ## Security
 
+- **URLs are parsed with url 2.5.9**, which fixes a stack overflow on deeply nested `blob:` URLs ([RUSTSEC-2026-0592](https://rustsec.org/advisories/RUSTSEC-2026-0592)).
+
 - **Article HTML is cleaned with ammonia 4.2.5**, which fixes an XSS where embedded SVG or MathML could get past sanitizing ([RUSTSEC-2026-0533](https://rustsec.org/advisories/RUSTSEC-2026-0533)).
 
 ## Changed

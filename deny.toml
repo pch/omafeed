@@ -6,6 +6,11 @@ targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
 [advisories]
 # Unmaintained crates deep in the GTK/HTML stacks are reported, but only for direct dependencies.
 unmaintained = "workspace"
+ignore = [
+    # chrono is unmaintained, with no fixed version; replacing it (with jiff or time) is its own
+    # change. It is a notice, not a vulnerability.
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained; migration to jiff/time tracked separately" },
+]
 
 [licenses]
 # Permissive licenses, plus MPL-2.0 (file-level copyleft) used by the CSS/HTML parsers.
